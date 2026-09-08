@@ -2,7 +2,7 @@
   "name": "serverpe-gaadipe-back-end",
   "version": "1.0.0",
   "private": true,
-  "description": "GaadiPe vehicle gateway \u2014 RC, e-Challan and FASTag from ULIP, behind one API key. Deployed on the ULIP-whitelisted server so every other ServerPe app can reach the data from anywhere.",
+  "description": "GaadiPe vehicle gateway — RC, e-Challan and FASTag from ULIP, behind one API key. Deployed on the ULIP-whitelisted server so every other ServerPe app can reach the data from anywhere.",
   "main": "src/app.js",
   "engines": {
     "node": ">=20"
@@ -14,7 +14,11 @@
     "migrate": "node scripts/migrate.js",
     "migrate:check": "node scripts/migrate.js --check",
     "migrate:fresh": "node scripts/migrate.js --fresh",
-    "invoice:rebuild": "node scripts/rebuild-invoice.js"
+    "invoice:rebuild": "node scripts/rebuild-invoice.js",
+    "wa:status": "node scripts/wa-register.js status",
+    "wa:register": "node scripts/wa-register.js register",
+    "wa:webhook": "node scripts/wa-register.js webhook",
+    "wa:templates": "node scripts/wa-templates.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

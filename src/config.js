@@ -66,6 +66,46 @@ const config = {
     maxEntries: int(process.env.CACHE_MAX_ENTRIES, 5000),
   },
 
+  /**
+   * Where vehicle data is fetched from.
+   *
+   * ULIP authorises by SOURCE IP, so only the deployed server may call it. The
+   * bot therefore never calls ULIP directly — it calls this gateway's own
+   * public API. On a laptop that is https://api.gaadipe.in; on the server it is
+   * http://localhost:PORT, the same process answering itself for the cost of a
+   * millisecond and one code path instead of two.
+   */
+  gateway: {
+    baseUrl: (process.env.GATEWAY_BASE_URL
+      || `http://localhost:${int(process.env.PORT, 5007)}`).replace(/\/+$/, ''),
+    apiKey: String(process.env.VEHICLE_LOOKUP_KEY || '').split(',')[0].trim(),
+    timeoutMs: int(process.env.GATEWAY_TIMEOUT_MS, 35_000),
+  },
+
+  /**
+   * WhatsApp Cloud API. The number shares a WhatsApp Business Account with
+   * QuizPe, so both products' events are delivered to whichever apps are
+   * subscribed — every handler must check phoneNumberId before acting, or
+   * GaadiPe would answer QuizPe's parents.
+   */
+  whatsapp: {
+    apiVersion: process.env.WHATSAPP_API_VERSION || 'v21.0',
+    token: process.env.WHATSAPP_ACCESS_TOKEN || '',
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || '',
+    businessId: process.env.WHATSAPP_BUSINESS_ID || '',
+    appId: process.env.WHATSAPP_APP_ID || '',
+    // Meta signs every webhook body with this. Blank means signature checking
+    // is off — acceptable while developing behind ngrok, never in production.
+    appSecret: process.env.WHATSAPP_APP_SECRET || '',
+    // Echoed back during Meta's one-time subscribe handshake.
+    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
+    // Our own number, so we can recognise it in a payload.
+    ownNumber: String(process.env.WHATSAPP_BUSINESS_PHONENUMBER || ''),
+    // Receive and record, but never reply. The flow is not built yet, and a
+    // half-built bot answering real customers is worse than a silent one.
+    replyEnabled: bool(process.env.WHATSAPP_REPLY_ENABLED, false),
+  },
+
   logCalls: bool(process.env.LOG_ULIP_CALLS, true),
 };
 
@@ -76,6 +116,19 @@ function validate() {
   if (!config.ulip.password) problems.push('ULIP_PASSWORD is required');
   if (!config.apiKeys.length) problems.push('VEHICLE_LOOKUP_KEY is required (callers authenticate with it)');
   if (config.apiKeys.some(k => k.length < 16)) problems.push('VEHICLE_LOOKUP_KEY should be at least 16 characters');
+  // WhatsApp is optional: the gateway must still boot on a machine that only
+  // does vehicle lookups. But a half-configured webhook is a trap, so if any
+  // WhatsApp value is present, demand the ones that make it safe.
+  const wa = config.whatsapp;
+  if (wa.token || wa.phoneNumberId) {
+    if (!wa.phoneNumberId) problems.push('WHATSAPP_PHONE_NUMBER_ID is required when WhatsApp is configured');
+    if (!wa.token) problems.push('WHATSAPP_ACCESS_TOKEN is required when WhatsApp is configured');
+    if (!wa.verifyToken) problems.push('WHATSAPP_VERIFY_TOKEN is required — Meta will not subscribe without it');
+    if (config.env === 'production' && !wa.appSecret) {
+      problems.push('WHATSAPP_APP_SECRET is required in production — without it any caller can post fake messages');
+    }
+  }
+
   if (problems.length) throw new Error(`Configuration problems:\n  - ${problems.join('\n  - ')}`);
 }
 

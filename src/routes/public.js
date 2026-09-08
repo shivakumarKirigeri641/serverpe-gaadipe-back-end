@@ -30,6 +30,11 @@ const POLICIES = {
   cancellation: 'cancellation_policy',
   delivery: 'delivery_policy',
   'data-deletion': 'data_deletion_policy',
+  // The deployed front-end asks for this policy as "deletion" (see
+  // POLICY_SLUGS in its lib/api.js). Serving both names costs one extra query
+  // and means neither side has to be redeployed in step with the other.
+  deletion: 'data_deletion_policy',
+  partner: 'partner_policy',
 };
 
 // Legal text changes rarely and every visitor loads it, so it is read once and
