@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1080" width="1080" height="1080">
+  <!-- Square welcome image sent as the first WhatsApp reply. -->
+  <defs>
+    <linearGradient id="waBg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#053F38"/><stop offset="1" stop-color="#075E54"/></linearGradient>
+    <linearGradient id="waBadge" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0FB3A0"/><stop offset="1" stop-color="#0A9E8E"/></linearGradient>
+  </defs>
+  <rect width="1080" height="1080" fill="url(#waBg)"/>
+  <g transform="translate(396,120) scale(0.56)">
+    <rect x="0" y="0" width="512" height="512" rx="116" ry="116" fill="url(#waBadge)"/>
+    <text x="256" y="326" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="900" font-size="238" letter-spacing="-14"><tspan fill="#FFFFFF">G</tspan><tspan fill="#3BE8B0">P</tspan></text><path d="M122,388 L214,428 L400,346" fill="none" stroke="#3BE8B0" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="540" y="512" text-anchor="middle" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="82" font-weight="700" fill="#FFFFFF" letter-spacing="-2">Gaadi<tspan fill="#3BE8B0">Pe</tspan></text>
+  <text x="540" y="572" text-anchor="middle" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="33" font-weight="500" fill="#CFEAE3">Har gaadi ki kundli — verify before you buy</text>
+  <g stroke="#3BE8B0" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="232,650 246,664 272,632"/><polyline points="232,714 246,728 272,696"/><polyline points="232,778 246,792 272,760"/><polyline points="232,842 246,856 272,824"/><polyline points="232,906 246,920 272,888"/>
+  </g>
+  <g font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="35" fill="#E2E8F0">
+    <text x="300" y="662">RC &amp; vehicle information</text><text x="300" y="726">Insurance &amp; fitness</text><text x="300" y="790">Emission (PUCC) &amp; permits</text><text x="300" y="854">FASTag &amp; eChallan</text><text x="300" y="918">…and more</text>
+  </g>
+  <text x="540" y="1004" text-anchor="middle" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="28" font-weight="500" fill="#9FC7BE">Through authorized vehicle-data API integrations</text>
+</svg>

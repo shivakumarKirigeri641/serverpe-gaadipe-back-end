@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <!-- Open Graph / Twitter card, shown when a gaadipe.in link is shared. -->
+  <defs>
+    <linearGradient id="ogBg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#053F38"/><stop offset="1" stop-color="#075E54"/></linearGradient>
+    <linearGradient id="ogBadge" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0FB3A0"/><stop offset="1" stop-color="#0A9E8E"/></linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#ogBg)"/>
+  <g transform="translate(96,150) scale(0.42)">
+    <rect x="0" y="0" width="512" height="512" rx="116" ry="116" fill="url(#ogBadge)"/>
+    <text x="256" y="326" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="900" font-size="238" letter-spacing="-14"><tspan fill="#FFFFFF">G</tspan><tspan fill="#3BE8B0">P</tspan></text><path d="M122,388 L214,428 L400,346" fill="none" stroke="#3BE8B0" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="352" y="252" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="86" font-weight="700" fill="#FFFFFF" letter-spacing="-2">Gaadi<tspan fill="#3BE8B0">Pe</tspan></text>
+  <text x="356" y="318" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="34" font-weight="500" fill="#CFEAE3">Har gaadi ki kundli — verify before you buy</text>
+  <text x="356" y="382" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="27" font-weight="400" fill="#9FC7BE">RC · Insurance · Fitness · Emission · Permits · FASTag · eChallan</text>
+  <rect x="356" y="424" width="356" height="56" rx="28" fill="#00A884"/>
+  <text x="384" y="461" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="25" font-weight="600" fill="#FFFFFF">Authorized API integrations</text>
+</svg>

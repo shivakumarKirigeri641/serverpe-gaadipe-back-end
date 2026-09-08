@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200">
+  <!-- Horizontal lockup: GP badge + GaadiPe wordmark. Header, invoices, reports. -->
+  <defs><linearGradient id="vpLock" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0A9E8E"/><stop offset="1" stop-color="#075E54"/></linearGradient></defs>
+  <g transform="translate(24,28) scale(0.28125)">
+    <rect x="0" y="0" width="512" height="512" rx="116" ry="116" fill="url(#vpLock)"/>
+    <text x="256" y="326" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="900" font-size="238" letter-spacing="-14"><tspan fill="#FFFFFF">G</tspan><tspan fill="#3BE8B0">P</tspan></text><path d="M122,388 L214,428 L400,346" fill="none" stroke="#3BE8B0" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="196" y="104" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="62" font-weight="700" fill="#0F172A" letter-spacing="-1">Gaadi<tspan fill="#00A884">Pe</tspan></text>
+  <text x="199" y="146" font-family="Segoe UI, Arial, Helvetica, sans-serif" font-size="24" font-weight="500" fill="#64748B" letter-spacing="1.5">HAR GAADI KI KUNDLI</text>
+</svg>
