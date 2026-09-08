@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- GaadiPe mark: the GP monogram (Gaadi + Pe) resting on a verify check -->
+  <!-- G white, P mint, check mint = "kundli verified". Teal-green badge. -->
+  <defs><linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0A9E8E"/><stop offset="1" stop-color="#075E54"/></linearGradient></defs>
+  <rect width="512" height="512" rx="116" fill="url(#b)"/>
+  <text x="256" y="326" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="900" font-size="238" letter-spacing="-14"><tspan fill="#FFFFFF">G</tspan><tspan fill="#3BE8B0">P</tspan></text><path d="M122,388 L214,428 L400,346" fill="none" stroke="#3BE8B0" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
