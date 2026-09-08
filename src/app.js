@@ -28,7 +28,10 @@ const cache = require('./util/cache');
 const vehicleRoutes = require('./routes/vehicle');
 const publicRoutes = require('./routes/public');
 const watchJob = require('./jobs/watch');
+const reconcileJob = require('./jobs/reconcile');
 const whatsappRoutes = require('./routes/whatsapp');
+const paymentRoutes = require('./routes/payments');
+const checkoutRoutes = require('./routes/checkout');
 
 validate();   // fail at boot, not mid-request
 
@@ -53,6 +56,15 @@ app.use('/serverpe/platform/gaadipe/v1/public/users', publicRoutes);
 // other ServerPe products already use. No API key: the caller is Meta, and it
 // authenticates itself by signing the body with the app secret.
 app.use('/serverpe/platform/gaadipe/v1/public/users', whatsappRoutes);
+
+// Razorpay's webhook. Also unauthenticated, and for the same reason: the caller
+// is Razorpay, and it proves itself by signing the body with the webhook secret.
+app.use('/serverpe/platform/gaadipe/v1/public/users', paymentRoutes);
+
+// The hosted checkout page, at /pay/<token>. Public by design: the token IS the
+// authorisation, it belongs to exactly one payment, and it grants nothing
+// except the right to pay that one amount.
+app.use('/', checkoutRoutes);
 
 /* -------------------------------------------------------------------- auth */
 /** Constant-time compare, so a wrong key cannot be found by timing. */
@@ -103,6 +115,9 @@ app.listen(config.port, () => {
   // deployment has no one to notify.
   if (config.whatsapp.phoneNumberId && config.whatsapp.replyEnabled) {
     watchJob.start(Number(process.env.WATCH_TICK_SECONDS) || 60);
+    // A webhook is a delivery attempt, not a guarantee. This is what stops a
+    // captured payment from silently delivering nothing.
+    reconcileJob.start(Number(process.env.RECONCILE_TICK_SECONDS) || 60);
   }
   if (config.whatsapp.phoneNumberId) {
     console.log(`  whatsapp: +${config.whatsapp.ownNumber} id ${config.whatsapp.phoneNumberId}`

@@ -31,6 +31,13 @@ const settings = require('../util/settings');
 
 const MS_MIN = 60 * 1000;
 
+// Written out rather than toLocaleDateString, which returns "Sep" in one place
+// and "Sept" in another for the same product.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const fmtDate = (d) =>
+  `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+
 /* Which document warnings are worth sending, and when. A 60-day horizon on
    insurance gives time to shop for a policy; PUC can be done the same day. */
 const WARN_DAYS = {
@@ -140,15 +147,26 @@ async function checkOne(w) {
   // Store AFTER diffing — the comparison needs the old snapshot.
   await store.record(w.user_id, data).catch(e => console.error('[watch] store:', e.message));
 
-  const interval = await settings.num('watch_check_interval_minutes', 24 * 60);
+  // Each dataset is rescheduled on its own clock. Challans are the only thing
+  // that genuinely changes week to week; an RC's expiry dates do not move
+  // between checks, and a FASTag's status almost never does. Checking all three
+  // daily costs 112 upstream calls a cycle against 20 for these intervals — the
+  // difference between surviving a ULIP price list and not.
+  const fallback = await settings.num('watch_check_interval_minutes', 48 * 60);
+  const every = {
+    challan: await settings.num('watch_interval_minutes_challan', fallback),
+    rc:      await settings.num('watch_interval_minutes_rc', fallback),
+    fastag:  await settings.num('watch_interval_minutes_fastag', fallback),
+  };
   await db.query(
     `UPDATE watches
         SET last_checked_at = now(), fail_count = 0,
             challan_next_check_at = now() + ($2 || ' minutes')::interval,
-            rc_next_check_at      = now() + ($2 || ' minutes')::interval,
-            fastag_next_check_at  = now() + ($2 || ' minutes')::interval,
+            rc_next_check_at      = now() + ($3 || ' minutes')::interval,
+            fastag_next_check_at  = now() + ($4 || ' minutes')::interval,
             modified_at = now()
-      WHERE id = $1`, [w.id, String(interval)]);
+      WHERE id = $1`,
+    [w.id, String(every.challan), String(every.rc), String(every.fastag)]);
 
   const fresh = [];
   for (const item of items) {
@@ -212,7 +230,7 @@ async function lifecycle() {
     const when = new Date(t.expires_at);
     if (await send.windowOpen(t.mobile)) {
       await send.text(t.mobile,
-        `Your free trial for *${t.reg_no}* ends on *${when.toDateString()}*.\n\n`
+        `Your free trial for *${t.reg_no}* ends on *${fmtDate(when)}*.\n\n`
         + `To keep monitoring this vehicle, it is ₹${price} for 28 days. `
         + 'Nothing is charged automatically.');
     } else {
@@ -224,6 +242,77 @@ async function lifecycle() {
        SELECT user_id, 'trial_ending_notice', $2 FROM watches WHERE id = $1`,
       [t.id, JSON.stringify({ watch_id: String(t.id), reg_no: t.reg_no })]);
   }
+
+  /* --------------------------------------------------- paid, ending soon */
+
+  // A trial ending is a sales moment; a paid subscription ending is a service
+  // one. Someone who paid expects to be told before their alerts stop, and
+  // being dropped in silence is how a renewable customer is lost for good.
+  const renewalDays = await settings.num('renewal_notice_days', 3);
+  const dueRenewal = await db.query(
+    `SELECT s.id, s.ends_on, v.reg_no, u.mobile, u.wa_profile_name
+       FROM subscriptions s
+       JOIN vehicles v ON v.id = s.vehicle_id
+       JOIN users    u ON u.id = s.user_id
+      WHERE s.is_active
+        AND s.ends_on <= (CURRENT_DATE + ($1 || ' days')::interval)
+        AND s.ends_on >= CURRENT_DATE
+        AND NOT u.is_paused
+        AND NOT EXISTS (
+          SELECT 1 FROM event_log e
+           WHERE e.kind = 'renewal_notice'
+             AND e.detail->>'subscription_id' = s.id::text
+             AND e.detail->>'ends_on' = s.ends_on::text)`,
+    [String(renewalDays)]);
+
+  for (const s of dueRenewal.rows) {
+    const name = (s.wa_profile_name || 'there').split(' ')[0];
+    const price = Math.round(await settings.num('renewal_paise', 3900) / 100);
+    const ends = fmtDate(new Date(s.ends_on));
+
+    if (await send.windowOpen(s.mobile)) {
+      await send.text(s.mobile,
+        `Monitoring for *${s.reg_no}* ends on *${ends}*.\n\n`
+        + `To continue, it is ₹${price} for the next 28 days. `
+        + 'Nothing is charged automatically — send me the vehicle number when you '
+        + 'are ready and I will send a payment link.');
+    } else {
+      const tpl = await settings.get('template_renewal_due', 'gp_premiumrenewal_v1');
+      // gp_premiumrenewal_v1 asks for days remaining, not a date.
+      const daysLeft = Math.max(0, Math.round(
+        (new Date(s.ends_on) - Date.now()) / (24 * 60 * 60 * 1000)));
+      await send.template(s.mobile, tpl, [name, s.reg_no, String(daysLeft)]);
+    }
+
+    // The marker is built in SQL, not in JavaScript. The de-duplication above
+    // compares against `ends_on::text`, and a JS-formatted date will not match
+    // it — String(date) yields "Wed Sep 10 2026 …", so the notice was sent
+    // again on every pass. Formatting both sides in the same place removes the
+    // possibility rather than fixing one instance of it.
+    await db.query(
+      `INSERT INTO event_log (user_id, kind, detail)
+       SELECT user_id, 'renewal_notice',
+              jsonb_build_object('subscription_id', id::text,
+                                 'reg_no', $2::text,
+                                 'ends_on', ends_on::text)
+         FROM subscriptions WHERE id = $1`,
+      [s.id, s.reg_no]);
+  }
+
+  // Subscriptions that have run out stop being active, which stops their watch.
+  const lapsed = await db.query(
+    `UPDATE subscriptions SET is_active = false, modified_at = now()
+      WHERE is_active AND ends_on < CURRENT_DATE
+      RETURNING id, user_id`);
+  for (const l of lapsed.rows) {
+    await db.query(
+      `UPDATE watches SET is_active = false, modified_at = now()
+        WHERE subscription_id = $1`, [l.id]);
+    await db.query(
+      `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'subscription_lapsed', $2)`,
+      [l.user_id, JSON.stringify({ subscription_id: String(l.id) })]);
+  }
+  if (lapsed.rowCount) console.log('[watch] %d subscription(s) lapsed', lapsed.rowCount);
 
   // Expire what has run out. Nothing is said here: the notice above already
   // said it, and a second message at the moment of expiry reads as nagging.
@@ -239,7 +328,8 @@ async function lifecycle() {
   }
   if (expired.rowCount) console.log('[watch] %d watch(es) expired', expired.rowCount);
 
-  return { notified: ending.rowCount, expired: expired.rowCount };
+  return { notified: ending.rowCount, renewals: dueRenewal.rowCount,
+           lapsed: lapsed.rowCount, expired: expired.rowCount };
 }
 
 /** One pass. Safe to call as often as you like; it only acts on what is due. */
@@ -254,9 +344,9 @@ async function runOnce() {
   }
   const life = await lifecycle();
 
-  if (list.length || life.notified || life.expired) {
-    console.log('[watch] checked %d, alerted %d, notices %d, expired %d (%dms)',
-      list.length, sent, life.notified, life.expired, Date.now() - started);
+  if (list.length || life.notified || life.renewals || life.expired) {
+    console.log('[watch] checked %d, alerted %d, trial-notices %d, renewal-notices %d, expired %d (%dms)',
+      list.length, sent, life.notified, life.renewals, life.expired, Date.now() - started);
   }
   return { checked: list.length, sent, ...life };
 }

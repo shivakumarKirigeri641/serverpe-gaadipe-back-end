@@ -141,6 +141,107 @@ async function buttons(mobile, body, list, { header, footer } = {}) {
 }
 
 /**
+ * A list — WhatsApp's dropdown.
+ *
+ * Buttons cap out at three; a list holds ten rows, each with a title and a line
+ * of description. That is exactly the shape of "which of your vehicles?" for
+ * someone who has checked several: no typing, no re-reading a plate off a
+ * registration book, and the description can carry the reason to care —
+ * "Insurance expired 5 years ago" — without a single API call, because it comes
+ * from what we already stored.
+ *
+ * Meta's limits, enforced here where they can be seen rather than discovered as
+ * a rejected message: 24 characters of title, 72 of description, 10 rows, and
+ * 20 characters on the button that opens the list.
+ */
+async function list(mobile, { body, button, rows, header, footer, sectionTitle }) {
+  if (!rows.length) throw new Error('a list needs at least one row');
+  if (rows.length > 10) throw new Error(`WhatsApp allows at most 10 list rows, got ${rows.length}`);
+  if (button.length > 20) throw new Error(`list button too long (${button.length}): ${button}`);
+
+  const trimmed = rows.map(r => ({
+    id: r.id,
+    title: String(r.title).slice(0, 24),
+    description: r.description ? String(r.description).slice(0, 72) : undefined,
+  }));
+
+  if (!await windowOpen(mobile)) {
+    console.warn('[wa] window closed for %s — not sending list', mobile);
+    return { ok: false, error: 'window_closed' };
+  }
+
+  const interactive = {
+    type: 'list',
+    body: { text: body },
+    action: { button, sections: [{ title: sectionTitle || 'Vehicles', rows: trimmed }] },
+  };
+  if (header) interactive.header = { type: 'text', text: header };
+  if (footer) interactive.footer = { text: footer };
+
+  return post({
+    messaging_product: 'whatsapp',
+    to: toWaId(mobile),
+    type: 'interactive',
+    interactive,
+  }, { mobile, type: 'interactive', body });
+}
+
+/**
+ * Send a file — an invoice PDF, in practice.
+ *
+ * WhatsApp will not take a URL to a file we host, and will not take raw bytes
+ * in the message: the file is uploaded to Meta first, which returns an id, and
+ * the message references that id. Two calls, and the upload is multipart rather
+ * than JSON, which is why it does not go through post().
+ *
+ * The id is good for 30 days, so re-sending the same invoice later means
+ * uploading it again — cheap, and simpler than storing ids that quietly expire.
+ */
+async function document(mobile, filePath, { filename, caption } = {}) {
+  const fs = require('fs');
+  if (!fs.existsSync(filePath)) {
+    console.error('[wa] no such file to send:', filePath);
+    return { ok: false, error: 'file_missing' };
+  }
+  if (!await windowOpen(mobile)) {
+    console.warn('[wa] window closed for %s — not sending document', mobile);
+    return { ok: false, error: 'window_closed' };
+  }
+
+  const name = filename || require('path').basename(filePath);
+
+  let mediaId;
+  try {
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', 'application/pdf');
+    form.append('file',
+      new Blob([fs.readFileSync(filePath)], { type: 'application/pdf' }), name);
+
+    const up = await fetch(
+      `https://graph.facebook.com/${wa.apiVersion}/${wa.phoneNumberId}/media`,
+      { method: 'POST', headers: { Authorization: `Bearer ${wa.token}` }, body: form,
+        signal: AbortSignal.timeout(30000) });
+    const j = await up.json().catch(() => ({}));
+    if (!j.id) {
+      console.error('[wa] media upload failed:', JSON.stringify(j.error || j));
+      return { ok: false, error: j.error?.message || 'upload_failed' };
+    }
+    mediaId = j.id;
+  } catch (e) {
+    console.error('[wa] media upload threw:', e.message);
+    return { ok: false, error: e.message };
+  }
+
+  return post({
+    messaging_product: 'whatsapp',
+    to: toWaId(mobile),
+    type: 'document',
+    document: { id: mediaId, filename: name, caption },
+  }, { mobile, type: 'document', body: caption || name });
+}
+
+/**
  * An approved template — the only thing that will deliver outside the 24-hour
  * window, which is where every alert lives by definition.
  *
@@ -165,4 +266,4 @@ async function template(mobile, name, params = [], { language = 'en' } = {}) {
   }, { mobile, type: 'template', body: `${name}(${clean.join(' | ')})`, templateName: name });
 }
 
-module.exports = { text, buttons, template, windowOpen, toWaId };
+module.exports = { text, buttons, list, document, template, windowOpen, toWaId };

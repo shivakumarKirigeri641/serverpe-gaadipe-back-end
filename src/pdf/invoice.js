@@ -47,7 +47,11 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
       [business.gstin ? `GSTIN: ${business.gstin}` : null, business.pan ? `PAN: ${business.pan}` : null]
         .filter(Boolean).join("   ·   "),
       business.product_support_email || business.support_email,
+      // A customer querying a charge should be able to reach us from the
+      // invoice itself, without going looking for the number.
+      business.whatsapp_number ? `WhatsApp: ${business.whatsapp_number}` : null,
       business.product_website,
+      business.proprietor_name ? `Proprietor: ${business.proprietor_name}` : null,
     ].filter(Boolean).forEach((l) => {
       doc.text(l, T.M + 12, sy, { width: colW - 24 });
       sy = doc.y + 1;
@@ -79,11 +83,11 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
 
     y = T.sectionTitle(doc, "Particulars", y);
     y = T.table(doc, [
-      { label: "Description", width: 258 },
-      { label: "SAC", width: 58 },
+      { label: "Description", width: 300 },
+      { label: "SAC", width: 52 },
       { label: "Qty", width: 34, align: "center" },
-      { label: "Rate", width: 80, align: "right" },
-      { label: "Taxable", width: 85, align: "right" },
+      { label: "Rate", width: 66, align: "right" },
+      { label: "Taxable", width: 71, align: "right" },
     ], lineRows.map((it) => [
       it.description || `Full Vehicle Report${it.reg_no ? ` — ${it.reg_no}` : ""}`,
       sac, "1", T.money(it.taxable), T.money(it.taxable),
@@ -130,6 +134,21 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
          T.M, y + 4, { width: W - boxW - 20 }
        );
     y += totalsH + 16;
+
+    /* ── what the money bought, and until when ──
+       A table cell is clipped to one line, so the service period cannot live in
+       the description: it ends up as an ellipsis. It also happens to be the
+       first thing a customer looks for, which is reason enough for it to have a
+       block of its own. */
+    if (lineItem.period_from || lineItem.period_to) {
+      y = T.sectionTitle(doc, "Service Period", y, T.BRAND.brand);
+      y = T.kvCard(doc, [
+        ["Vehicle", lineItem.reg_no || "—"],
+        ["Monitoring from", T.fmtDate(lineItem.period_from)],
+        ["Monitoring until", T.fmtDate(lineItem.period_to)],
+        ["Renewal due on", T.fmtDate(lineItem.period_to)],
+      ], y, { cols: 2 });
+    }
 
     /* ── payment reference ── */
     if (lineItem.payment_id || lineItem.order_id) {
