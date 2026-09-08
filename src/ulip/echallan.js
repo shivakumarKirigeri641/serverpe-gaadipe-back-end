@@ -60,6 +60,30 @@ function text(v) {
   return blank(v);
 }
 
+/**
+ * Offences come as an array of objects:
+ *   [{ act: "179 (1)", name: "Disobedience of orders…", offence_id: 9416 }]
+ *
+ * Returned structured so a front-end can render "§179(1) — Disobedience…" or
+ * group by id, and one challan carrying three violations stays three items
+ * rather than one mashed-together string.
+ */
+function offencesOf(v) {
+  const list = Array.isArray(v) ? v : (v == null ? [] : [v]);
+  return list.map((o) => {
+    if (o == null) return null;
+    if (typeof o !== 'object') return { act: null, name: blank(o), id: null };
+    return {
+      act: blank(o.act ?? o.section ?? o.mv_act),
+      name: blank(o.name ?? o.description ?? o.offence ?? o.violation),
+      id: o.offence_id ?? o.id ?? null,
+    };
+  }).filter((o) => o && (o.name || o.act));
+}
+
+/** Tolerant yes/no: values arrive padded and inconsistently cased. */
+const yes = (v) => /^y/i.test(String(v ?? '').trim());
+
 /** Rupees (or paise-looking values) to integer paise. */
 function paise(v) {
   const n = Number(String(v ?? '').replace(/[^\d.]/g, ''));
@@ -100,7 +124,10 @@ const KNOWN = new Set([
   'challan_date_time','challanDateTime','date_time','offence_date','violation_date',
   'amount','fine_imposed','challan_status','status','offence_details','offence',
   'violation','offence_name','court_status','challan_place','place','state',
-  'receipt_no','received_amount','sent_to_reg_court','department',
+  'receipt_no','received_amount','sent_to_reg_court','sent_to_virtual_court',
+  'department','state_code','act','offence_id','rto_distric_name','rto_district_name',
+  'remark','document_impounded','dl_no','court_name','court_address',
+  'date_of_proceeding','sent_to_court_on','amount_of_fine_imposed',
   'driver_name','owner_name','name_of_violator','accused_name',
 ]);
 
@@ -120,12 +147,29 @@ function mapChallan(row, state) {
     amount_paise: paise(pick(row, ['amount','fine_imposed'])),
     paid_paise: paise(pick(row, ['received_amount'])),
     status: blank(pick(row, ['challan_status','status'])) || state,
-    // Always readable text, whatever shape ULIP sent.
+    // Structured, plus a ready-to-display string. Whatever shape ULIP sent.
+    offences: offencesOf(pick(row, ['offence_details','offence','violation','offence_name'])),
     offence: text(pick(row, ['offence_details','offence','violation','offence_name'])),
     place: text(pick(row, ['challan_place','place'])),
     department: text(pick(row, ['department'])),
     receipt_no: blank(pick(row, ['receipt_no'])),
-    court_status: text(pick(row, ['court_status','sent_to_reg_court'])),
+    court_status: text(pick(row, ['court_status'])),
+    // Two separate court flags in the payload, not one.
+    // Values arrive padded — a real row carried " No" with a leading space, so
+    // an untrimmed /^y/ test would silently mark a court case as false.
+    sent_to_court: yes(pick(row, ['sent_to_reg_court'])),
+    sent_to_virtual_court: yes(pick(row, ['sent_to_virtual_court'])),
+    sent_to_court_on: blank(pick(row, ['sent_to_court_on'])),
+    court_name: blank(pick(row, ['court_name'])),
+    court_address: blank(pick(row, ['court_address'])),
+    proceeding_date: blank(pick(row, ['date_of_proceeding'])),
+    // Challans follow the vehicle across states, so the issuing state is not
+    // necessarily the vehicle's own RTO state.
+    state_code: blank(pick(row, ['state_code'])),
+    rto_district: blank(pick(row, ['rto_distric_name','rto_district_name'])),
+    remark: blank(pick(row, ['remark'])),
+    document_impounded: blank(pick(row, ['document_impounded'])),
+    dl_no: blank(pick(row, ['dl_no'])),
     // Masked by ULIP at source; kept because a buyer may want to match a name.
     violator_name: blank(pick(row, ['name_of_violator','driver_name','accused_name','owner_name'])),
     state,
@@ -139,6 +183,42 @@ const empty = () => ({
   pending_amount_paise: 0, disposed_amount_paise: 0,
   checked_at: new Date().toISOString(),
 });
+
+/**
+ * A fleet vehicle came back with 352 pending challans worth ₹12.9 lakh in a
+ * 683 KB response. Nobody can read that, and no WhatsApp message or PDF can
+ * carry it — so every response also carries the shape a human actually needs:
+ * totals, the date range, and which offences dominate.
+ */
+function summarise(pending, disposed) {
+  const dates = [...pending, ...disposed].map(c => c.challan_date).filter(Boolean).sort();
+  const byOffence = new Map();
+  for (const c of pending) {
+    for (const o of (c.offences.length ? c.offences : [{ name: c.offence || 'Unspecified', act: null }])) {
+      const key = o.name || o.act || 'Unspecified';
+      const cur = byOffence.get(key) || { offence: key, act: o.act || null, count: 0, amount_paise: 0 };
+      cur.count += 1;
+      cur.amount_paise += c.amount_paise || 0;
+      byOffence.set(key, cur);
+    }
+  }
+  const byState = new Map();
+  for (const c of pending) {
+    const k = c.state_code || 'unknown';
+    byState.set(k, (byState.get(k) || 0) + 1);
+  }
+  return {
+    total_pending: pending.length,
+    total_pending_amount_paise: pending.reduce((t, c) => t + (c.amount_paise || 0), 0),
+    total_disposed: disposed.length,
+    oldest_challan_date: dates[0] || null,
+    newest_challan_date: dates[dates.length - 1] || null,
+    in_court: pending.filter(c => c.sent_to_court || c.sent_to_virtual_court).length,
+    top_offences: [...byOffence.values()].sort((a, b) => b.amount_paise - a.amount_paise).slice(0, 5),
+    states: [...byState.entries()].map(([state_code, count]) => ({ state_code, count }))
+      .sort((a, b) => b.count - a.count),
+  };
+}
 
 /** Newest first — a front-end should not have to sort this itself. */
 const byDateDesc = (a, b) => String(b.challan_date || '').localeCompare(String(a.challan_date || ''));
@@ -175,6 +255,7 @@ async function fetchChallans(regNo, { includeRaw = false } = {}) {
       disposed_count: disposed.length,
       pending_amount_paise: sum(pending),
       disposed_amount_paise: sum(disposed),
+      summary: summarise(pending, disposed),
       checked_at: new Date().toISOString(),
       ...(includeRaw ? { _raw: inner } : {}),
     },
@@ -182,4 +263,4 @@ async function fetchChallans(regNo, { includeRaw = false } = {}) {
   };
 }
 
-module.exports = { fetchChallans, mapChallan, text, whenOf };
+module.exports = { fetchChallans, mapChallan, text, whenOf, summarise, offencesOf };
