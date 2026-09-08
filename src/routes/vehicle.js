@@ -3,11 +3,18 @@
  * ---------------------------------------------------------------------------
  * The public surface of the gateway.
  *
- *   GET /api/v1/vehicle/:regNo             everything, cache-first
- *   GET /api/v1/vehicle/:regNo?refresh=1   force a fresh ULIP fetch
- *   GET /api/v1/vehicle/:regNo/rc          RC only
- *   GET /api/v1/vehicle/:regNo/challans    challans only
- *   GET /api/v1/vehicle/:regNo/fastag      FASTag only
+ *   GET /api/v1/vehicle/:regNo               everything, cache-first
+ *   GET /api/v1/vehicle/:regNo?refresh=1     force a fresh ULIP fetch
+ *   GET /api/v1/vehicle/:regNo?challans=all  full challan list inline
+ *   GET /api/v1/vehicle/:regNo/rc            RC only
+ *   GET /api/v1/vehicle/:regNo/challans      challans, paginated
+ *       ?page=2&per_page=50&status=pending
+ *   GET /api/v1/vehicle/:regNo/fastag        FASTag tags + toll crossings
+ *
+ * WHY THE DEFAULT IS TRIMMED: a real tourist bus returned 352 pending challans
+ * in a 448 KB document. This is a WhatsApp-first product on Indian mobile data,
+ * so the full document defaults to the summary plus the newest few, and the
+ * complete list is a separate, paged request.
  *
  * Every response reports `calls` — the ULIP requests this lookup actually
  * spent. Free today; the day ULIP starts charging, cost per customer is
@@ -70,19 +77,41 @@ async function load(kind, regNo, refresh, debug = false) {
   return { failed: true, calls: r.calls, code: r.code, error: r.error };
 }
 
+const PREVIEW = 10;      // newest challans inlined in the full document
+const PER_PAGE = 50;     // page size for the paginated list
+const MAX_PER_PAGE = 200;
+
+/**
+ * Keep the summary and the newest few; drop the long tail.
+ * `challans=all` opts back in to everything.
+ */
+function trimChallans(data, wantAll, regNo) {
+  if (!data || wantAll) return data;
+  const { pending = [], disposed = [], ...rest } = data;
+  return {
+    ...rest,
+    pending: pending.slice(0, PREVIEW),
+    disposed: disposed.slice(0, PREVIEW),
+    truncated: pending.length > PREVIEW || disposed.length > PREVIEW,
+    showing: { pending: Math.min(pending.length, PREVIEW), disposed: Math.min(disposed.length, PREVIEW) },
+    full_list_url: `/api/v1/vehicle/${regNo}/challans`,
+  };
+}
+
 /** Shared entry: validate the plate before spending anything. */
 function check(req, res) {
   const { regNo, ok, error } = plate.parse(req.params.regNo);
   if (!ok) { badPlate(res, regNo, error); return null; }
   return { regNo,
            refresh: String(req.query.refresh || '') === '1',
-           debug: String(req.query.debug || '') === '1' };
+           debug: String(req.query.debug || '') === '1',
+           allChallans: String(req.query.challans || '') === 'all' };
 }
 
 /* ------------------------------------------------------------------ full */
 router.get('/vehicle/:regNo', async (req, res) => {
   const ctx = check(req, res); if (!ctx) return;
-  const { regNo, refresh, debug } = ctx;
+  const { regNo, refresh, debug, allChallans } = ctx;
   const started = Date.now();
 
   try {
@@ -113,7 +142,8 @@ router.get('/vehicle/:regNo', async (req, res) => {
       rc: rc.data,
       // A dataset that failed is reported as null with a reason, rather than
       // failing the whole document — an RC with no challan data is still useful.
-      challans: challan.failed ? null : challan.data,
+      challans: challan.failed ? null
+        : trimChallans(challan.data, allChallans || debug, regNo),
       challans_error: challan.failed ? challan.error : undefined,
       fastag: tag.failed ? null : tag.data,
       fastag_error: tag.failed ? tag.error : undefined,
@@ -156,7 +186,50 @@ const single = (kind, field) => async (req, res) => {
 };
 
 router.get('/vehicle/:regNo/rc', single('rc', 'rc'));
-router.get('/vehicle/:regNo/challans', single('challan', 'challans'));
+/**
+ * Paginated challans. Defaults to pending — the ones that cost money — because
+ * that is what a customer or a fleet manager is actually asking about.
+ */
+router.get('/vehicle/:regNo/challans', async (req, res) => {
+  const ctx = check(req, res); if (!ctx) return;
+  const { regNo, refresh, debug } = ctx;
+  const started = Date.now();
+  try {
+    const r = await load('challan', regNo, refresh, debug);
+    if (r.notFound) return notFound(res, regNo, r.error);
+    if (r.failed) {
+      return res.status(503).json({ success: false, error: 'upstream_unavailable',
+        vehicle_number: regNo, message: r.error, calls: r.calls });
+    }
+
+    const status = ['pending', 'disposed', 'all'].includes(String(req.query.status))
+      ? String(req.query.status) : 'pending';
+    const perPage = Math.min(MAX_PER_PAGE, Math.max(1, parseInt(req.query.per_page, 10) || PER_PAGE));
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+    const d = r.data || {};
+    const rows = status === 'all'
+      ? [...(d.pending || []), ...(d.disposed || [])]
+      : (d[status] || []);
+    const total = rows.length;
+    const pages = Math.max(1, Math.ceil(total / perPage));
+    const slice = rows.slice((page - 1) * perPage, (page - 1) * perPage + perPage);
+
+    res.json({
+      success: true, vehicle_number: regNo,
+      cached: r.cached, age_minutes: r.age_minutes,
+      latency_ms: Date.now() - started,
+      status, page, per_page: perPage, total, pages,
+      has_more: page < pages,
+      summary: d.summary,
+      challans: slice,
+      calls: r.calls, ulip_calls_made: (r.calls || []).length,
+    });
+  } catch (e) {
+    console.error('[challans] unexpected:', e.message);
+    res.status(500).json({ success: false, error: 'server_error', message: 'Something went wrong.' });
+  }
+});
 router.get('/vehicle/:regNo/fastag', single('fastag', 'fastag'));
 
 module.exports = router;
