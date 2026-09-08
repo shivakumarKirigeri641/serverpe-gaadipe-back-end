@@ -140,4 +140,29 @@ async function buttons(mobile, body, list, { header, footer } = {}) {
   }, { mobile, type: 'interactive', body });
 }
 
-module.exports = { text, buttons, windowOpen, toWaId };
+/**
+ * An approved template — the only thing that will deliver outside the 24-hour
+ * window, which is where every alert lives by definition.
+ *
+ * @param {string[]} params  body variables, in order. Newlines are stripped:
+ *   Meta rejects a parameter containing one (error #132018), and the failure
+ *   comes back as a whole-message rejection rather than anything obvious.
+ */
+async function template(mobile, name, params = [], { language = 'en' } = {}) {
+  const clean = params.map(p => String(p ?? '').replace(/\s*\n\s*/g, ' · ').trim());
+
+  return post({
+    messaging_product: 'whatsapp',
+    to: toWaId(mobile),
+    type: 'template',
+    template: {
+      name,
+      language: { code: language },
+      components: clean.length
+        ? [{ type: 'body', parameters: clean.map(text => ({ type: 'text', text })) }]
+        : [],
+    },
+  }, { mobile, type: 'template', body: `${name}(${clean.join(' | ')})`, templateName: name });
+}
+
+module.exports = { text, buttons, template, windowOpen, toWaId };

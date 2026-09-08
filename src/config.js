@@ -67,6 +67,22 @@ const config = {
   },
 
   /**
+   * Where vehicle data is fetched from.
+   *
+   * ULIP authorises by SOURCE IP, so only the deployed server may call it. The
+   * bot therefore never calls ULIP directly — it calls this gateway's own
+   * public API. On a laptop that is https://api.gaadipe.in; on the server it is
+   * http://localhost:PORT, the same process answering itself for the cost of a
+   * millisecond and one code path instead of two.
+   */
+  gateway: {
+    baseUrl: (process.env.GATEWAY_BASE_URL
+      || `http://localhost:${int(process.env.PORT, 5007)}`).replace(/\/+$/, ''),
+    apiKey: String(process.env.VEHICLE_LOOKUP_KEY || '').split(',')[0].trim(),
+    timeoutMs: int(process.env.GATEWAY_TIMEOUT_MS, 35_000),
+  },
+
+  /**
    * WhatsApp Cloud API. The number shares a WhatsApp Business Account with
    * QuizPe, so both products' events are delivered to whichever apps are
    * subscribed — every handler must check phoneNumberId before acting, or

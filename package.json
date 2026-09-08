@@ -17,7 +17,8 @@
     "invoice:rebuild": "node scripts/rebuild-invoice.js",
     "wa:status": "node scripts/wa-register.js status",
     "wa:register": "node scripts/wa-register.js register",
-    "wa:webhook": "node scripts/wa-register.js webhook"
+    "wa:webhook": "node scripts/wa-register.js webhook",
+    "wa:templates": "node scripts/wa-templates.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

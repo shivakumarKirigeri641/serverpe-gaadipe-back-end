@@ -27,6 +27,7 @@ const { config, validate } = require('./config');
 const cache = require('./util/cache');
 const vehicleRoutes = require('./routes/vehicle');
 const publicRoutes = require('./routes/public');
+const watchJob = require('./jobs/watch');
 const whatsappRoutes = require('./routes/whatsapp');
 
 validate();   // fail at boot, not mid-request
@@ -98,6 +99,11 @@ app.listen(config.port, () => {
   console.log(`  ULIP: ${config.ulip.baseUrl}  (primary VAHAN/${config.ulip.vahanPrimary})`);
   console.log(`  cache: ${config.cache.enabled ? `rc ${config.cache.rcMinutes}m · challan ${config.cache.challanMinutes}m · fastag ${config.cache.fastagMinutes}m` : 'disabled'}`);
   console.log(`  api keys configured: ${config.apiKeys.length}`);
+  // The watch job only runs where WhatsApp is configured: a gateway-only
+  // deployment has no one to notify.
+  if (config.whatsapp.phoneNumberId && config.whatsapp.replyEnabled) {
+    watchJob.start(Number(process.env.WATCH_TICK_SECONDS) || 60);
+  }
   if (config.whatsapp.phoneNumberId) {
     console.log(`  whatsapp: +${config.whatsapp.ownNumber} id ${config.whatsapp.phoneNumberId}`
       + `  signature ${config.whatsapp.appSecret ? 'enforced' : 'OFF'}`

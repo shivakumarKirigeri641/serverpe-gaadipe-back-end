@@ -13,6 +13,9 @@
  *   partner_consent  partner chose; partner policy shown, waiting for agreement
  *   owner_start      agreed — waiting for a vehicle number
  *   owner_confirm    a number was read; waiting for confirm or re-enter
+ *   owner_lookup     confirmed; fetching from the gateway
+ *   owner_menu       report sent; waiting for trial / check another
+ *   owner_swap       they already watch a vehicle; offered the swap
  *   partner_start    agreed — ready for the partner flow (next to build)
  *
  * WHY CONSENT IS ITS OWN STATE: agreement has to be a deliberate act with a
@@ -29,6 +32,10 @@
 const db = require('../db');
 const send = require('./send');
 const plate = require('../util/plate');
+const gateway = require('../vehicle/gateway');
+const store = require('../vehicle/store');
+const report = require('./report');
+const settings = require('../util/settings');
 
 /* Button ids as constants: a typo'd string would silently fall through to
    "I did not understand" rather than failing loudly. */
@@ -39,6 +46,11 @@ const BTN = {
   AGREE_PARTNER: 'agree_partner',
   PLATE_OK: 'plate_ok',
   PLATE_RETRY: 'plate_retry',
+  TRIAL_START: 'trial_start',
+  CHECK_ANOTHER: 'check_another',
+  SWAP_YES: 'swap_yes',
+  SWAP_NO: 'swap_no',
+  SUBSCRIBE: 'subscribe',
 };
 
 const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
@@ -82,6 +94,19 @@ function intentOf(m) {
   return { kind: 'text', id: null, text: (m.text?.body || '').trim() };
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const fmt = (d) => `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+
+/**
+ * A 7-day trial ends on a date; a 1-minute test trial ends at a time. Showing
+ * "15 Sep 2026" for something that expires in sixty seconds would make the test
+ * look broken, so the precision follows the length.
+ */
+const until = (d, minutes) => (minutes < 24 * 60
+  ? `${fmt(d)}, ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  : fmt(d));
+
 const setState = (mobile, state, reason) => db.query(
   `UPDATE whatsapp_sessions SET state = $2, state_reason = $3, modified_at = now()
     WHERE mobile = $1`, [mobile, state, reason || null]);
@@ -104,6 +129,109 @@ async function recordConsent(mobile, role, documents) {
       WHERE mobile = $1`,
     [mobile, JSON.stringify({ role, consent_at: new Date().toISOString(), consent_documents: documents })]);
   console.log('[wa] consent %s by %s', role, mobile);
+}
+
+/**
+ * Has this person ever had a trial? Read from event_log rather than from
+ * watches, because a watch row is deleted or deactivated over time while the
+ * event is permanent — and "one trial per mobile number, ever" is a promise
+ * about all of history, not about current state.
+ */
+async function trialUsed(userId) {
+  const row = await db.one(
+    `SELECT 1 FROM event_log WHERE kind = 'trial_started' AND user_id = $1 LIMIT 1`,
+    [userId]);
+  return Boolean(row);
+}
+
+/** Whatever the session is carrying between messages. */
+async function sessionContext(mobile) {
+  const row = await db.one(
+    `SELECT context FROM whatsapp_sessions WHERE mobile = $1`, [mobile]);
+  return row?.context || {};
+}
+
+/**
+ * Start or move the free trial.
+ *
+ * The rules, and the reason each exists:
+ *   one trial per mobile number, ever — otherwise it is not a trial
+ *   one vehicle at a time          — keeps the decision at a single ₹49
+ *   one swap for the whole trial   — enough to fix a mistake, not enough to
+ *                                    monitor a series of vehicles for free
+ *
+ * The clock never restarts on a swap: the trial ends trial_minutes after it
+ * began, whatever happens in between. That length is a setting, so a test run
+ * sets it to 1 and watches the entire lifecycle — check, notice, expiry —
+ * happen in a couple of minutes, running exactly the code production runs.
+ */
+async function startTrial(userId, regNo, { swappedFrom } = {}) {
+  const vehicle = await db.one(`SELECT id FROM vehicles WHERE reg_no = $1`, [regNo]);
+  if (!vehicle) return { ok: false, reason: 'unknown_vehicle' };
+
+  const prior = await db.one(
+    `SELECT detail->>'started_at' AS started_at
+       FROM event_log
+      WHERE kind = 'trial_started' AND user_id = $1
+      ORDER BY id LIMIT 1`, [userId]);
+
+  // One trial per mobile number, ever. A swap moves an existing trial, so it is
+  // allowed to find a prior one; anything else must not.
+  //
+  // This is checked explicitly rather than relied on as a side effect. Reusing
+  // the original start time would already make a second trial expire the moment
+  // it began — correct by accident, and the kind of thing that quietly breaks
+  // the day someone changes how the start time is derived.
+  if (!swappedFrom && prior) return { ok: false, reason: 'trial_used' };
+
+  const swaps = await db.one(
+    `SELECT count(*)::int AS n FROM event_log
+      WHERE kind = 'trial_swapped' AND user_id = $1`, [userId]);
+
+  const allowedSwaps = await settings.num('trial_swaps_allowed', 1);
+  if (swappedFrom && swaps.n >= allowedSwaps) return { ok: false, reason: 'swap_used' };
+
+  const minutes = await settings.num('trial_minutes', 7 * 24 * 60);
+  const checkEvery = await settings.num('watch_check_interval_minutes', 24 * 60);
+
+  // A swap keeps the original end time; a fresh trial starts the clock now.
+  const startedAt = prior?.started_at ? new Date(prior.started_at) : new Date();
+  const endsAt = new Date(startedAt.getTime() + minutes * 60 * 1000);
+
+  await db.tx(async (c) => {
+    if (swappedFrom) {
+      await c.query(
+        `UPDATE watches SET is_active = false, modified_at = now()
+          WHERE user_id = $1 AND is_active`, [userId]);
+    }
+    await c.query(
+      `INSERT INTO watches (user_id, vehicle_id, expires_on, expires_at,
+                            challan_next_check_at, rc_next_check_at, fastag_next_check_at,
+                            challan_interval_hours, rc_interval_hours, fastag_interval_hours)
+            VALUES ($1, $2, $3, $4,
+                    now() + ($5 || ' minutes')::interval,
+                    now() + ($5 || ' minutes')::interval,
+                    now() + ($5 || ' minutes')::interval,
+                    $6, $6, $6)
+       ON CONFLICT (user_id, vehicle_id) DO UPDATE
+              SET is_active = true, expires_on = EXCLUDED.expires_on,
+                  expires_at = EXCLUDED.expires_at, modified_at = now()`,
+      [userId, vehicle.id, endsAt.toISOString().slice(0, 10), endsAt.toISOString(),
+       String(checkEvery), Math.max(1, Math.round(checkEvery / 60))]);
+    await c.query(
+      `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, $3, $4)`,
+      [userId, vehicle.id, swappedFrom ? 'trial_swapped' : 'trial_started',
+       JSON.stringify({ reg_no: regNo, from: swappedFrom || null,
+                        started_at: startedAt.toISOString(),
+                        ends_at: endsAt.toISOString(),
+                        trial_minutes: minutes })]);
+    await c.query(
+      `UPDATE user_vehicles SET relation = 'owned'
+        WHERE user_id = $1 AND vehicle_id = $2`, [userId, vehicle.id]);
+  });
+
+  return { ok: true, endsAt, endsOn: endsAt, minutes,
+           swapsLeft: Math.max(0, allowedSwaps - swaps.n - (swappedFrom ? 1 : 0)) };
 }
 
 /** The number the person last sent, held on the session until confirmed. */
@@ -139,6 +267,103 @@ async function askToConfirm(mobile, parsed) {
     `You entered:\n\n*${parsed.regNo}*${note}\n\nIs this correct?`,
     [{ id: BTN.PLATE_OK,    title: 'Confirm' },
      { id: BTN.PLATE_RETRY, title: 'Re-enter number' }]);
+}
+
+/**
+ * Fetch the vehicle, send the report, and offer whatever comes next.
+ *
+ * WHAT "NEXT" IS DEPENDS ON WHAT THEY ALREADY HAVE, which is why the watch list
+ * is read before the buttons are chosen. Offering "start your free trial" to
+ * someone whose trial is already running on another vehicle is the kind of
+ * detail that makes a bot feel like a form rather than a service.
+ */
+async function deliverReport(mobile, regNo, message) {
+  const user = await store.upsertUser(mobile, {
+    name: message?.profile?.name, waId: message?.from,
+  });
+
+  let data;
+  try {
+    data = await gateway.full(regNo);
+  } catch (e) {
+    console.error('[wa] lookup failed for %s: %s', regNo, e.message);
+    data = null;
+  }
+
+  if (!data || data.success !== true) {
+    const notFound = data?.error === 'vehicle_not_found';
+    await setState(mobile, 'owner_start', notFound ? 'vehicle not found' : 'lookup failed');
+    await send.text(mobile, notFound
+      ? `I could not find any Government record for *${regNo}*.\n\n`
+        + 'Please check the number and send it again. Very new vehicles can take '
+        + 'a few weeks to appear.'
+      : 'Sorry, the vehicle service is busy right now. Please send the number '
+        + 'again in a minute.');
+    return;
+  }
+
+  // Recorded before it is sent: if the send fails we still know what we found.
+  await store.record(user.id, data).catch(e => console.error('[wa] store failed:', e.message));
+
+  await send.text(mobile, report.build(data));
+
+  const watching = await store.watchedBy(user.id);
+  const already = watching.find(w => w.reg_no === regNo);
+
+  if (already) {
+    await setState(mobile, 'owner_menu', 'already watching this vehicle');
+    await send.buttons(mobile,
+      `You are already watching *${regNo}*. I will message you if anything changes.`,
+      [{ id: BTN.CHECK_ANOTHER, title: 'Check another' }]);
+    return;
+  }
+
+  if (watching.length) {
+    // A trial covers one vehicle. Someone checking a second one is either
+    // curious or picked the wrong vehicle to begin with — offer the swap
+    // rather than making them ask for it.
+    const current = watching[0];
+    await db.query(
+      `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now()
+        WHERE mobile = $1`,
+      [mobile, JSON.stringify({ swap_to: regNo, swap_from: current.reg_no })]);
+    await setState(mobile, 'owner_swap', 'offered swap');
+    await send.buttons(mobile,
+      `You are currently watching *${current.reg_no}*.\n\n`
+      + `Your free trial covers one vehicle. Would you like to watch *${regNo}* instead?\n\n`
+      + '_Checking any vehicle is always free — this only changes which one I keep an eye on._',
+      [{ id: BTN.SWAP_YES, title: 'Watch this instead' },
+       { id: BTN.SWAP_NO,  title: 'Keep current' }]);
+    return;
+  }
+
+  // Someone whose trial has already run is not offered another one. Being
+  // offered a "free trial" you cannot have, and finding out only after tapping,
+  // is worse than not being offered it.
+  const used = await trialUsed(user.id);
+  const days = Math.round(await settings.num('trial_minutes', 10080) / (60 * 24)) || 1;
+  const price = Math.round(await settings.num('first_payment_paise', 4900) / 100);
+
+  await setState(mobile, 'owner_menu', 'report delivered');
+
+  if (used) {
+    await send.buttons(mobile,
+      `Would you like me to keep watching *${regNo}*?\n\n`
+      + `You have already used your free trial, so this is ₹${price} for 28 days — `
+      + 'daily checks, and a message whenever a new challan appears or a document '
+      + 'is close to expiring.\n\n'
+      + 'Nothing is charged automatically.',
+      [{ id: BTN.SUBSCRIBE,     title: `Continue for ₹${price}` },
+       { id: BTN.CHECK_ANOTHER, title: 'Check another' }]);
+    return;
+  }
+
+  await send.buttons(mobile,
+    'Would you like me to keep watching this vehicle?\n\n'
+    + `Free for ${days} day${days === 1 ? '' : 's'} — I check every day and message you `
+    + 'if a new challan appears or a document is about to expire.',
+    [{ id: BTN.TRIAL_START,   title: 'Start free trial' },
+     { id: BTN.CHECK_ANOTHER, title: 'Check another' }]);
 }
 
 async function welcome(mobile) {
@@ -201,7 +426,85 @@ async function handle(session, message, mobile) {
         await setState(mobile, 'owner_lookup', 'number confirmed');
         await send.text(mobile,
           `Checking *${pending}* … ⏳\n\nThis takes a few seconds.`);
-        // The lookup itself is the next thing to build.
+        await deliverReport(mobile, pending, message);
+        return;
+      }
+
+      case BTN.CHECK_ANOTHER:
+        await setState(mobile, 'owner_start', 'checking another');
+        await send.text(mobile, 'Sure — send me the next vehicle number.');
+        return;
+
+      case BTN.SUBSCRIBE: {
+        const price = Math.round(await settings.num('first_payment_paise', 4900) / 100);
+        await setState(mobile, 'owner_menu', 'wants to subscribe');
+        await send.text(mobile,
+          `Payment is being set up and will be ready shortly — ₹${price} for 28 days.\n\n`
+          + 'I will message you the moment it is live. Meanwhile, checking any vehicle '
+          + 'is free: just send me a number.');
+        return;
+      }
+
+      case BTN.TRIAL_START: {
+        const user = await store.upsertUser(mobile);
+        const reg = await pendingReg(mobile);
+        const r = await startTrial(user.id, reg);
+        if (!r.ok && r.reason === 'trial_used') {
+          const price = Math.round(await settings.num('first_payment_paise', 4900) / 100);
+          await setState(mobile, 'owner_menu', 'trial already used');
+          await send.buttons(mobile,
+            'You have already used your one free trial on this number.\n\n'
+            + `To keep watching *${reg}*, it is ₹${price} for 28 days. `
+            + 'Checking any vehicle stays free.',
+            [{ id: BTN.SUBSCRIBE,     title: `Continue for ₹${price}` },
+             { id: BTN.CHECK_ANOTHER, title: 'Check another' }]);
+          return;
+        }
+        if (!r.ok) {
+          await send.text(mobile, 'Something went wrong starting the trial. Please reply *hi* and try again.');
+          return;
+        }
+        await setState(mobile, 'trial_active', 'trial started');
+        await send.text(mobile,
+          `Done. ✅ I am now watching *${reg}* until *${until(r.endsAt, r.minutes)}*.\n\n`
+          + 'I check every day and message you only if something needs your attention '
+          + '— a new challan, or a document about to expire.\n\n'
+          + 'Nothing to pay, and nothing will be charged automatically.');
+        return;
+      }
+
+      case BTN.SWAP_YES: {
+        const ctx = await sessionContext(mobile);
+        const user = await store.upsertUser(mobile);
+        const r = await startTrial(user.id, ctx.swap_to, { swappedFrom: ctx.swap_from });
+        if (!r.ok && r.reason === 'swap_used') {
+          await setState(mobile, 'trial_active', 'swap already used');
+          await send.text(mobile,
+            'You have already swapped once during this trial, so I will keep watching '
+            + `*${ctx.swap_from}*.\n\n`
+            + 'Checking any vehicle is still free — just send me a number any time.');
+          return;
+        }
+        if (!r.ok) {
+          await send.text(mobile, 'Something went wrong. Please reply *hi* and try again.');
+          return;
+        }
+        await setState(mobile, 'trial_active', 'trial swapped');
+        await send.text(mobile,
+          `Done. ✅ I am now watching *${ctx.swap_to}* instead of *${ctx.swap_from}*, `
+          + `until *${until(r.endsAt, r.minutes)}*.\n\n`
+          + '_This was your one swap for this trial._');
+        return;
+      }
+
+      case BTN.SWAP_NO: {
+        const ctx = await sessionContext(mobile);
+        await setState(mobile, 'owner_menu', 'kept current vehicle');
+        await send.text(mobile,
+          `No change made — I am still watching *${ctx.swap_from}*.
+
+`
+          + 'Reply *hi* any time to check another vehicle.');
         return;
       }
 
@@ -234,9 +537,16 @@ async function handle(session, message, mobile) {
       await welcome(mobile);
       return;
 
+    // Once someone has agreed to the terms, a vehicle number is always a
+    // vehicle number — whether they are mid-flow, looking at a report, or
+    // three days into a trial. Anything else makes them tap "hi" first, which
+    // is a machine's requirement, not a person's.
     case 'owner_start':
     case 'owner_confirm':
-    case 'owner_lookup': {
+    case 'owner_lookup':
+    case 'owner_menu':
+    case 'owner_swap':
+    case 'trial_active': {
       // A number sent at any of these points is a new number: someone
       // correcting themselves rather than tapping the button.
       const parsed = plate.parse(intent.text);
