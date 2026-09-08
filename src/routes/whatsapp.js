@@ -8,9 +8,9 @@
  *   POST same path
  *        every inbound message and delivery receipt
  *
- * This endpoint RECORDS AND DOES NOT REPLY. The conversational flow is not
- * designed yet; a half-built bot answering real customers is worse than a
- * silent number. Set WHATSAPP_REPLY_ENABLED once a handler exists.
+ * Inbound messages are recorded first and answered second, so a message is
+ * never lost because the reply failed. Replies are gated on
+ * WHATSAPP_REPLY_ENABLED, which stays off until a flow is worth showing people.
  *
  * Two things are non-negotiable here:
  *
@@ -29,6 +29,7 @@ const express = require('express');
 const { config } = require('../config');
 const sig = require('../whatsapp/signature');
 const store = require('../whatsapp/store');
+const flow = require('../whatsapp/flow');
 
 const router = express.Router();
 const wa = config.whatsapp;
@@ -88,9 +89,10 @@ async function handle(body) {
         if (rec) {
           console.log(`[wa] in  ${rec.mobile}  ${m.type}  ${JSON.stringify(rec.body).slice(0, 80)}`);
         }
-        if (wa.replyEnabled) {
-          // Deliberately empty. When the flow exists it is called from here,
-          // and until then the switch cannot accidentally be half-on.
+        if (rec && wa.replyEnabled) {
+          // One person's bad message must not stop the rest of the batch.
+          await flow.handle(rec.session, m, rec.mobile)
+            .catch(e => console.error('[wa] flow failed for %s: %s', rec.mobile, e.message));
         }
       }
     }
