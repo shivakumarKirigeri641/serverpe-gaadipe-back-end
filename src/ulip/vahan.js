@@ -183,7 +183,7 @@ async function tryV1(regNo) {
  * Fetch RC, with the fallback rule described at the top of this file.
  * `calls` lists every physical request made, so cost stays measurable.
  */
-async function fetchRc(regNo) {
+async function fetchRc(regNo, _opts = {}) {
   const calls = [];
   const primaryIsXml = config.ulip.vahanPrimary === '01';
 

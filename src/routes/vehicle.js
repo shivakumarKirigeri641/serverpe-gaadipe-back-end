@@ -42,10 +42,10 @@ const notFound = (res, regNo, message) =>
  * One dataset, cache-first.
  * Returns { data, source, cached, age_minutes, calls } or an error shape.
  */
-async function load(kind, regNo, refresh) {
+async function load(kind, regNo, refresh, debug = false) {
   const key = `${kind}:${regNo}`;
 
-  if (!refresh) {
+  if (!refresh && !debug) {
     const hit = cache.get(key);
     if (hit) {
       // A cached "not found" is still an answer — that is the point of caching it.
@@ -55,7 +55,7 @@ async function load(kind, regNo, refresh) {
   }
 
   const fn = kind === 'rc' ? vahan.fetchRc : kind === 'challan' ? echallan.fetchChallans : fastag.fetchFastag;
-  const r = await fn(regNo);
+  const r = await fn(regNo, { includeRaw: debug });
 
   if (r.ok) {
     const value = { data: r.data, source: r.source || null };
@@ -74,19 +74,21 @@ async function load(kind, regNo, refresh) {
 function check(req, res) {
   const { regNo, ok, error } = plate.parse(req.params.regNo);
   if (!ok) { badPlate(res, regNo, error); return null; }
-  return { regNo, refresh: String(req.query.refresh || '') === '1' };
+  return { regNo,
+           refresh: String(req.query.refresh || '') === '1',
+           debug: String(req.query.debug || '') === '1' };
 }
 
 /* ------------------------------------------------------------------ full */
 router.get('/vehicle/:regNo', async (req, res) => {
   const ctx = check(req, res); if (!ctx) return;
-  const { regNo, refresh } = ctx;
+  const { regNo, refresh, debug } = ctx;
   const started = Date.now();
 
   try {
     // RC first and alone: if the vehicle does not exist there is no point
     // spending calls on challans and FASTag for it.
-    const rc = await load('rc', regNo, refresh);
+    const rc = await load('rc', regNo, refresh, debug);
     if (rc.notFound) return notFound(res, regNo, rc.error);
     if (rc.failed) {
       return res.status(503).json({ success: false, error: 'upstream_unavailable',
@@ -94,8 +96,8 @@ router.get('/vehicle/:regNo', async (req, res) => {
     }
 
     const [challan, tag] = await Promise.all([
-      load('challan', regNo, refresh),
-      load('fastag', regNo, refresh),
+      load('challan', regNo, refresh, debug),
+      load('fastag', regNo, refresh, debug),
     ]);
 
     const calls = [...(rc.calls || []), ...(challan.calls || []), ...(tag.calls || [])];
@@ -132,10 +134,10 @@ router.get('/vehicle/:regNo', async (req, res) => {
 /* ------------------------------------------------------- single datasets */
 const single = (kind, field) => async (req, res) => {
   const ctx = check(req, res); if (!ctx) return;
-  const { regNo, refresh } = ctx;
+  const { regNo, refresh, debug } = ctx;
   const started = Date.now();
   try {
-    const r = await load(kind, regNo, refresh);
+    const r = await load(kind, regNo, refresh, debug);
     if (r.notFound) return notFound(res, regNo, r.error);
     if (r.failed) {
       return res.status(503).json({ success: false, error: 'upstream_unavailable',

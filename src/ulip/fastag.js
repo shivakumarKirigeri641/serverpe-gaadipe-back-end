@@ -65,7 +65,7 @@ const noTag = () => ({
 });
 
 /** Returns { ok, data, calls }. A vehicle with no tag is a valid answer. */
-async function fetchFastag(regNo) {
+async function fetchFastag(regNo, _opts = {}) {
   const r = await post('FASTAG/02', { vehiclenumber: regNo, tagid: '' });
   const calls = [{ path: r.path, outcome: r.outcome, code: r.code, ms: r.durationMs }];
 
