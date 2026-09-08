@@ -22,6 +22,16 @@ const config = {
   apiKeys: String(process.env.VEHICLE_LOOKUP_KEY || '')
     .split(',').map(s => s.trim()).filter(Boolean),
 
+  db: {
+    host: process.env.PGHOST || 'localhost',
+    port: int(process.env.PGPORT, 5432),
+    user: process.env.PGUSER || 'postgres',
+    password: process.env.PGPASSWORD || '',
+    database: process.env.PGDATABASE || 'serverpe_gaadipe',
+    max: int(process.env.PGPOOL_MAX, 10),
+    idleTimeoutMillis: int(process.env.PG_IDLE_MS, 30_000),
+  },
+
   ulip: {
     baseUrl: (process.env.ULIP_BASE_URL || 'https://www.ulip.dpiit.gov.in/ulip/v1.0.0').replace(/\/+$/, ''),
     username: process.env.ULIP_USERNAME || '',
@@ -61,6 +71,7 @@ const config = {
 
 function validate() {
   const problems = [];
+  if (!config.db.database) problems.push('PGDATABASE is required');
   if (!config.ulip.username) problems.push('ULIP_USERNAME is required');
   if (!config.ulip.password) problems.push('ULIP_PASSWORD is required');
   if (!config.apiKeys.length) problems.push('VEHICLE_LOOKUP_KEY is required (callers authenticate with it)');

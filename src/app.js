@@ -23,6 +23,7 @@ const express = require('express');
 const { config, validate } = require('./config');
 const cache = require('./util/cache');
 const vehicleRoutes = require('./routes/vehicle');
+const publicRoutes = require('./routes/public');
 
 validate();   // fail at boot, not mid-request
 
@@ -30,6 +31,12 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);        // behind nginx: req.ip is the real client
 app.use(express.json({ limit: '64kb' }));
+
+/* ------------------------------------------------------------------ public */
+// Legal pages the website reads. No API key: Meta checks the privacy-policy
+// URL during app review, and the path matches what the deployed front-end
+// already calls.
+app.use('/serverpe/platform/gaadipe/v1/public/users', publicRoutes);
 
 /* -------------------------------------------------------------------- auth */
 /** Constant-time compare, so a wrong key cannot be found by timing. */
