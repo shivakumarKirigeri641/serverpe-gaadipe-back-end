@@ -84,10 +84,10 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
     y = T.sectionTitle(doc, "Particulars", y);
     y = T.table(doc, [
       { label: "Description", width: 300 },
-      { label: "SAC", width: 52 },
-      { label: "Qty", width: 34, align: "center" },
-      { label: "Rate", width: 66, align: "right" },
-      { label: "Taxable", width: 71, align: "right" },
+      { label: "SAC", width: 52, nowrap: true },
+      { label: "Qty", width: 34, align: "center", nowrap: true },
+      { label: "Rate", width: 66, align: "right", nowrap: true },
+      { label: "Taxable", width: 71, align: "right", nowrap: true },
     ], lineRows.map((it) => [
       it.description || `Full Vehicle Report${it.reg_no ? ` — ${it.reg_no}` : ""}`,
       sac, "1", T.money(it.taxable), T.money(it.taxable),

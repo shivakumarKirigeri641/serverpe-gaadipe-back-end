@@ -4,3 +4,4 @@ node_modules/
 .env_prod
 *.log
 .env.bak-211324
+src/uploads

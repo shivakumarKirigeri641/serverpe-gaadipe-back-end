@@ -17,6 +17,7 @@
  *   owner_menu       report sent; waiting for trial / check another
  *   trial_active     one or more vehicles are being watched
  *   checkout_review  order summary shown; waiting for agree-and-pay
+ *   verify_rc        waiting for the first characters of the chassis number
  *   awaiting_payment a payment link was sent; waiting for the webhook
  *   partner_start    agreed — ready for the partner flow (next to build)
  *
@@ -41,6 +42,7 @@ const settings = require('../util/settings');
 const quota = require('../util/quota');
 const razorpay = require('../pay/razorpay');
 const billing = require('../pay/billing');
+const verify = require('../vehicle/verify');
 
 /* Button ids as constants: a typo'd string would silently fall through to
    "I did not understand" rather than failing loudly. */
@@ -57,6 +59,7 @@ const BTN = {
   ENROLLED: 'enrolled',
   WATCH_PICK: 'watch_pick',
   PAY_CONFIRM: 'pay_confirm',
+  VERIFY_RC: 'verify_rc',
 };
 
 const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
@@ -820,6 +823,34 @@ async function handle(session, message, mobile) {
         return;
       }
 
+      case BTN.VERIFY_RC: {
+        const user = await store.upsertUser(mobile);
+        const reg = await pendingReg(mobile);
+        const vehicle = reg
+          ? await db.one('SELECT id, reg_no FROM vehicles WHERE reg_no = $1', [reg]) : null;
+        if (!vehicle) {
+          await send.text(mobile, 'Please send the vehicle number first.');
+          return;
+        }
+        if (!await verify.challengeable(vehicle.id)) {
+          await send.text(mobile,
+            'This vehicle cannot be verified — the Government record does not '
+            + 'include enough of the chassis number.');
+          return;
+        }
+        const need = await settings.num('verify_prefix_length', 5);
+        await db.query(
+          'UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1',
+          [mobile, JSON.stringify({ verify_reg: vehicle.reg_no })]);
+        await setState(mobile, 'verify_rc', 'awaiting chassis prefix');
+        await send.text(mobile,
+          `To add a *RC verified* badge to *${vehicle.reg_no}*, send the first `
+          + `*${need} characters* of the chassis number from your RC.\n\n`
+          + 'It is printed on your registration certificate, and stamped on the vehicle.\n\n'
+          + '_GaadiPe never displays chassis numbers — which is exactly why this works._');
+        return;
+      }
+
       case BTN.ENROLLED: {
         const user = await store.upsertUser(mobile);
         const shown = await showEnrolled(mobile, user.id);
@@ -1093,6 +1124,45 @@ async function handle(session, message, mobile) {
         return;
       }
       await askToConfirm(mobile, parsed);
+      return;
+    }
+
+    case 'verify_rc': {
+      const user = await store.upsertUser(mobile);
+      const ctx = await sessionContext(mobile);
+      const vehicle = ctx.verify_reg
+        ? await db.one('SELECT id, reg_no FROM vehicles WHERE reg_no = $1', [ctx.verify_reg]) : null;
+      if (!vehicle) {
+        await setState(mobile, 'owner_start', 'verification lost');
+        await send.text(mobile, 'Please send the vehicle number again.');
+        return;
+      }
+
+      const r = await verify.attempt(user.id, vehicle.id, intent.text);
+      if (r.ok) {
+        await setState(mobile, 'owner_menu', 'rc verified');
+        const limit = await settings.num('free_checks_per_day_verified', 25);
+        await send.buttons(mobile,
+          `✅ *${vehicle.reg_no}* is now *RC verified*.\n\n`
+          + 'The badge appears on your reports, and you now get '
+          + `${limit} free checks a day.`,
+          [{ id: BTN.ENROLLED,      title: 'Enrolled vehicles' },
+           { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
+        return;
+      }
+      if (r.reason === 'locked' || r.reason === 'locked_now') {
+        await setState(mobile, 'owner_menu', 'verification locked');
+        await send.text(mobile,
+          'That did not match, and there have been too many attempts. '
+          + 'Please try again tomorrow.\n\n'
+          + 'Everything else keeps working as normal.');
+        return;
+      }
+      await send.text(mobile,
+        `That does not match our records. ${r.attemptsLeft} attempt`
+        + `${r.attemptsLeft === 1 ? '' : 's'} left.\n\n`
+        + 'Send the first characters of the chassis number exactly as printed on '
+        + 'the RC, or reply *hi* to do this later.');
       return;
     }
 

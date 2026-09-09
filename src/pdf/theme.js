@@ -247,22 +247,47 @@ const table = (doc, cols, rows, y, { rowH = 17, maxRows = 100 } = {}) => {
   y = ensureSpace(doc, y, 19 + rowH * 2);
   y = drawHead(y);
 
+  /* Every cell used to be clipped to one line with an ellipsis, which quietly
+     truncated exactly the cell people read first — the description. A row now
+     grows to fit its tallest cell, so nothing is hidden behind "…". Columns
+     opt out with `nowrap` where a value must stay on one line (an amount, a
+     date), and the rest wrap. */
+  const cellText = (v) => (v === null || v === undefined ? "—" : String(v));
+
+  const heightOf = (row) => {
+    doc.font(doc._F.regular).fontSize(8);
+    let tallest = rowH;
+    cols.forEach((c, ci) => {
+      if (c.nowrap) return;
+      const h = doc.heightOfString(cellText(row[ci]), { width: c.width - 14 }) + 9;
+      if (h > tallest) tallest = h;
+    });
+    return tallest;
+  };
+
   const shown = rows.slice(0, maxRows);
   shown.forEach((row, ri) => {
-    if (y + rowH > safeBottom(doc)) {          // continue on the next page
+    const h = heightOf(row);
+    if (y + h > safeBottom(doc)) {              // continue on the next page
       doc.addPage();
       y = drawHead(46);
     }
-    if (ri % 2 === 1) doc.rect(M, y, W, rowH).fill(BRAND.soft);
+    if (ri % 2 === 1) doc.rect(M, y, W, h).fill(BRAND.soft);
     let x = M;
     doc.font(doc._F.regular).fontSize(8).fillColor(BRAND.body);
     cols.forEach((c, ci) => {
-      doc.text(row[ci] === null || row[ci] === undefined ? "—" : String(row[ci]),
-               x + 7, y + rowH / 2 - 4,
-               { width: c.width - 14, height: 11, align: c.align || "left", lineBreak: false, ellipsis: true });
+      const text = cellText(row[ci]);
+      if (c.nowrap) {
+        doc.text(text, x + 7, y + h / 2 - 4,
+                 { width: c.width - 14, height: 11, align: c.align || "left",
+                   lineBreak: false, ellipsis: true });
+      } else {
+        doc.text(text, x + 7, y + 5,
+                 { width: c.width - 14, align: c.align || "left" });
+      }
       x += c.width;
     });
-    y += rowH;
+    y += h;
   });
   doc.moveTo(M, y).lineTo(M + W, y).lineWidth(0.6).stroke(BRAND.line);
 

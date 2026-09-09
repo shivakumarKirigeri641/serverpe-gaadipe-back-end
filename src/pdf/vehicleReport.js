@@ -90,7 +90,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {} }) =>
     y = T.sectionTitle(doc, 'Documents', y, T.BRAND.brand);
     y = T.table(doc, [
       { label: 'Document', width: W * 0.26 },
-      { label: 'Valid until', width: W * 0.20 },
+      { label: 'Valid until', width: W * 0.20, nowrap: true },
       { label: 'Status', width: W * 0.26 },
       { label: 'Reference', width: W * 0.28 },
     ], docs
@@ -118,27 +118,49 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {} }) =>
       ['Amount paid', rupees(c.disposed_amount_paise)],
     ], y, { cols: 2 });
 
-    const pending = (c.pending || []).slice(0, 12);
+    /* WHY A SUMMARY OF OFFENCES BEFORE A LIST OF CHALLANS: this bus has 352
+       pending challans. Twelve rows of wrapped offence text is a page of noise
+       that answers nothing. What an owner actually needs is "what do I keep
+       getting caught for, and what is it costing me" — which is four rows —
+       followed by the recent ones as compact single lines they can look up. */
+    const top = (c.summary?.top_offences || []).slice(0, 5);
+    if (top.length) {
+      y = T.ensureSpace(doc, y, 80);
+      y = T.table(doc, [
+        { label: 'Most frequent offence', width: W * 0.56 },
+        { label: 'Times', width: W * 0.14, align: 'right', nowrap: true },
+        { label: 'Total', width: W * 0.30, align: 'right', nowrap: true },
+      ], top.map(o => [
+        String(o.offence || '—').split(';')[0].trim(),
+        String(o.count ?? '—'),
+        rupees(o.amount_paise),
+      ]), y);
+    }
+
+    // The recent ones, one line each: date, number, amount, status. No offence
+    // column — it is in the summary above, and repeating it is what made every
+    // row three lines tall.
+    const pending = (c.pending || []).slice(0, 15);
     if (pending.length) {
       y = T.ensureSpace(doc, y, 90);
       y = T.table(doc, [
-        { label: 'Date', width: W * 0.16 },
-        { label: 'Challan number', width: W * 0.30 },
-        { label: 'Offence', width: W * 0.36 },
-        { label: 'Amount', width: W * 0.18, align: 'right' },
+        { label: 'Date', width: W * 0.18, nowrap: true },
+        { label: 'Challan number', width: W * 0.42, nowrap: true },
+        { label: 'Status', width: W * 0.20, nowrap: true },
+        { label: 'Amount', width: W * 0.20, align: 'right', nowrap: true },
       ], pending.map(p => [
         fmt(p.challan_date),
         p.challan_no || '—',
-        // No location: where a vehicle was at a time is not published, in a PDF
-        // any more than in a message.
-        String(p.offence || '—').split(';')[0],
+        p.sent_to_court ? 'In court' : (p.status || 'Pending'),
         rupees(p.amount_paise),
-      ]), y);
+      ]), y, { rowH: 15 });
+
       if ((c.pending_count || 0) > pending.length) {
         doc.fillColor(T.BRAND.muted).font(doc._F.regular).fontSize(7.6)
-           .text(`Showing the ${pending.length} most recent of ${c.pending_count} pending challans.`,
-                 T.M, y + 4, { width: W });
-        y += 16;
+           .text(`Showing the ${pending.length} most recent of ${c.pending_count} pending challans. `
+                 + 'Every challan number above is complete and can be searched on the '
+                 + 'e-Challan portal.', T.M, y + 4, { width: W });
+        y = doc.y + 8;
       }
     }
 
