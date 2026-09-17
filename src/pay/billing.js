@@ -23,6 +23,10 @@ const DAY = 24 * 60 * 60 * 1000;
 const watchPlan = () => db.one(
   `SELECT * FROM plans WHERE code = 'WATCH28' AND is_active LIMIT 1`);
 
+/** The Rs.19 full report: a PDF, and 28 days of monitoring. */
+const reportPlan = () => db.one(
+  `SELECT * FROM plans WHERE code = 'REPORT19' AND is_active LIMIT 1`);
+
 /**
  * What this customer owes for this vehicle right now.
  *
@@ -132,7 +136,9 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
          endsOn.toISOString(), String(checkEvery), Math.max(1, Math.round(checkEvery / 60))]);
     }
 
-    await accrueCommission(c, pay, sub);
+    // A report does not carry the partner programme: Rs.10 commission on a
+    // Rs.19 sale is most of the margin. Its own rate is a later decision.
+    if (plan?.kind !== 'report') await accrueCommission(c, pay, sub);
 
     await c.query(
       `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'payment_paid', $3)`,
@@ -140,7 +146,7 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
        JSON.stringify({ payment_id: razorpayPaymentId, amount_paise: pay.amount_paise,
                         subscription_id: sub.id, ends_on: endsOn.toISOString().slice(0, 10) })]);
 
-    return { activated: true, subscription: sub, endsOn, payment: pay, vehicleId };
+    return { activated: true, subscription: sub, endsOn, payment: pay, vehicleId, plan };
   });
 }
 
@@ -217,4 +223,4 @@ async function refund({ razorpayPaymentId, refundId, raw }) {
   });
 }
 
-module.exports = { watchPlan, priceFor, createPending, activate, refund };
+module.exports = { watchPlan, reportPlan, priceFor, createPending, activate, refund };

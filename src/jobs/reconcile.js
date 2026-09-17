@@ -53,6 +53,14 @@ async function runOnce() {
   let recovered = 0;
 
   for (const row of rows) {
+    // Checkout orders: the browser callback is the fast path, the webhook the
+    // second. This is the third — without it a paid order whose callback and
+    // webhook were both lost would never be activated.
+    if (row.order_id && String(row.order_id).startsWith('order_')) {
+      if (await recoverOrder(row)) recovered++;
+      continue;
+    }
+
     const linkId = row.raw?.link_id || row.order_id;
     if (!linkId || !String(linkId).startsWith('plink_')) continue;
 
@@ -89,6 +97,33 @@ async function runOnce() {
     console.log('[reconcile] checked %d pending payment(s), recovered %d', rows.length, recovered);
   }
   return { checked: rows.length, recovered };
+}
+
+/** One checkout order: activate it if Razorpay holds a captured payment for it. */
+async function recoverOrder(row) {
+  let list;
+  try {
+    list = await rzp.getOrderPayments(row.order_id);
+  } catch (e) {
+    console.warn('[reconcile] could not read %s: %s', row.order_id, e.message);
+    return false;
+  }
+  const payment = (list.items || []).find(p => p.status === 'captured');
+  if (!payment) return false;
+
+  const result = await billing.activate({
+    paymentRowId: row.id,
+    razorpayPaymentId: payment.id,
+    orderId: row.order_id,
+    raw: payment,
+  });
+  if (!result.activated) return false;
+
+  console.log('[reconcile] RECOVERED payment %d (%s) — callback and webhook both missed',
+    row.id, row.order_id);
+  const { notifyPaid } = require('../routes/payments');
+  await notifyPaid(result).catch(e => console.error('[reconcile] notify:', e.message));
+  return true;
 }
 
 /**

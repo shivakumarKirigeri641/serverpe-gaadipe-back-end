@@ -29,8 +29,12 @@ const settings = require('./settings');
 async function tierOf(userId) {
   const u = await db.one(
     `SELECT is_internal,
+            -- A Rs.19 report is not a subscription for this purpose: it must
+            -- not buy unlimited free checks for 28 days.
             EXISTS (SELECT 1 FROM subscriptions s
-                     WHERE s.user_id = u.id AND s.is_active)          AS paying,
+                      JOIN plans pl ON pl.id = s.plan_id
+                     WHERE s.user_id = u.id AND s.is_active
+                       AND pl.kind <> 'report')                       AS paying,
             EXISTS (SELECT 1 FROM watches w
                      WHERE w.user_id = u.id AND w.is_active)          AS watching,
             EXISTS (SELECT 1 FROM partners p

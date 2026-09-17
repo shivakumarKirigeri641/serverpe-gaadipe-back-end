@@ -81,9 +81,10 @@ async function forPayment(paymentId) {
 
   const pay = await db.one(
     `SELECT p.*, u.mobile, u.wa_profile_name, u.state_code, u.email,
-            v.reg_no, s.ends_on, s.starts_on
+            v.reg_no, s.ends_on, s.starts_on, pl.kind AS plan_kind
        FROM payments p
        JOIN users u ON u.id = p.user_id
+       LEFT JOIN plans pl ON pl.id = p.plan_id
        LEFT JOIN subscriptions s ON s.id = p.subscription_id
        LEFT JOIN vehicles v ON v.id = s.vehicle_id
       WHERE p.id = $1`, [paymentId]);
@@ -152,7 +153,13 @@ async function forPayment(paymentId) {
       reg_no: pay.reg_no || null,
       // What the money bought, stated as dates rather than "28 days": the
       // question a customer opens an invoice to answer is "until when?"
-      description: [
+      description: pay.plan_kind === 'report' ? [
+        pay.reg_no ? `GaadiPe Full Vehicle Report — ${pay.reg_no}` : 'GaadiPe Full Vehicle Report',
+        pay.starts_on && pay.ends_on
+          ? `Alerts from ${fmtDate(pay.starts_on)} to ${fmtDate(pay.ends_on)}`
+          : '28 days of alerts',
+        'One-time purchase, no renewal',
+      ].filter(Boolean).join('\n') : [
         pay.reg_no ? `GaadiPe Watch — ${pay.reg_no}` : 'GaadiPe Watch',
         pay.starts_on && pay.ends_on
           ? `Monitoring from ${fmtDate(pay.starts_on)} to ${fmtDate(pay.ends_on)}`

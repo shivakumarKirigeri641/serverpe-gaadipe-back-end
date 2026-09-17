@@ -104,6 +104,14 @@ const config = {
     // Receive and record, but never reply. The flow is not built yet, and a
     // half-built bot answering real customers is worse than a silent one.
     replyEnabled: bool(process.env.WHATSAPP_REPLY_ENABLED, false),
+    // TESTING GUARD. When set, GaadiPe talks ONLY to these numbers — replies,
+    // alerts, receipts, everything. Anyone else's messages are still recorded,
+    // but never answered and never moved through the flow. Empty means everyone.
+    // Comma-separated; 9886122415 and 919886122415 are the same number.
+    // (Both spellings accepted: RECEPIENTS is what the .env was written with.)
+    allowedRecipients: String(process.env.WHATSAPP_ALLOWED_RECIPIENTS
+      || process.env.WHATSAPP_ALLOWED_RECEPIENTS || '')
+      .split(',').map(s => s.replace(/\D/g, '').slice(-10)).filter(s => s.length === 10),
   },
 
   logCalls: bool(process.env.LOG_ULIP_CALLS, true),

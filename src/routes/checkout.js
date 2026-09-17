@@ -28,12 +28,47 @@ const express = require('express');
 const db = require('../db');
 const rzp = require('../pay/razorpay');
 const billing = require('../pay/billing');
+const settings = require('../util/settings');
+const fs = require('fs');
 
 const router = express.Router();
 
 const WA_NUMBER = process.env.WHATSAPP_BUSINESS_PHONENUMBER || '916363271302';
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/**
+ * Back to the GaadiPe chat — the APP, not wa.me's web landing page.
+ *
+ * WHY NOT JUST location.href = wa.me: after a UPI payment the customer returns
+ * to the browser from their UPI app, the success callback runs with no tap
+ * behind it, and Android Chrome then refuses to hand a wa.me navigation to the
+ * WhatsApp app. They are left on a "Continue to chat" web page, which reads as
+ * "something went wrong".
+ *
+ * So: an intent URL on Android (opens WhatsApp or WhatsApp Business, falling
+ * back to wa.me), the whatsapp:// scheme on iOS, wa.me elsewhere — tried
+ * automatically, AND offered as a big button, because a tap is the one thing
+ * every browser lets through.
+ */
+const WA_JS = `
+  var WA_WEB = 'https://wa.me/${WA_NUMBER}';
+  function waUrl() {
+    var ua = navigator.userAgent || '';
+    if (/Android/i.test(ua)) {
+      return 'intent://send/?phone=${WA_NUMBER}#Intent;scheme=whatsapp;'
+        + 'S.browser_fallback_url=' + encodeURIComponent(WA_WEB) + ';end';
+    }
+    if (/iPhone|iPad|iPod/i.test(ua)) return 'whatsapp://send?phone=${WA_NUMBER}';
+    return WA_WEB;
+  }
+  function openWhatsApp() { location.href = waUrl(); return false; }
+`;
+const waButton = (label = 'Open WhatsApp') =>
+  `<button onclick="return openWhatsApp()">${esc(label)}</button>
+   <p class="muted" style="text-align:center;margin:10px 0 0">
+     Not opening? <a href="https://wa.me/${WA_NUMBER}">Tap here</a></p>
+   <script>${WA_JS}</script>`;
 
 const page = (title, body) => `<!doctype html>
 <html lang="en"><head>
@@ -78,9 +113,30 @@ ${body}
 
 /* ------------------------------------------------------------- the summary */
 
-router.get('/pay/:token', async (req, res) => {
+/**
+ * Express 4 does not catch a rejected promise from an async handler, and an
+ * unhandled rejection stops the process — so one database error on this
+ * public page would take the webhooks and the jobs down with it. Every async
+ * route here goes through this.
+ */
+const safe = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch((e) => {
+  console.error('[checkout] %s %s failed: %s', req.method, req.path, e.message);
+  if (res.headersSent) return;
+  if (req.method === 'GET') {
+    res.status(500).send(page('Something went wrong', `<div class="card">
+      <h1>Something went wrong</h1>
+      <p class="muted">Please try again in a minute.</p></div>`));
+  } else {
+    // The money may already be taken; the webhook and the reconciler finish the
+    // job, so this must not invite a second payment.
+    res.status(500).json({ ok: false, message: 'We could not confirm the payment yet. Please check WhatsApp in a minute.' });
+  }
+});
+
+router.get('/pay/:token', safe(async (req, res) => {
   const pay = await db.one(
-    `SELECT p.*, u.mobile, u.wa_profile_name, v.reg_no, v.maker, v.model, pl.duration_days
+    `SELECT p.*, u.mobile, u.wa_profile_name, v.reg_no, v.maker, v.model, pl.duration_days,
+            pl.kind AS plan_kind
        FROM payments p
        JOIN users u ON u.id = p.user_id
        LEFT JOIN plans pl ON pl.id = p.plan_id
@@ -98,9 +154,11 @@ router.get('/pay/:token', async (req, res) => {
   if (pay.status === 'paid') {
     return res.send(page('Already paid', `<div class="card">
       <h1>This payment is already complete ✅</h1>
-      <p class="muted">Monitoring for <b>${esc(pay.reg_no || 'your vehicle')}</b> is active.
+      <p class="muted">${pay.plan_kind === 'report'
+        ? `Your full report for <b>${esc(pay.reg_no || 'your vehicle')}</b> has been sent.`
+        : `Monitoring for <b>${esc(pay.reg_no || 'your vehicle')}</b> is active.`}
       The confirmation and invoice are in your WhatsApp chat.</p>
-      <p><a href="https://wa.me/${WA_NUMBER}">Back to WhatsApp</a></p></div>`));
+      ${waButton('Back to WhatsApp')}</div>`));
   }
 
   const gross = pay.amount_paise / 100;
@@ -109,13 +167,41 @@ router.get('/pay/:token', async (req, res) => {
   const vehicleName = [pay.maker, pay.model].filter(Boolean).join(' ')
     .toLowerCase().replace(/\b([a-z])/g, m => m.toUpperCase());
 
+  const isReport = pay.plan_kind === 'report';
+  const validDays = await settings.num('report_valid_days', 7);
+  const planLine = isReport
+    ? 'Full vehicle report'
+    : `GaadiPe Watch · ${pay.duration_days || 28} days`;
+  const benefits = isReport
+    ? [`Full report PDF on WhatsApp — download again for ${validDays} days`,
+       'Loan / hypothecation, blacklist and NOC status',
+       'Challan numbers and most frequent offences',
+       'Insurer, policy and PUC references',
+       `${pay.duration_days || 28} days of alerts: new challans and document expiry`,
+       'GST invoice on WhatsApp']
+    : ['Daily checks on this vehicle',
+       'A message the moment a new challan appears',
+       'Reminders before insurance, PUC or fitness expires',
+       'Full details: financer, policy numbers',
+       'GST invoice on WhatsApp'];
+
   res.send(page('Checkout', `
+<div id="done" class="card" style="display:none">
+  <h1>Payment successful ✅</h1>
+  <p class="muted" style="margin:0 0 14px">${isReport
+    ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is on its way to your WhatsApp chat.`
+    : 'Your confirmation is on its way to your WhatsApp chat.'}
+  Opening WhatsApp…</p>
+  ${waButton('Open WhatsApp')}
+</div>
+
+<div id="main">
 <div class="card">
   <h1>Order summary</h1>
   <div class="veh">${esc(pay.reg_no || '')}</div>
   ${vehicleName ? `<div class="muted">${esc(vehicleName)}</div>` : ''}
   <div class="row" style="margin-top:12px"><span>Plan</span>
-    <b>GaadiPe Watch · ${pay.duration_days || 28} days</b></div>
+    <b>${esc(planLine)}</b></div>
   <div class="row"><span>Amount</span><b>₹${taxable.toFixed(2)}</b></div>
   <div class="row"><span>GST @ 18%</span><b>₹${gst.toFixed(2)}</b></div>
   <div class="row total"><span>Total payable</span><b>₹${gross.toFixed(2)}</b></div>
@@ -124,11 +210,7 @@ router.get('/pay/:token', async (req, res) => {
 <div class="card">
   <h1>What you get</h1>
   <ul>
-    <li>Daily checks on this vehicle</li>
-    <li>A message the moment a new challan appears</li>
-    <li>Reminders before insurance, PUC or fitness expires</li>
-    <li>Full details: owner, financer, policy numbers</li>
-    <li>GST invoice on WhatsApp</li>
+    ${benefits.map(b => `<li>${esc(b)}</li>`).join('')}
   </ul>
   <p class="muted" style="margin:12px 0 0"><b>No auto-renewal.</b>
   Nothing is charged automatically, now or later.</p>
@@ -144,10 +226,19 @@ router.get('/pay/:token', async (req, res) => {
     <a href="https://gaadipe.in/privacy">Privacy</a> policies.
   </p>
 </div>
+</div>
 
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script>
   var btn = document.getElementById('pay'), err = document.getElementById('err');
+  // Paid: swap the order summary for the success card, and try to open the
+  // chat straight away. The card's button covers browsers that block that.
+  function done() {
+    document.getElementById('main').style.display = 'none';
+    document.getElementById('done').style.display = 'block';
+    window.scrollTo(0, 0);
+    setTimeout(openWhatsApp, 600);
+  }
   btn.onclick = function () {
     btn.disabled = true; err.textContent = '';
     var rz = new Razorpay({
@@ -156,7 +247,7 @@ router.get('/pay/:token', async (req, res) => {
       amount: ${pay.amount_paise},
       currency: 'INR',
       name: 'GaadiPe',
-      description: ${JSON.stringify(`Watch — ${pay.reg_no || ''}`)},
+      description: ${JSON.stringify(`${isReport ? 'Full report' : 'Watch'} — ${pay.reg_no || ''}`)},
       prefill: { contact: ${JSON.stringify('+91' + String(pay.mobile).slice(-10))},
                  name: ${JSON.stringify(pay.wa_profile_name || '')} },
       theme: { color: '#0F766E' },
@@ -170,7 +261,7 @@ router.get('/pay/:token', async (req, res) => {
         }).then(function (x) { return x.json(); })
           .then(function (out) {
             if (out.ok) {
-              location.href = 'https://wa.me/${WA_NUMBER}';
+              done();
             } else {
               err.textContent = out.message || 'We could not confirm the payment yet. Please check WhatsApp in a minute.';
               btn.disabled = false; btn.textContent = 'Pay again';
@@ -179,7 +270,7 @@ router.get('/pay/:token', async (req, res) => {
           .catch(function () {
             // The money is taken; the reconciler will finish the job within a
             // minute, so send them back rather than inviting a second payment.
-            location.href = 'https://wa.me/${WA_NUMBER}';
+            done();
           });
       },
       modal: { ondismiss: function () { btn.disabled = false; } }
@@ -191,11 +282,11 @@ router.get('/pay/:token', async (req, res) => {
     rz.open();
   };
 </script>`));
-});
+}));
 
 /* ------------------------------------------------------- the success callback */
 
-router.post('/pay/:token/verify', express.json(), async (req, res) => {
+router.post('/pay/:token/verify', express.json(), safe(async (req, res) => {
   const { razorpay_payment_id: paymentId, razorpay_order_id: orderId,
           razorpay_signature: signature } = req.body || {};
 
@@ -243,6 +334,46 @@ router.post('/pay/:token/verify', express.json(), async (req, res) => {
   }
 
   res.json({ ok: true });
-});
+}));
+
+/* ------------------------------------------------------------ the report */
+
+/**
+ * Download a paid report while it is valid.
+ *
+ *   GET /report/:token
+ *
+ * The token is unguessable and belongs to one report, like the checkout token.
+ * After valid_until the link says so plainly instead of 404ing, because the
+ * person holding it did pay, and deserves to know why it stopped working.
+ */
+router.get('/report/:token', safe(async (req, res) => {
+  const r = await db.one(
+    `SELECT report_number, reg_no, pdf_path, valid_until
+       FROM vehicle_reports WHERE access_token = $1`, [req.params.token]);
+
+  if (!r || !r.valid_until) {
+    return res.status(404).send(page('Not found', `<div class="card">
+      <h1>This report link is not valid</h1>
+      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+  }
+  if (new Date(r.valid_until) <= new Date()) {
+    return res.status(410).send(page('Link expired', `<div class="card">
+      <h1>This download link has expired</h1>
+      <p class="muted">The report for <b>${esc(r.reg_no)}</b> could be downloaded until
+      ${esc(new Date(r.valid_until).toDateString())}. Send the vehicle number on WhatsApp to
+      check today's records.</p>
+      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+  }
+  if (!r.pdf_path || !fs.existsSync(r.pdf_path)) {
+    console.error('[report] %s file missing at %s', r.report_number, r.pdf_path);
+    return res.status(404).send(page('Not available', `<div class="card">
+      <h1>This report is not available right now</h1>
+      <p class="muted">Reply <b>report</b> on WhatsApp and it will be sent to you.</p>
+      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+  }
+  res.set('Cache-Control', 'private, no-store');
+  res.download(r.pdf_path, `${r.report_number}.pdf`);
+}));
 
 module.exports = router;

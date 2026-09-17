@@ -168,6 +168,8 @@ function verifyCheckout({ orderId, paymentId, signature }) {
 /** Look a payment up directly — used when a webhook looks wrong or is missing. */
 const getPayment = (id) => call(`/payments/${id}`);
 const getLink = (id) => call(`/payment_links/${id}`);
+/** Every payment attempted against an order — the reconciler looks for a captured one. */
+const getOrderPayments = (orderId) => call(`/orders/${orderId}/payments`);
 
 module.exports = { createLink, createOrder, verifyWebhook, verifyCheckout,
-                   getPayment, getLink, configured, isLive, KEY };
+                   getPayment, getLink, getOrderPayments, configured, isLive, KEY };

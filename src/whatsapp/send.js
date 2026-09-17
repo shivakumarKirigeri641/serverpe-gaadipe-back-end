@@ -39,8 +39,20 @@ async function windowOpen(mobile) {
   return Date.now() - new Date(row.last_inbound_at).getTime() < 24 * 60 * 60 * 1000;
 }
 
+/** The testing guard from config: an empty list lets everyone through. */
+const allowed = (mobile) => !wa.allowedRecipients.length
+  || wa.allowedRecipients.includes(String(mobile).replace(/\D/g, '').slice(-10));
+
 async function post(payload, meta) {
   const { mobile, type, body, templateName } = meta;
+
+  // Enforced here, at the one door every message leaves through, so no path —
+  // a reply, a watch alert, a payment receipt — can reach a number outside the
+  // test list.
+  if (!allowed(mobile)) {
+    console.warn('[wa] %s not in WHATSAPP_ALLOWED_RECIPIENTS — not sending %s', mobile, type);
+    return { ok: false, error: 'recipient_not_allowed' };
+  }
 
   if (!wa.token || !wa.phoneNumberId) {
     console.warn('[wa] not configured — would have sent:', body);
@@ -199,6 +211,11 @@ async function list(mobile, { body, button, rows, header, footer, sectionTitle }
  */
 async function document(mobile, filePath, { filename, caption } = {}) {
   const fs = require('fs');
+  // Checked before the upload too, or a blocked send still ships the PDF to Meta.
+  if (!allowed(mobile)) {
+    console.warn('[wa] %s not in WHATSAPP_ALLOWED_RECIPIENTS — not sending document', mobile);
+    return { ok: false, error: 'recipient_not_allowed' };
+  }
   if (!fs.existsSync(filePath)) {
     console.error('[wa] no such file to send:', filePath);
     return { ok: false, error: 'file_missing' };
@@ -266,4 +283,4 @@ async function template(mobile, name, params = [], { language = 'en' } = {}) {
   }, { mobile, type: 'template', body: `${name}(${clean.join(' | ')})`, templateName: name });
 }
 
-module.exports = { text, buttons, list, document, template, windowOpen, toWaId };
+module.exports = { text, buttons, list, document, template, windowOpen, toWaId, allowed };

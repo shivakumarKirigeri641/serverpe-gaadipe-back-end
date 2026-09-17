@@ -71,7 +71,8 @@ async function nextNumber(c) {
  * @param {object} data       a gateway /vehicle/:regNo response
  * @param {object} requester  { mobile, name, ip, userAgent, channel }
  */
-async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data, requester = {} }) {
+async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data, requester = {},
+                       validUntil = null }) {
   const business = await db.one(
     `SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
 
@@ -83,14 +84,15 @@ async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data
       `INSERT INTO vehicle_reports
          (report_number, user_id, vehicle_id, payment_id, subscription_id, reg_no,
           requested_by, requester_name, ip, user_agent, device, channel,
-          snapshot, access_token)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          snapshot, access_token, valid_until)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING *`,
       [number, userId || null, vehicleId || null, paymentId || null, subscriptionId || null,
        regNo, requester.mobile || null, requester.name || null,
        requester.ip || null, requester.userAgent || null, device,
        requester.channel || 'whatsapp',
-       JSON.stringify(data), crypto.randomBytes(16).toString('hex')]);
+       JSON.stringify(data), crypto.randomBytes(16).toString('hex'),
+       validUntil ? new Date(validUntil).toISOString() : null]);
     return rows[0];
   });
 
@@ -119,4 +121,14 @@ const latestFor = (userId, regNo) => db.one(
     WHERE user_id = $1 AND reg_no = $2
     ORDER BY id DESC LIMIT 1`, [userId, regNo]);
 
-module.exports = { issue, latestFor, describeDevice, nextNumber };
+/**
+ * A report for this vehicle that may still be downloaded. Only reports with a
+ * validity window count — those are the ones the Rs.19 purchase issues.
+ */
+const validFor = (userId, regNo) => db.one(
+  `SELECT * FROM vehicle_reports
+    WHERE user_id = $1 AND reg_no = $2
+      AND valid_until IS NOT NULL AND valid_until > now()
+    ORDER BY id DESC LIMIT 1`, [userId, regNo]);
+
+module.exports = { issue, latestFor, validFor, describeDevice, nextNumber };

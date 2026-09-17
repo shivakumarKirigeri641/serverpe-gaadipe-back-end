@@ -34,6 +34,33 @@ const fmt = (v) => {
 };
 const rupees = (paise) => '₹' + Math.round((paise || 0) / 100).toLocaleString('en-IN');
 
+/**
+ * Text the embedded font can actually draw.
+ *
+ * e-Challan returns some offences bilingually — "Failure to use safety belts … /
+ * વાહન હંકારતી વખતે …" from Gujarat — and DejaVu Sans has no Gujarati or
+ * Devanagari glyphs, so those characters printed as rows of empty boxes that
+ * also pushed the row into the next column. Every such offence carries the
+ * English wording as well, so the other scripts are dropped, and the separators
+ * left dangling behind them ("wheeler / -") are tidied away.
+ */
+const printable = (v) => {
+  if (v === null || v === undefined) return v;
+  return String(v)
+    // Keep Latin, general punctuation, ₹, bullets; drop everything else.
+    .replace(/[^\u0009\u000A\u0020-\u024F\u2010-\u2027\u2030-\u205E\u20B9\u2022]/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/(\s*[\/\-–—|,;:]\s*){2,}/g, ' / ')     // "/ -" left between removed words
+    .replace(/[\s\/\-–—|,;:]+$/g, '')                 // …and at the end
+    .trim();
+};
+
+/** "Mumbai Pune Expressway 65/400 KM-MC" — short enough for a table cell. */
+const clip = (s, n) => {
+  const t = printable(s) || '';
+  return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t;
+};
+
 const buildVehicleReport = ({ report, business = {}, data, requester = {} }) =>
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: T.M, bufferPages: true });
@@ -74,8 +101,9 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {} }) =>
     /* ── ownership ── */
     y = T.ensureSpace(doc, y, 90);
     y = T.sectionTitle(doc, 'Ownership', y, T.BRAND.brand);
+    // No owner name, masked or not: the report is sold as everything except
+    // personal details, and a PDF is the most forwardable thing we produce.
     y = T.kvCard(doc, [
-      ['Registered owner', maskName(rc.owner_name) || '—'],
       ['Owner type', titleCase(rc.owner_type) || '—'],
       ['Ownership serial', rc.owner_serial ? `${rc.owner_serial}` : '—'],
       ['Financer', titleCase(rc.financer) || 'Not financed'],
@@ -131,36 +159,64 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {} }) =>
         { label: 'Times', width: W * 0.14, align: 'right', nowrap: true },
         { label: 'Total', width: W * 0.30, align: 'right', nowrap: true },
       ], top.map(o => [
-        String(o.offence || '—').split(';')[0].trim(),
+        printable(String(o.offence || '—').split(';')[0].trim()) || '—',
         String(o.count ?? '—'),
         rupees(o.amount_paise),
       ]), y);
     }
 
-    // The recent ones, one line each: date, number, amount, status. No offence
-    // column — it is in the summary above, and repeating it is what made every
-    // row three lines tall.
-    const pending = (c.pending || []).slice(0, 15);
-    if (pending.length) {
-      y = T.ensureSpace(doc, y, 90);
-      y = T.table(doc, [
-        { label: 'Date', width: W * 0.18, nowrap: true },
-        { label: 'Challan number', width: W * 0.42, nowrap: true },
-        { label: 'Status', width: W * 0.20, nowrap: true },
-        { label: 'Amount', width: W * 0.20, align: 'right', nowrap: true },
-      ], pending.map(p => [
+    /* EVERY PENDING CHALLAN, with what and where. The paid report promises
+       challan details, and a 350-challan bus is exactly who needs them: which
+       offence, on which road, for how much. Each row is exactly two lines —
+       offence, then place — because the full wording ran 350 rows to 28 pages;
+       the complete offence text is in the summary table above. The newest 150
+       are listed (about six pages) and the rest are counted, never hidden. */
+    const MAX_PENDING = 150;
+    const MAX_DISPOSED = 25;
+    const challanCols = [
+      { label: 'Date', width: W * 0.13, nowrap: true },
+      { label: 'Challan number', width: W * 0.28, nowrap: true },
+      { label: 'Offence · place', width: W * 0.45 },
+      { label: 'Amount', width: W * 0.14, align: 'right', nowrap: true },
+    ];
+    const challanRow = (p) => {
+      const offence = clip(p.offence || (p.offences || []).map(o => o.name).join('; '), 44) || '—';
+      const where = [clip(p.place, 34),
+                     p.sent_to_court || p.sent_to_virtual_court ? 'In court' : null]
+        .filter(Boolean).join(' · ');
+      return [
         fmt(p.challan_date),
         p.challan_no || '—',
-        p.sent_to_court ? 'In court' : (p.status || 'Pending'),
+        where ? `${offence}\n${where}` : offence,
         rupees(p.amount_paise),
-      ]), y, { rowH: 15 });
+      ];
+    };
+    const note = (text) => {
+      doc.fillColor(T.BRAND.muted).font(doc._F.regular).fontSize(7.6)
+         .text(text, T.M, y + 4, { width: W });
+      y = doc.y + 8;
+    };
 
-      if ((c.pending_count || 0) > pending.length) {
-        doc.fillColor(T.BRAND.muted).font(doc._F.regular).fontSize(7.6)
-           .text(`Showing the ${pending.length} most recent of ${c.pending_count} pending challans. `
-                 + 'Every challan number above is complete and can be searched on the '
-                 + 'e-Challan portal.', T.M, y + 4, { width: W });
-        y = doc.y + 8;
+    const pending = (c.pending || []).slice(0, MAX_PENDING);
+    if (pending.length) {
+      y = T.ensureSpace(doc, y, 90);
+      y = T.sectionTitle(doc, `Pending challans (${c.pending_count ?? pending.length})`, y,
+        T.BRAND.red || T.BRAND.brand);
+      y = T.table(doc, challanCols, pending.map(challanRow), y, { rowH: 15, maxRows: MAX_PENDING });
+      note((c.pending_count || 0) > pending.length
+        ? `Showing the ${pending.length} most recent of ${c.pending_count} pending challans. `
+          + 'Every challan number is complete and can be searched on the e-Challan portal.'
+        : 'Every challan number is complete and can be searched on the e-Challan portal.');
+    }
+
+    const disposed = (c.disposed || []).slice(0, MAX_DISPOSED);
+    if (disposed.length) {
+      y = T.ensureSpace(doc, y, 90);
+      y = T.sectionTitle(doc, `Paid / disposed challans (${c.disposed_count ?? disposed.length})`, y,
+        T.BRAND.green || T.BRAND.brand);
+      y = T.table(doc, challanCols, disposed.map(challanRow), y, { rowH: 15, maxRows: MAX_DISPOSED });
+      if ((c.disposed_count || 0) > disposed.length) {
+        note(`Showing the ${disposed.length} most recent of ${c.disposed_count} paid or disposed challans.`);
       }
     }
 
@@ -193,8 +249,8 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {} }) =>
        .text(
          'Declaration: the requester confirmed that this vehicle and its owner are known to them, '
          + 'and that these details were requested for a lawful and legitimate purpose, taking full '
-         + 'responsibility for their use. Owner name and document numbers are masked. Chassis and '
-         + 'engine numbers are never disclosed.',
+         + 'responsibility for their use. The owner name is not shown, document numbers are masked, '
+         + 'and chassis and engine numbers are never disclosed.',
          T.M, y + 4, { width: W, align: 'justify' });
 
     const range = doc.bufferedPageRange();

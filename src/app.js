@@ -106,6 +106,37 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ success: false, error: 'server_error' });
 });
 
+/**
+ * Warn — loudly, and without refusing to boot — when the code on disk expects
+ * migrations the database has not had.
+ *
+ * Deploying new code and forgetting `npm run migrate` is the classic way a
+ * release half-works: the process starts, and the first customer to reach the
+ * new path hits a missing table. Refusing to boot would take the gateway and
+ * the payment webhooks down over a column; saying so on line one of the log
+ * does not.
+ */
+async function checkMigrations() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const db = require('./db');
+    const files = fs.readdirSync(path.join(__dirname, '..', 'migrations'))
+      .filter(f => f.endsWith('.sql'));
+    const { rows } = await db.query('SELECT filename FROM schema_migrations');
+    const done = new Set(rows.map(r => r.filename));
+    const pending = files.filter(f => !done.has(f)).sort();
+    if (pending.length) {
+      console.error(`  ⚠  ${pending.length} migration(s) NOT APPLIED: ${pending.join(', ')}`
+        + ' — run `npm run migrate`');
+    } else {
+      console.log('  migrations: up to date');
+    }
+  } catch (e) {
+    console.error('  ⚠  could not check migrations:', e.message);
+  }
+}
+
 app.listen(config.port, () => {
   console.log(`GaadiPe vehicle gateway listening on http://localhost:${config.port}`);
   console.log(`  ULIP: ${config.ulip.baseUrl}  (primary VAHAN/${config.ulip.vahanPrimary})`);
@@ -122,6 +153,10 @@ app.listen(config.port, () => {
   if (config.whatsapp.phoneNumberId) {
     console.log(`  whatsapp: +${config.whatsapp.ownNumber} id ${config.whatsapp.phoneNumberId}`
       + `  signature ${config.whatsapp.appSecret ? 'enforced' : 'OFF'}`
-      + `  replies ${config.whatsapp.replyEnabled ? 'ON' : 'off (record only)'}`);
+      + `  replies ${config.whatsapp.replyEnabled ? 'ON' : 'off (record only)'}`
+      + (config.whatsapp.allowedRecipients.length
+          ? `  TEST MODE: only ${config.whatsapp.allowedRecipients.length} allowed number(s)`
+          : ''));
   }
+  checkMigrations();
 });

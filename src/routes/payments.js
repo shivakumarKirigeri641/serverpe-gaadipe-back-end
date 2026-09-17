@@ -129,7 +129,6 @@ async function notifyPaid(result) {
   const send = require('../whatsapp/send');
   const gateway = require('../vehicle/gateway');
   const report = require('../whatsapp/report');
-  const invoices = require('../pay/invoice');
 
   const user = await db.one(
     `SELECT mobile, wa_profile_name FROM users WHERE id = $1`, [result.payment.user_id]);
@@ -141,9 +140,14 @@ async function notifyPaid(result) {
 
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const d = result.endsOn;
-  const ends = `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  const fmt = (d) => `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  const ends = fmt(result.endsOn);
   const amount = (result.payment.amount_paise / 100).toFixed(0);
+
+  if (result.plan?.kind === 'report') {
+    await notifyReportPaid(result, user, veh, { ends, amount });
+    return;
+  }
 
   // 1. The receipt. Short, and answers the only question they have right now:
   //    did it work, and until when.
@@ -191,11 +195,140 @@ async function notifyPaid(result) {
     }
   }
 
-  // 3. The GST invoice. Required for a paid supply, and the thing a fleet owner
-  //    or anyone claiming input credit will ask for later — better issued now
-  //    than reconstructed on request.
+  await sendInvoice(user, result.payment.id);
+}
+
+/**
+ * The full report was bought.
+ *
+ * Order matters: the report first, because it is what they paid for and the
+ * one thing they are waiting to see; what else the payment included second;
+ * the invoice last.
+ */
+async function notifyReportPaid(result, user, veh, { ends, amount }) {
+  const send = require('../whatsapp/send');
+
+  await send.text(user.mobile,
+    'Payment received ✅\n\n'
+    + `₹${amount} · full report${veh ? ` for *${veh.reg_no}*` : ''}`);
+
+  const delivered = await deliverPaidReport(result.payment.id, { withText: true });
+  if (!delivered.ok) {
+    // Paid and nothing delivered is the worst outcome here, so say so and leave
+    // a way back rather than going quiet. "report" retries this same function.
+    await send.text(user.mobile,
+      'The Government records service is slow right now, so your report is not ready yet. '
+      + 'Reply *report* in a few minutes and I will send it. Your payment is safe.');
+  }
+
+  await send.text(user.mobile,
+    `🔔 Alerts are on for *${veh ? veh.reg_no : 'your vehicle'}* until *${ends}*.\n\n`
+    + 'I will message you if a new challan appears, or before insurance, PUC, road tax, '
+    + 'fitness or permit expires. Nothing renews automatically.\n\n'
+    + 'Reply *report* to download the report again, or *invoice* for your GST invoice.');
+
+  await sendInvoice(user, result.payment.id);
+}
+
+/**
+ * Issue and send the report a paid report-plan payment bought.
+ *
+ * Idempotent per payment: if the report already exists it is re-sent, not
+ * re-issued. The download window runs from the PAYMENT, not from delivery, so a
+ * report recovered a day late does not quietly gain a day.
+ *
+ * Returns { ok, reason }.
+ */
+async function deliverPaidReport(paymentId, { withText = false } = {}) {
+  const send = require('../whatsapp/send');
+  const gateway = require('../vehicle/gateway');
+  const report = require('../whatsapp/report');
+  const settings = require('../util/settings');
+  const reports = require('../pay/report');
+
+  const pay = await db.one(
+    `SELECT p.*, u.mobile, u.wa_profile_name, v.reg_no, pl.kind AS plan_kind
+       FROM payments p
+       JOIN users u ON u.id = p.user_id
+       JOIN plans pl ON pl.id = p.plan_id
+       LEFT JOIN vehicles v ON v.id = (p.raw->>'vehicle_id')::bigint
+      WHERE p.id = $1`, [paymentId]);
+  if (!pay || pay.status !== 'paid' || pay.plan_kind !== 'report' || !pay.reg_no) {
+    return { ok: false, reason: 'not_a_paid_report' };
+  }
+
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const fmt = (d) => `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+
+  let doc = await db.one(`SELECT * FROM vehicle_reports WHERE payment_id = $1`, [pay.id]);
+
+  if (!doc) {
+    const validDays = await settings.num('report_valid_days', 7);
+    const validUntil = new Date(new Date(pay.paid_at || Date.now()).getTime()
+      + validDays * 24 * 60 * 60 * 1000);
+    if (validUntil <= new Date()) return { ok: false, reason: 'expired' };
+
+    let data;
+    try {
+      // The whole challan list, not the ten-row preview the chat uses: the PDF
+      // lists every pending challan, and the report is what was paid for.
+      data = await gateway.full(pay.reg_no, { challans: 'all' });
+    } catch (e) {
+      data = null;
+    }
+    if (!data?.success) {
+      console.error('[pay] report for payment %d not issued: %s', pay.id, data?.error || 'lookup failed');
+      return { ok: false, reason: 'lookup_failed' };
+    }
+
+    if (withText) await send.text(pay.mobile, await report.buildFor(data, { detailed: true }));
+
+    const paidFrom = pay.raw?.paid_from || {};
+    ({ report: doc } = await reports.issue({
+      userId: pay.user_id,
+      vehicleId: pay.raw?.vehicle_id || null,
+      paymentId: pay.id,
+      subscriptionId: pay.subscription_id,
+      regNo: pay.reg_no,
+      data,
+      validUntil,
+      requester: {
+        mobile: pay.mobile,
+        name: pay.wa_profile_name,
+        ip: paidFrom.ip,
+        userAgent: paidFrom.userAgent,
+        channel: paidFrom.channel || 'whatsapp',
+      },
+    }));
+  }
+
+  const until = fmt(new Date(doc.valid_until));
+  const link = base ? `\n${base}/report/${doc.access_token}` : '';
+  const sent = doc.pdf_path
+    ? await send.document(pay.mobile, doc.pdf_path, {
+        filename: `${doc.report_number}.pdf`,
+        caption: `📋 ${doc.report_number} — ${pay.reg_no}\nDownload again until ${until}${link}`,
+      })
+    : { ok: false };
+  if (!sent.ok && link) {
+    await send.text(pay.mobile,
+      `📋 Your report ${doc.report_number} could not be attached. Download it here until ${until}:${link}`);
+  }
+  return { ok: true, report: doc };
+}
+
+/**
+ * The GST invoice. Required for a paid supply, and the thing a fleet owner or
+ * anyone claiming input credit will ask for later — better issued now than
+ * reconstructed on request.
+ */
+async function sendInvoice(user, paymentId) {
+  const send = require('../whatsapp/send');
+  const invoices = require('../pay/invoice');
   try {
-    const { invoice } = await invoices.forPayment(result.payment.id);
+    const { invoice } = await invoices.forPayment(paymentId);
     const caption = `🧾 Tax invoice ${invoice.invoice_number}\n`
       + `Taxable ₹${(invoice.base_paise / 100).toFixed(2)} · `
       + `GST ₹${((invoice.total_paise - invoice.base_paise) / 100).toFixed(2)} · `
@@ -233,3 +366,5 @@ module.exports = router;
 // The reconciler sends the same confirmation when it recovers a missed payment,
 // so a recovered customer's experience is identical to a normal one.
 module.exports.notifyPaid = notifyPaid;
+// "report" in the chat retries a paid report that could not be issued at payment time.
+module.exports.deliverPaidReport = deliverPaidReport;

@@ -6,15 +6,20 @@
  * State lives in whatsapp_sessions.state, never in memory, because a bot that
  * forgets where someone was when the server restarts is worse than no bot.
  *
+ * THE OWNER FLOW
+ *   hi -> terms (Agree & continue) -> vehicle number -> basic details -> menu:
+ *   Full report ₹19 · Feedback · Check other vehicle
+ *
  * STATES SO FAR
- *   new              nobody has spoken yet — anything gets the welcome
- *   main_menu        welcome sent, waiting for owner or partner
- *   owner_consent    owner chose; terms shown, waiting for agreement
+ *   new              nobody has spoken yet — anything gets the terms
+ *   main_menu        (older sessions) owner/partner menu was shown
+ *   owner_consent    terms shown, waiting for agreement
  *   partner_consent  partner chose; partner policy shown, waiting for agreement
  *   owner_start      agreed — waiting for a vehicle number
- *   owner_confirm    a number was read; waiting for confirm or re-enter
- *   owner_lookup     confirmed; fetching from the gateway
- *   owner_menu       report sent; waiting for trial / check another
+ *   owner_confirm    a number was auto-corrected; waiting for confirm or re-enter
+ *   owner_lookup     fetching from the gateway
+ *   owner_menu       basic details sent; waiting for full report / feedback
+ *   feedback         waiting for the person to type their feedback
  *   trial_active     one or more vehicles are being watched
  *   checkout_review  order summary shown; waiting for agree-and-pay
  *   verify_rc        waiting for the first characters of the chassis number
@@ -43,6 +48,7 @@ const quota = require('../util/quota');
 const razorpay = require('../pay/razorpay');
 const billing = require('../pay/billing');
 const verify = require('../vehicle/verify');
+const reports = require('../pay/report');
 
 /* Button ids as constants: a typo'd string would silently fall through to
    "I did not understand" rather than failing loudly. */
@@ -60,9 +66,39 @@ const BTN = {
   WATCH_PICK: 'watch_pick',
   PAY_CONFIRM: 'pay_confirm',
   VERIFY_RC: 'verify_rc',
+  BUY_REPORT: 'buy_report',
+  DOWNLOAD_REPORT: 'download_report',
+  FEEDBACK: 'feedback',
 };
 
 const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
+const baseUrl = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+
+const INTRO =
+  'Namaste! 🙏 This is *GaadiPe* — Government vehicle records on WhatsApp.\n\n'
+  + 'Before buying a used vehicle, check its loan, blacklist and challan status. '
+  + 'Own one? Get told before a document expires or a new challan appears.\n\n';
+
+/**
+ * One row per step of the owner funnel, all under one kind, so the whole funnel
+ * is a single GROUP BY:
+ *
+ *   hi -> agreed -> number -> basic_shown -> buy_tapped -> link_sent -> (payment_paid)
+ *
+ * Never allowed to break the conversation it is measuring.
+ */
+async function funnel(mobile, step, detail = {}) {
+  try {
+    // The first steps happen before a users row exists, so mobile is what joins
+    // the funnel together; user_id is filled in once there is one.
+    const u = await db.one(`SELECT id FROM users WHERE mobile = $1`, [mobile]);
+    await db.query(
+      `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'funnel', $2)`,
+      [u?.id || null, JSON.stringify({ step, mobile, ...detail })]);
+  } catch (e) {
+    console.error('[funnel] %s: %s', step, e.message);
+  }
+}
 
 const WELCOME =
   'Namaste! 🙏 This is *GaadiPe* — vehicle information and document alerts on WhatsApp.\n\n'
@@ -480,16 +516,45 @@ async function sendInvoices(mobile) {
 /**
  * Send their vehicle reports back.
  *
- * A REPORT IS VALID FOR AS LONG AS THE SUBSCRIPTION IS. Unlike an invoice, this
- * is the product rather than a record of a purchase: handing over last month's
- * report to someone who stopped paying would be giving away what they stopped
- * paying for. When the plan has lapsed, they are offered a renewal instead.
+ * A PAID REPORT CAN BE DOWNLOADED AGAIN FOR report_valid_days. After that the
+ * PDF they were sent is still theirs, but a fresh copy means today's records,
+ * and today's records are what the price buys — so a lapsed report is answered
+ * with the offer to check the vehicle again.
+ *
+ * Reports issued before the validity window existed have no valid_until and
+ * keep following their subscription, as they always did.
  */
 async function sendReports(mobile) {
   const user = await store.upsertUser(mobile);
+
+  // A paid report that could not be issued when the payment landed (the
+  // records service was down) is issued now — this is the "reply report"
+  // the customer was promised.
+  const missing = await db.query(
+    `SELECT p.id FROM payments p
+       JOIN plans pl ON pl.id = p.plan_id
+      WHERE p.user_id = $1 AND p.status = 'paid' AND pl.kind = 'report'
+        AND NOT EXISTS (SELECT 1 FROM vehicle_reports r WHERE r.payment_id = p.id)
+      ORDER BY p.id DESC LIMIT 3`, [user.id]);
+  if (missing.rows.length) {
+    const { deliverPaidReport } = require('../routes/payments');
+    let recovered = 0;
+    for (const p of missing.rows) {
+      const r = await deliverPaidReport(p.id, { withText: true });
+      if (r.ok) recovered++;
+      else if (r.reason === 'lookup_failed') {
+        await send.text(mobile,
+          'The Government records service is still slow, so your report is not ready yet. '
+          + 'Please reply *report* again in a few minutes. Your payment is safe.');
+        return;
+      }
+    }
+    if (recovered) return;
+  }
+
   const { rows } = await db.query(
-    `SELECT r.report_number, r.pdf_path, r.reg_no, r.created_at,
-            s.ends_on, s.is_active
+    `SELECT r.report_number, r.pdf_path, r.reg_no, r.created_at, r.valid_until,
+            r.access_token, s.ends_on, s.is_active
        FROM vehicle_reports r
        LEFT JOIN subscriptions s ON s.id = r.subscription_id
       WHERE r.user_id = $1
@@ -497,15 +562,21 @@ async function sendReports(mobile) {
 
   if (!rows.length) {
     await send.text(mobile,
-      'You do not have any saved reports yet.\n\n'
-      + 'Send me a vehicle number to check it, and a full report is issued when you subscribe.');
+      'You do not have any reports yet.\n\n'
+      + 'Send me a vehicle number — after the basic check you can get the full report.');
     return;
   }
 
-  const live = rows.filter(r => r.is_active && r.ends_on && new Date(r.ends_on) >= new Date());
-  const lapsed = rows.filter(r => !live.includes(r));
+  const now = new Date();
+  const live = rows.filter(r => (r.valid_until
+    ? new Date(r.valid_until) > now
+    : r.is_active && r.ends_on && new Date(r.ends_on) >= now));
 
   for (const r of live) {
+    if (r.valid_until) {
+      await sendValidReport(mobile, r);
+      continue;
+    }
     const sent = r.pdf_path
       ? await send.document(mobile, r.pdf_path,
           { filename: `${r.report_number}.pdf`,
@@ -517,15 +588,16 @@ async function sendReports(mobile) {
     }
   }
 
-  if (lapsed.length && !live.length) {
-    const price = Math.round(await settings.num('first_payment_paise', 5900) / 100);
-    await setState(mobile, 'owner_menu', 'reports lapsed');
+  if (!live.length) {
+    const reg = rows[0].reg_no;
+    await db.query(
+      `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now()
+        WHERE mobile = $1`, [mobile, JSON.stringify({ pending_reg: reg })]);
+    await setState(mobile, 'owner_start', 'reports lapsed');
     await send.buttons(mobile,
-      `Your report for *${lapsed[0].reg_no}* was issued with a plan that has now ended, `
-      + 'so it is no longer available.\n\n'
-      + `Renew for ₹${price} and I will issue a fresh report with today's records.`,
-      [{ id: BTN.SUBSCRIBE,     title: `Continue for ₹${price}` },
-       { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
+      `Your report for *${reg}* can no longer be downloaded — its download period has ended.\n\n`
+      + 'Send the vehicle number again to check today\'s records.',
+      [{ id: BTN.CHECK_ANOTHER, title: 'Check a vehicle' }]);
   }
 }
 
@@ -604,114 +676,114 @@ async function deliverReport(mobile, regNo, message) {
   // Recorded before it is sent: if the send fails we still know what we found.
   await store.record(user.id, data).catch(e => console.error('[wa] store failed:', e.message));
 
-  /* ------------------------------------------------------------- paywall */
+  await db.query(
+    `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now()
+      WHERE mobile = $1`, [mobile, JSON.stringify({ pending_reg: regNo })]);
 
-  // Once the trial is over and nothing is being watched, the details stop.
-  //
-  // A free trial that quietly becomes free forever is not a trial, and someone
-  // who has already seen what the service does has had the demonstration. What
-  // is still shown is the vehicle they typed and HOW MANY things need
-  // attention — enough to know it matters, not enough to act on without paying.
-  const watchingNow = await store.watchedBy(user.id);
-  const paying = await db.one(
-    `SELECT 1 FROM subscriptions WHERE user_id = $1 AND is_active LIMIT 1`, [user.id]);
-  const paywalled = await trialUsed(user.id) && !watchingNow.length && !paying;
+  // Someone who has already bought the report for this vehicle sees the full
+  // detail again while it is valid; everyone else sees the basic record.
+  const bought = await reports.validFor(user.id, regNo);
+  await send.text(mobile, await report.buildFor(data, { detailed: Boolean(bought) }));
+  await setState(mobile, 'owner_menu', 'basic details sent');
+  await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
+  await reportMenu(mobile, regNo, data, bought);
+}
 
-  if (paywalled) {
-    const price = Math.round(await settings.num('first_payment_paise', 5900) / 100);
-    const docs = report.documentsOf(data.rc || {});
-    const bad = docs.filter(d => d.days < 0).length;
-    const soon = docs.filter(d => d.days >= 0 && d.days <= 60).length;
-    const challans = data.challans?.pending_count || 0;
-    const issues = bad + soon + (challans > 0 ? 1 : 0);
+/**
+ * What the full report holds that the basic check did not show — stated as
+ * what was FOUND, not as a feature list.
+ *
+ * "Loan / hypothecation: record found" is a reason to pay; "includes financer
+ * details" is a brochure. Only things the paid PDF really contains are named
+ * here, and nothing is revealed beyond the fact that a record exists.
+ */
+function lockedLines(data) {
+  const rc = data.rc || {};
+  const c = data.challans || {};
+  const present = (v) => v && !/^(NA|N\/A|NONE|NULL|-|—)$/i.test(String(v).trim());
 
-    await setState(mobile, 'owner_menu', 'paywalled after trial');
+  const lines = [
+    `• Loan / hypothecation — ${present(rc.financer) ? '*record found*' : 'checked'}`,
+    `• Blacklist & NOC — ${present(rc.blacklist_status) || present(rc.noc_details) ? '*record found*' : 'checked'}`,
+  ];
+  if ((c.pending_count || 0) > 0) {
+    lines.push(`• Challan numbers & offences — *${c.pending_count} pending*`);
+  } else {
+    lines.push('• Challan history & offences');
+  }
+  lines.push('• Insurer, policy & PUC references');
+  return lines;
+}
+
+/**
+ * What comes after the basic details.
+ *
+ * The offer is stated in full on the menu itself: what is locked, what the
+ * price buys, for how long, and that nothing renews. A button that only said
+ * "Full report" would leave the monitoring — half of what is sold — unseen.
+ */
+async function reportMenu(mobile, regNo, data, bought) {
+  if (bought) {
     await send.buttons(mobile,
-      `🔒 *${regNo}*\n\n`
-      + (issues
-          ? `I found *${issues} thing${issues === 1 ? '' : 's'}* that need${issues === 1 ? 's' : ''} attention on this vehicle.\n\n`
-          : 'I have this vehicle\'s full record.\n\n')
-      + 'Your free trial has ended, so the details are no longer shown.\n\n'
-      + `Watch this vehicle for ₹${price} — 28 days of daily checks, the full report now, `
-      + 'and a message whenever something changes.',
-      [{ id: BTN.SUBSCRIBE,     title: `Continue for ₹${price}` },
+      `You already have the full report for *${regNo}*.\n\n`
+      + `📄 Download it again any time until *${fmt(new Date(bought.valid_until))}*.`,
+      [{ id: BTN.DOWNLOAD_REPORT, title: 'Download report' },
+       { id: BTN.FEEDBACK,        title: 'Feedback' },
+       { id: BTN.CHECK_ANOTHER,   title: 'Check other vehicle' }]);
+    return;
+  }
+
+  const plan = await billing.reportPlan();
+  if (!plan) {
+    console.error('[wa] REPORT19 plan missing — run migrations');
+    await send.buttons(mobile, 'What would you like to do next?',
+      [{ id: BTN.FEEDBACK,      title: 'Feedback' },
        { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
     return;
   }
-
-  // Detail is what the subscription buys, so it follows the subscription for
-  // THIS vehicle — not for the customer generally.
-  const paidForThis = await db.one(
-    `SELECT 1 FROM subscriptions s
-       JOIN vehicles v ON v.id = s.vehicle_id
-      WHERE s.user_id = $1 AND v.reg_no = $2 AND s.is_active
-        AND s.ends_on >= CURRENT_DATE
-      LIMIT 1`, [user.id, regNo]);
-
-  await send.text(mobile, await report.buildFor(data, { detailed: Boolean(paidForThis) }));
-
-  const watching = await store.watchedBy(user.id);
-  const already = watching.find(w => w.reg_no === regNo);
-
-  if (already) {
-    await setState(mobile, 'owner_menu', 'already watching this vehicle');
-    await send.buttons(mobile,
-      `You are already watching *${regNo}*. I will message you if anything changes.`,
-      [{ id: BTN.CHECK_ANOTHER, title: 'Check another' }]);
-    return;
-  }
-
-  // Someone whose trial has already run is not offered another one. Being
-  // offered a "free trial" you cannot have, and finding out only after tapping,
-  // is worse than not being offered it at all.
-  const used = await trialUsed(user.id);
-  const days = Math.round(await settings.num('trial_minutes', 10080) / (60 * 24)) || 1;
-  const price = Math.round(await settings.num('first_payment_paise', 4900) / 100);
-  const maxVehicles = await settings.num('trial_vehicles', 4);
-
-  await setState(mobile, 'owner_menu', 'report delivered');
-
-  // Mid-trial, checking a vehicle that is not being watched: offer to add it.
-  if (used && watching.length) {
-    if (watching.length >= maxVehicles) {
-      await send.buttons(mobile,
-        `Your free trial already covers ${maxVehicles} vehicles `
-        + `(${watching.map(w => w.reg_no).join(', ')}), which is the maximum.\n\n`
-        + 'Checking any vehicle stays free — send me a number any time.',
-        [{ id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
-      return;
-    }
-    const left = maxVehicles - watching.length;
-    await send.buttons(mobile,
-      `Would you like me to watch *${regNo}* as well?\n\n`
-      + `You are already watching ${watching.map(w => w.reg_no).join(', ')}. `
-      + `Your free trial covers up to ${maxVehicles} vehicles — `
-      + `${left} slot${left === 1 ? '' : 's'} left, and it ends on the same day either way.`,
-      [{ id: BTN.TRIAL_START,   title: 'Add to free trial' },
-       { id: BTN.ENROLLED,      title: 'Enrolled vehicles' },
-       { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
-    return;
-  }
-
-  if (used) {
-    await send.buttons(mobile,
-      `Would you like me to keep watching *${regNo}*?\n\n`
-      + `You have already used your free trial, so this is ₹${price} for 28 days — `
-      + 'daily checks, and a message whenever a new challan appears or a document '
-      + 'is close to expiring.\n\n'
-      + 'Nothing is charged automatically.',
-      [{ id: BTN.SUBSCRIBE,     title: `Continue for ₹${price}` },
-       { id: BTN.CHECK_ANOTHER, title: 'Check another' }]);
-    return;
-  }
+  const price = `₹${Math.round(plan.price_paise / 100)}`;
+  const validDays = await settings.num('report_valid_days', 7);
 
   await send.buttons(mobile,
-    'Would you like me to keep watching this vehicle?\n\n'
-    + `Free for ${days} day${days === 1 ? '' : 's'} — I check every day and message you `
-    + 'if a new challan appears or a document is about to expire.\n\n'
-    + `You can add up to ${maxVehicles} vehicles to the trial.`,
-    [{ id: BTN.TRIAL_START,   title: 'Start free trial' },
+    `🔒 *Full report for ${regNo}*\n\n`
+    + lockedLines(data).join('\n')
+    + `\n\n*${price}* — one-time\n`
+    + `📄 PDF report on WhatsApp — download again for ${validDays} days\n`
+    + `🔔 ${plan.duration_days} days of alerts — new challans, and insurance, PUC, `
+    + 'road tax, fitness or permit about to expire\n\n'
+    + '_* Price includes GST. Owner details are never shown. Nothing renews automatically._',
+    [{ id: BTN.BUY_REPORT,    title: `Full report ${price}*` },
+     { id: BTN.FEEDBACK,      title: 'Feedback' },
      { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
+}
+
+/**
+ * Hi -> the terms, with one button.
+ *
+ * Every "hi" shows them: it is the one moment a person has plainly started
+ * over, and agreeing is a single tap.
+ */
+async function start(mobile) {
+  await funnel(mobile, 'hi');
+  await send.buttons(mobile, INTRO + OWNER_TERMS,
+    [{ id: BTN.AGREE_OWNER, title: 'Agree & continue' }],
+    { footer: 'ServerPe App Solutions' });
+  await setState(mobile, 'owner_consent', 'terms shown');
+}
+
+/** Send a still-valid report: the PDF, and a link that works until it lapses. */
+async function sendValidReport(mobile, r) {
+  const ends = fmt(new Date(r.valid_until));
+  const link = baseUrl() && r.access_token ? `${baseUrl()}/report/${r.access_token}` : null;
+  const caption = `📋 ${r.report_number} — ${r.reg_no}\nDownload again until ${ends}`
+    + (link ? `\n${link}` : '');
+
+  const sent = r.pdf_path
+    ? await send.document(mobile, r.pdf_path, { filename: `${r.report_number}.pdf`, caption })
+    : { ok: false };
+  if (!sent.ok) {
+    await send.text(mobile, `${caption}\n\n_The file could not be attached${link ? ' — use the link above' : ''}._`);
+  }
 }
 
 async function welcome(mobile) {
@@ -782,6 +854,7 @@ async function handle(session, message, mobile) {
 
       case BTN.AGREE_OWNER:
         await recordConsent(mobile, 'owner', ['terms', 'privacy', 'refund']);
+        await funnel(mobile, 'agreed');
         await setState(mobile, 'owner_start', 'consent given');
         await send.text(mobile,
           'Thank you. ✅\n\n'
@@ -1050,6 +1123,119 @@ async function handle(session, message, mobile) {
         return;
       }
 
+      /**
+       * Full report. The tap is the purchase consent — the menu above it named
+       * the price, what it buys and that nothing renews — so this goes straight
+       * to the payment page rather than through a second summary. The page
+       * itself repeats the summary before any money moves.
+       */
+      case BTN.BUY_REPORT: {
+        const user = await store.upsertUser(mobile);
+        const reg = await pendingReg(mobile);
+        const vehicle = reg
+          ? await db.one(`SELECT id, reg_no FROM vehicles WHERE reg_no = $1`, [reg]) : null;
+        if (!vehicle) {
+          await setState(mobile, 'owner_start', 'no vehicle to report on');
+          await send.text(mobile, 'Please send the vehicle number again.');
+          return;
+        }
+        await funnel(mobile, 'buy_tapped', { reg_no: vehicle.reg_no });
+
+        // Already bought and still valid: hand it over, never charge twice.
+        const existing = await reports.validFor(user.id, vehicle.reg_no);
+        if (existing) {
+          await sendValidReport(mobile, existing);
+          return;
+        }
+
+        // Every precondition is checked BEFORE an order exists, so a missing
+        // setting never leaves an orphan order behind.
+        const plan = await billing.reportPlan();
+        if (!plan || !razorpay.configured() || !baseUrl()) {
+          console.error('[pay] cannot sell a report: plan=%s razorpay=%s PUBLIC_BASE_URL=%s',
+            Boolean(plan), razorpay.configured(), Boolean(baseUrl()));
+          await send.text(mobile, 'Payment is not available right now. Please try again shortly.');
+          return;
+        }
+
+        // A tap twice on the same button reuses the unpaid order rather than
+        // opening a second one that could be paid as well.
+        let row = await db.one(
+          `SELECT * FROM payments
+            WHERE user_id = $1 AND plan_id = $2 AND status = 'created'
+              AND checkout_token IS NOT NULL
+              AND (raw->>'vehicle_id')::bigint = $3
+              AND created_at > now() - interval '1 hour'
+            ORDER BY id DESC LIMIT 1`, [user.id, plan.id, vehicle.id]);
+
+        if (!row) {
+          await db.query(
+            `INSERT INTO event_log (user_id, vehicle_id, kind, detail)
+                  VALUES ($1, $2, 'purchase_consent', $3)`,
+            [user.id, vehicle.id,
+             JSON.stringify({ mobile, reg_no: vehicle.reg_no, amount_paise: plan.price_paise,
+                              plan: plan.code, documents: ['terms', 'refund', 'privacy'],
+                              at: new Date().toISOString() })]);
+
+          const pending = await billing.createPending({
+            userId: user.id, planId: plan.id, amountPaise: plan.price_paise, vehicleId: vehicle.id,
+          });
+
+          let order;
+          try {
+            order = await razorpay.createOrder({
+              amountPaise: plan.price_paise,
+              receipt: `gp-${pending.id}`,
+              // reference_id is what the webhook matches on. Without it a
+              // captured payment whose browser callback was lost is never
+              // activated.
+              notes: { reference_id: `gp-${pending.id}`, reg_no: vehicle.reg_no,
+                       mobile, plan: plan.code },
+            });
+            if (!order?.id) throw new Error('no order id returned');
+          } catch (e) {
+            console.error('[pay] order creation failed:', e.message);
+            await send.text(mobile,
+              'Sorry, I could not start the payment just now. Please try again in a minute.');
+            return;
+          }
+
+          const token = require('crypto').randomBytes(16).toString('hex');
+          row = (await db.query(
+            `UPDATE payments SET order_id = $2, checkout_token = $3,
+                    raw = COALESCE(raw,'{}'::jsonb) || $4::jsonb
+              WHERE id = $1 RETURNING *`,
+            [pending.id, order.id, token, JSON.stringify({ order_id: order.id })])).rows[0];
+        }
+
+        await setState(mobile, 'awaiting_payment', `order ${row.order_id}`);
+        await funnel(mobile, 'link_sent', { reg_no: vehicle.reg_no, payment_row: row.id });
+        await send.text(mobile,
+          `*${vehicle.reg_no}* — full report · ₹${Math.round(row.amount_paise / 100)}\n\n`
+          + `Pay securely here (UPI, card, netbanking):\n${baseUrl()}/pay/${row.checkout_token}\n\n`
+          + 'The report arrives in this chat the moment the payment goes through.');
+        return;
+      }
+
+      case BTN.DOWNLOAD_REPORT: {
+        const user = await store.upsertUser(mobile);
+        const reg = await pendingReg(mobile);
+        const r = reg ? await reports.validFor(user.id, reg) : null;
+        if (r) {
+          await sendValidReport(mobile, r);
+          return;
+        }
+        await sendReports(mobile);
+        return;
+      }
+
+      case BTN.FEEDBACK:
+        await setState(mobile, 'feedback', 'asked for feedback');
+        await send.text(mobile,
+          'Tell me what you think — what was useful, what was missing, or what went wrong. '
+          + 'Just type it as one message. 🙏');
+        return;
+
       case BTN.PLATE_RETRY:
         await setState(mobile, 'owner_start', 'user chose to re-enter');
         await send.text(mobile, 'No problem. Please send the vehicle number again.');
@@ -1057,7 +1243,7 @@ async function handle(session, message, mobile) {
 
       default:
         // An unknown id means a button from an older version of the flow.
-        await welcome(mobile);
+        await start(mobile);
         return;
     }
   }
@@ -1079,7 +1265,7 @@ async function handle(session, message, mobile) {
   // tells people to do it, so it has to work everywhere — including when
   // someone is stuck halfway through a flow that no longer exists.
   if (/^(hi+|hello|hey|start|menu|namaste|namaskara|namaskar)\s*$/i.test(intent.text)) {
-    await welcome(mobile);
+    await start(mobile);
     return;
   }
 
@@ -1089,8 +1275,24 @@ async function handle(session, message, mobile) {
     case 'main_menu':
       // Either they have not started, or they typed instead of tapping.
       // Re-offer rather than scold.
-      await welcome(mobile);
+      await start(mobile);
       return;
+
+    // Whatever they type next is the feedback — including something that looks
+    // like a vehicle number. "hi" above still gets them out.
+    case 'feedback': {
+      const user = await store.upsertUser(mobile);
+      const reg = await pendingReg(mobile);
+      await db.query(
+        `INSERT INTO feedback (user_id, mobile, reg_no, body) VALUES ($1, $2, $3, $4)`,
+        [user.id, mobile, reg, intent.text || `[${message.type}]`]);
+      console.log('[wa] feedback from %s: %s', mobile, String(intent.text).slice(0, 80));
+      await setState(mobile, 'owner_start', 'feedback received');
+      await send.buttons(mobile,
+        'Thank you — every message is read. 🙏\n\nSend another vehicle number any time.',
+        [{ id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
+      return;
+    }
 
     // Once someone has agreed to the terms, a vehicle number is always a
     // vehicle number — whether they are mid-flow, looking at a report, or
@@ -1123,7 +1325,18 @@ async function handle(session, message, mobile) {
         await send.text(mobile, parsed.error);
         return;
       }
-      await askToConfirm(mobile, parsed);
+      await funnel(mobile, 'number', { reg_no: parsed.regNo, repaired: Boolean(parsed.repaired) });
+
+      // Read back only what we changed. A number typed correctly goes straight
+      // to the lookup; one we corrected (O for 0, a padded serial) could be a
+      // different vehicle, and that is worth one tap before anyone pays.
+      if (parsed.repaired) {
+        await askToConfirm(mobile, parsed);
+        return;
+      }
+      await setState(mobile, 'owner_lookup', 'number received');
+      await send.text(mobile, `Checking *${parsed.regNo}* … ⏳`);
+      await deliverReport(mobile, parsed.regNo, message);
       return;
     }
 

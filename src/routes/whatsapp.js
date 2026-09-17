@@ -30,6 +30,7 @@ const { config } = require('../config');
 const sig = require('../whatsapp/signature');
 const store = require('../whatsapp/store');
 const flow = require('../whatsapp/flow');
+const send = require('../whatsapp/send');
 
 const router = express.Router();
 const wa = config.whatsapp;
@@ -88,6 +89,13 @@ async function handle(body) {
         const rec = await store.recordInbound(m, contact);
         if (rec) {
           console.log(`[wa] in  ${rec.mobile}  ${m.type}  ${JSON.stringify(rec.body).slice(0, 80)}`);
+        }
+        // Testing guard: a number outside WHATSAPP_ALLOWED_RECIPIENTS is recorded
+        // above but never moved through the flow, so its session state stays
+        // untouched for when the bot opens to everyone.
+        if (rec && wa.replyEnabled && !send.allowed(rec.mobile)) {
+          console.log('[wa] %s not in allowed recipients — recorded, not answered', rec.mobile);
+          continue;
         }
         if (rec && wa.replyEnabled) {
           // One person's bad message must not stop the rest of the batch.

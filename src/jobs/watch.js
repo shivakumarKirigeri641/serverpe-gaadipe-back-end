@@ -76,8 +76,11 @@ async function previous(vehicleId) {
 
 /**
  * What is worth telling this person today.
- * Returns short phrases; the caller joins them with " · " because a template
- * variable may not contain a newline.
+ *
+ * Returns { key, text } pairs. `text` is the phrase shown — the caller joins
+ * them with " · " because a template variable may not contain a newline.
+ * `key` is what makes it the SAME finding tomorrow: the phrase cannot be,
+ * because "expires in 29 days" becomes "expires in 28 days" overnight.
  */
 function findings(data, before) {
   const out = [];
@@ -89,35 +92,41 @@ function findings(data, before) {
   const was = before.challan?.pending_count ?? null;
   if (now !== null && was !== null && now > was) {
     const n = now - was;
-    out.push(`${n} new challan${n === 1 ? '' : 's'}`);
+    out.push({ key: `challans:${now}`, text: `${n} new challan${n === 1 ? '' : 's'}` });
   } else if (now !== null && was === null && now > 0) {
-    out.push(`${now} pending challan${now === 1 ? '' : 's'}`);
+    out.push({ key: `challans:${now}`, text: `${now} pending challan${now === 1 ? '' : 's'}` });
   }
 
-  // Documents that have crossed into their warning window, or lapsed.
+  // Documents that have crossed into their warning window, or lapsed. One key
+  // per document, per expiry date, per stage: a renewed document has a new
+  // date and may be warned about again; "expiring" and "expired" are two
+  // different pieces of news.
   for (const d of report.documentsOf(data.rc || {})) {
     const horizon = WARN_DAYS[d.label];
     if (horizon === undefined) continue;
-    if (d.days < 0) out.push(`${d.label} expired ${report.human(d.days)}`);
-    else if (d.days <= horizon) out.push(`${d.label} expires ${report.human(d.days)}`);
+    const date = new Date(d.date).toISOString().slice(0, 10);
+    if (d.days < 0) {
+      out.push({ key: `${d.label}:${date}:expired`, text: `${d.label} expired ${report.human(d.days)}` });
+    } else if (d.days <= horizon) {
+      out.push({ key: `${d.label}:${date}:expiring`, text: `${d.label} expires ${report.human(d.days)}` });
+    }
   }
 
   return out;
 }
 
 /**
- * Say it once. A document that expires in 30 days would otherwise produce the
- * same sentence every day for a month, which is how a useful service becomes
- * the thing someone mutes.
+ * Say it once per watch. A document that expires in 30 days would otherwise
+ * produce a message every day for a month, which is how a useful service
+ * becomes the thing someone mutes.
  */
-async function alreadySaid(watchId, phrase) {
+async function alreadySaid(watchId, key) {
   const row = await db.one(
     `SELECT 1 FROM event_log
       WHERE kind = 'watch_alert'
         AND detail->>'watch_id' = $1
-        AND detail->'items' ? $2
-        AND created_at > now() - interval '7 days'
-      LIMIT 1`, [String(watchId), phrase]);
+        AND detail->'keys' ? $2
+      LIMIT 1`, [String(watchId), key]);
   return Boolean(row);
 }
 
@@ -170,16 +179,17 @@ async function checkOne(w) {
 
   const fresh = [];
   for (const item of items) {
-    if (!await alreadySaid(w.id, item)) fresh.push(item);
+    if (!await alreadySaid(w.id, item.key)) fresh.push(item);
   }
   if (!fresh.length) return { sent: false, items };
 
-  const summary = fresh.join(' · ');
+  const summary = fresh.map(i => i.text).join(' · ');
   await notify(w, summary, data);
   await db.query(
     `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'watch_alert', $3)`,
     [w.user_id, w.vehicle_id,
-     JSON.stringify({ watch_id: String(w.id), reg_no: w.reg_no, items: fresh, summary })]);
+     JSON.stringify({ watch_id: String(w.id), reg_no: w.reg_no,
+                      items: fresh.map(i => i.text), keys: fresh.map(i => i.key), summary })]);
   return { sent: true, items: fresh };
 }
 
@@ -250,10 +260,12 @@ async function lifecycle() {
   // being dropped in silence is how a renewable customer is lost for good.
   const renewalDays = await settings.num('renewal_notice_days', 3);
   const dueRenewal = await db.query(
-    `SELECT s.id, s.ends_on, v.reg_no, u.mobile, u.wa_profile_name
+    `SELECT s.id, s.ends_on, v.reg_no, u.mobile, u.wa_profile_name,
+            pl.kind AS plan_kind, pl.price_paise AS plan_price_paise
        FROM subscriptions s
        JOIN vehicles v ON v.id = s.vehicle_id
        JOIN users    u ON u.id = s.user_id
+       JOIN plans    pl ON pl.id = s.plan_id
       WHERE s.is_active
         AND s.ends_on <= (CURRENT_DATE + ($1 || ' days')::interval)
         AND s.ends_on >= CURRENT_DATE
@@ -267,10 +279,20 @@ async function lifecycle() {
 
   for (const s of dueRenewal.rows) {
     const name = (s.wa_profile_name || 'there').split(' ')[0];
-    const price = Math.round(await settings.num('renewal_paise', 3900) / 100);
+    const isReport = s.plan_kind === 'report';
+    const price = isReport
+      ? Math.round(s.plan_price_paise / 100)
+      : Math.round(await settings.num('renewal_paise', 3900) / 100);
     const ends = fmtDate(new Date(s.ends_on));
 
-    if (await send.windowOpen(s.mobile)) {
+    if (isReport && await send.windowOpen(s.mobile)) {
+      // A report is bought again, not renewed: the offer is today's records and
+      // a fresh 28 days of alerts, at the same one-time price.
+      await send.text(s.mobile,
+        `Alerts for *${s.reg_no}* end on *${ends}*.\n\n`
+        + `Send me *${s.reg_no}* to see today's records — a fresh full report is ₹${price} `
+        + 'and includes another 28 days of alerts. Nothing renews automatically.');
+    } else if (await send.windowOpen(s.mobile)) {
       await send.text(s.mobile,
         `Monitoring for *${s.reg_no}* ends on *${ends}*.\n\n`
         + `To continue, it is ₹${price} for the next 28 days. `
