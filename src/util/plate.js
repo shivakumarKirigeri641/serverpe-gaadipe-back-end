@@ -45,11 +45,17 @@ const STATE_CODES = new Set([
  *           state(2) + district(1-2) + series(0-3 letters) + number(1-4)
  * bh        22BH1234AB — the newer series, no state code at all
  * defence   Army and paramilitary, e.g. 08A123456 / 21BX456789A
+ * legacy    Before the state-code scheme (1989): two or three letters and up
+ *           to four digits — CRW1461, MYS123, BMR3411. Still on the road and
+ *           still in VAHAN (2026-09-17). There is no state code to check, so the
+ *           shape is all that is tested here and ULIP says whether it exists.
  */
 const FORMATS = [
   { name: 'standard', re: /^([A-Z]{2})(\d{1,2})([A-Z]{0,3})(\d{1,4})$/ },
   { name: 'bh',       re: /^(\d{2})(BH)(\d{4})([A-Z]{1,2})$/ },
   { name: 'defence',  re: /^(\d{2})([A-Z]{1,2})(\d{6})([A-Z]?)$/ },
+  /* Last, so a modern plate is always read as modern first. */
+  { name: 'legacy',   re: /^([A-Z]{2,3})(\d{1,4})$/ },
 ];
 
 /** Words people put around a plate. Removed before anything else. */
@@ -124,7 +130,9 @@ function repair(regNo) {
     }
     const text = candidate.join('');
     const shape = shapeOf(text);
-    if (!shape) continue;
+    /* Never "correct" a mistyped modern plate into an old one: the old shape is
+       loose enough that almost any short run of letters and digits fits it. */
+    if (!shape || shape.format === 'legacy') continue;
 
     // A registration's last group is its serial number, and four digits is by
     // far the most common. Prefer that, then prefer changing less.
@@ -173,6 +181,18 @@ function parse(input) {
       error: looksStateLike && !STATE_CODES.has(regNo.slice(0, 2))
         ? `I do not recognise *${regNo.slice(0, 2)}* as a State code. Please check the number and send it again.`
         : `*${regNo}* does not look like a vehicle number. Please send it like *KA02EX1480*.` };
+  }
+
+  /*
+   * THE SERIAL IS FOUR DIGITS (2026-09-17). VAHAN records KA01A1 as KA01A0001 and
+   * KA011 as KA010001; typed short, the lookup finds nothing. So a standard
+   * plate's serial is padded here, once, and every caller — the booking form,
+   * the gate, a check from the panel — uses the same number.
+   */
+  if (shape.format === 'standard') {
+    const [state, district, series, serial] = shape.parts;
+    const full = `${state}${district}${series}${serial.padStart(4, '0')}`;
+    return { ok: true, regNo: full, pretty: pretty(full), format: shape.format, repaired: repaired || full !== raw, error: null };
   }
 
   return { ok: true, regNo, pretty: pretty(regNo), format: shape.format, repaired, error: null };
