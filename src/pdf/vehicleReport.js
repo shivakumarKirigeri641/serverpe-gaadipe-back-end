@@ -187,10 +187,11 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
        challan details, and a 350-challan bus is exactly who needs them: which
        offence, on which road, for how much. Each row is exactly two lines —
        offence, then place — because the full wording ran 350 rows to 28 pages;
-       the complete offence text is in the summary table above. The newest 150
-       are listed (about six pages) and the rest are counted, never hidden. */
-    const MAX_PENDING = 150;
-    const MAX_DISPOSED = 25;
+       the complete offence text is in the summary table above. EVERY challan is
+       listed, newest first (user, 2026-09-18) — pending and disposed alike;
+       a 350-challan bus runs to about eight pages, and that is the report. */
+    const newestFirst = (list) => [...(list || [])]
+      .sort((a, b) => String(b.challan_date || '').localeCompare(String(a.challan_date || '')));
     const challanCols = [
       { label: 'Date', width: W * 0.13, nowrap: true },
       { label: 'Challan number', width: W * 0.28, nowrap: true },
@@ -215,26 +216,26 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       y = doc.y + 8;
     };
 
-    const pending = (c.pending || []).slice(0, MAX_PENDING);
+    const pending = newestFirst(c.pending);
     if (pending.length) {
       y = T.ensureSpace(doc, y, 90);
       y = T.sectionTitle(doc, `Pending challans (${c.pending_count ?? pending.length})`, y,
         T.BRAND.red || T.BRAND.brand);
-      y = T.table(doc, challanCols, pending.map(challanRow), y, { rowH: 15, maxRows: MAX_PENDING });
+      y = T.table(doc, challanCols, pending.map(challanRow), y, { rowH: 15, maxRows: Infinity });
       note((c.pending_count || 0) > pending.length
-        ? `Showing the ${pending.length} most recent of ${c.pending_count} pending challans. `
+        ? `${pending.length} of ${c.pending_count} pending challans were returned by the e-Challan service at the time of this report. `
           + 'Every challan number is complete and can be searched on the e-Challan portal.'
         : 'Every challan number is complete and can be searched on the e-Challan portal.');
     }
 
-    const disposed = (c.disposed || []).slice(0, MAX_DISPOSED);
+    const disposed = newestFirst(c.disposed);
     if (disposed.length) {
       y = T.ensureSpace(doc, y, 90);
       y = T.sectionTitle(doc, `Paid / disposed challans (${c.disposed_count ?? disposed.length})`, y,
         T.BRAND.green || T.BRAND.brand);
-      y = T.table(doc, challanCols, disposed.map(challanRow), y, { rowH: 15, maxRows: MAX_DISPOSED });
+      y = T.table(doc, challanCols, disposed.map(challanRow), y, { rowH: 15, maxRows: Infinity });
       if ((c.disposed_count || 0) > disposed.length) {
-        note(`Showing the ${disposed.length} most recent of ${c.disposed_count} paid or disposed challans.`);
+        note(`${disposed.length} of ${c.disposed_count} paid or disposed challans were returned by the e-Challan service at the time of this report.`);
       }
     }
 
