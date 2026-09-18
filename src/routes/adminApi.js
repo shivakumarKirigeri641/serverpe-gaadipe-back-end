@@ -108,6 +108,13 @@ router.get('/series', safe(async (req, res) => res.json(
 router.get('/funnel', safe(async (req, res) => res.json(
   await stats.funnel({ days: Number(req.query.days) || 30 }))));
 
+/* Period against period, the fleet by class and document state, and when people check. */
+const insights = require('../admin/insights');
+router.get('/insights/compare', safe(async (_req, res) => res.json(await insights.compare())));
+router.get('/insights/fleet', safe(async (_req, res) => res.json(await insights.fleet())));
+router.get('/insights/heatmap', safe(async (req, res) => res.json(
+  await insights.heatmap({ days: Number(req.query.days) || 30 }))));
+
 router.get('/finance', needs('money'), safe(async (req, res) => res.json(
   await stats.finance({ from: req.query.from || null, to: req.query.to || null }))));
 
