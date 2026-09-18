@@ -87,13 +87,16 @@ function contextOf(req) {
   const parsed = parseUA(ua);
   const hints = c.hints || {};
 
+  // A proxy that knows the place (Cloudflare, Vercel) wins; otherwise the offline lookup.
+  const where = locate(req.ip);
+
   return {
     device_id: clip(c.device_id || req.get('x-gp-device'), 64),
     ip: clip(req.ip, 64),
     ip_chain: clip(req.get('x-forwarded-for'), 300),
-    country: clip(req.get('cf-ipcountry') || req.get('x-vercel-ip-country') || req.get('x-country'), 64),
-    region: clip(req.get('x-vercel-ip-country-region') || req.get('x-region'), 64),
-    city: clip(req.get('x-vercel-ip-city') || req.get('x-city'), 64),
+    country: clip(req.get('cf-ipcountry') || req.get('x-vercel-ip-country') || req.get('x-country') || where.country, 64),
+    region: clip(req.get('x-vercel-ip-country-region') || req.get('x-region') || where.region, 64),
+    city: clip(req.get('x-vercel-ip-city') || req.get('x-city') || where.city, 64),
     user_agent: clip(ua, 600),
     browser: parsed.browser,
     browser_version: parsed.browser_version,
@@ -117,6 +120,45 @@ function contextOf(req) {
   };
 }
 
+/*
+ * WHERE, ROUGHLY (user, 2026-09-18). City and state from the IP, looked up in
+ * an offline database (geoip-lite) — no customer's address is sent to anyone.
+ * Mobile networks route through a few big exchanges, so on 4G the city is often
+ * the operator's, not the person's; it is a hint, never a fact.
+ */
+const STATES = {
+  AN: 'Andaman & Nicobar', AP: 'Andhra Pradesh', AR: 'Arunachal Pradesh', AS: 'Assam', BR: 'Bihar',
+  CH: 'Chandigarh', CT: 'Chhattisgarh', CG: 'Chhattisgarh', DN: 'Dadra & Nagar Haveli', DD: 'Daman & Diu',
+  DL: 'Delhi', GA: 'Goa', GJ: 'Gujarat', HR: 'Haryana', HP: 'Himachal Pradesh', JK: 'Jammu & Kashmir',
+  JH: 'Jharkhand', KA: 'Karnataka', KL: 'Kerala', LA: 'Ladakh', LD: 'Lakshadweep', MP: 'Madhya Pradesh',
+  MH: 'Maharashtra', MN: 'Manipur', ML: 'Meghalaya', MZ: 'Mizoram', NL: 'Nagaland', OR: 'Odisha', OD: 'Odisha',
+  PY: 'Puducherry', PB: 'Punjab', RJ: 'Rajasthan', SK: 'Sikkim', TN: 'Tamil Nadu', TG: 'Telangana', TS: 'Telangana',
+  TR: 'Tripura', UP: 'Uttar Pradesh', UT: 'Uttarakhand', UK: 'Uttarakhand', WB: 'West Bengal',
+};
+const PRIVATE_IP = /^(::1$|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|fe80:|fc|fd|localhost)/i;
+let geo = null;
+function locate(ip) {
+  const addr = String(ip || '').replace(/^::ffff:/, '');
+  if (!addr) return { country: null, region: null, city: null };
+  if (PRIVATE_IP.test(addr)) return { country: 'Local network', region: null, city: null };
+  try {
+    geo = geo || require('geoip-lite');
+    const g = geo.lookup(addr);
+    if (!g) return { country: null, region: null, city: null };
+    return {
+      country: g.country === 'IN' ? 'India' : g.country || null,
+      region: g.country === 'IN' ? (STATES[g.region] || g.region || null) : (g.region || null),
+      city: g.city || null,
+    };
+  } catch {
+    return { country: null, region: null, city: null };
+  }
+}
+
+/** "Bengaluru, Karnataka, India" — or whatever part is known. */
+const placeOf = (r) => [r.city, r.region, r.country].filter(Boolean)
+  .filter((v, i, all) => all.indexOf(v) === i).join(', ') || null;
+
 /** One line for a person to read: "Mobile · Samsung SM-S918B · Android 14 · Chrome 128". */
 function describe(r) {
   if (!r) return null;
@@ -127,4 +169,4 @@ function describe(r) {
     .filter(Boolean).join(' · ') || null;
 }
 
-module.exports = { parseUA, contextOf, describe };
+module.exports = { parseUA, contextOf, describe, locate, placeOf };

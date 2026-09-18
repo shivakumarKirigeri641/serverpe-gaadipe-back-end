@@ -217,7 +217,9 @@ async function detail(userId) {
     calls: calls.rows,
     alerts: alerts.rows,
     feedback: feedback.rows.map(f => ({ ...f, id: String(f.id) })),
-    sign_ins: signIns.rows.map(r => ({ ...r, id: String(r.id), described: device.describe(r) })),
+    sign_ins: signIns.rows.map(r => ({ ...r, id: String(r.id), described: device.describe(r),
+      name: user.display_name || user.wa_profile_name || null,
+      place: device.placeOf(r.city || r.region || r.country ? r : device.locate(r.ip)) })),
     sessions: sessions.rows.map(r => ({ ...r, id: String(r.id), described: device.describe(device.parseUA(r.user_agent)) })),
   };
 }

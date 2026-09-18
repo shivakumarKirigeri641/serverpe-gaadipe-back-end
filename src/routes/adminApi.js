@@ -49,6 +49,10 @@ const safe = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
 
 const tokenOf = (req) => (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
 const ipOf = (req) => req.ip;
+/* The panel re-asks every few seconds while a screen is open and marks those
+   calls. Opening a record is audited once; its refreshes are not, or the audit
+   trail would fill with the same read every ten seconds. */
+const refreshing = (req) => req.get('x-refresh') === '1';
 
 /* ------------------------------------------------------------- signing in */
 
@@ -147,7 +151,9 @@ router.get('/sign-ins', safe(async (req, res) => {
     total: rows[0] ? Number(rows[0].total_rows) : 0,
     summary: Object.fromEntries(Object.entries(summary).map(([k, v]) => [k, Number(v)])),
     rows: rows.map(({ total_rows, ...r }) => ({ ...r, id: String(r.id), user_id: r.user_id ? String(r.user_id) : null,
-      name: r.display_name || r.wa_profile_name || null, described: device.describe(r) })),
+      name: r.display_name || r.wa_profile_name || null, described: device.describe(r),
+      // Rows from before the lookup existed are placed now, from their IP.
+      place: device.placeOf(r.city || r.region || r.country ? r : device.locate(r.ip)) })),
   });
 }));
 
@@ -180,8 +186,10 @@ router.get('/customers/:id', safe(async (req, res) => {
   const out = await customers.detail(req.params.id);
   if (!out) return res.status(404).json({ error: 'not_found', message: 'No such customer.' });
   // Reading someone's file is itself an action worth recording.
-  await auth.audit({ adminId: req.admin.id, action: 'view_customer', ip: ipOf(req),
-                     detail: { user_id: req.params.id, mobile: out.user.mobile } });
+  if (!refreshing(req)) {
+    await auth.audit({ adminId: req.admin.id, action: 'view_customer', ip: ipOf(req),
+                       detail: { user_id: req.params.id, mobile: out.user.mobile } });
+  }
   res.json(out);
 }));
 
@@ -206,8 +214,10 @@ router.get('/live/conversations', safe(async (req, res) => res.json({
 
 router.get('/live/thread/:mobile', safe(async (req, res) => {
   const rows = await live.thread(req.params.mobile, { limit: Number(req.query.limit) || 200 });
-  await auth.audit({ adminId: req.admin.id, action: 'view_thread', ip: ipOf(req),
-                     detail: { mobile: req.params.mobile } });
+  if (!refreshing(req)) {
+    await auth.audit({ adminId: req.admin.id, action: 'view_thread', ip: ipOf(req),
+                       detail: { mobile: req.params.mobile } });
+  }
   res.json({ rows });
 }));
 
@@ -267,8 +277,10 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
                 FROM api_calls WHERE reg_no = $1 ORDER BY id DESC LIMIT 50`, [regNo]),
   ]);
 
-  await auth.audit({ adminId: req.admin.id, action: 'view_vehicle', ip: ipOf(req),
-                     detail: { reg_no: regNo } });
+  if (!refreshing(req)) {
+    await auth.audit({ adminId: req.admin.id, action: 'view_vehicle', ip: ipOf(req),
+                       detail: { reg_no: regNo } });
+  }
 
   res.json({
     vehicle: { ...vehicle, id: String(vehicle.id) },
