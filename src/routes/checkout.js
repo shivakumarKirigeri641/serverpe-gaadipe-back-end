@@ -35,6 +35,26 @@ const router = express.Router();
 
 const WA_NUMBER = process.env.WHATSAPP_BUSINESS_PHONENUMBER || '916363271302';
 const SITE_URL = (process.env.PUBLIC_SITE_URL || 'https://gaadipe.in').replace(/\/+$/, '');
+const { config } = require('../config');
+
+/*
+ * WHERE A WEBSITE BUYER GOES BACK TO: the site they came from. The checkout
+ * page is opened through the site's own origin (the site proxies /pay in
+ * development), so the Referer names the site as the customer is using it —
+ * localhost, a phone on the Wi-Fi, a tunnel, gaadipe.in. In production only the
+ * site's known origins are trusted; anything else falls back to PUBLIC_SITE_URL,
+ * so this can never be used to bounce a customer to someone else's page.
+ */
+function siteOrigin(req) {
+  try {
+    const origin = new URL(req.get('referer') || '').origin;
+    if (!/^https?:\/\//.test(origin)) return SITE_URL;
+    const production = String(process.env.NODE_ENV || '').toLowerCase() === 'production';
+    return !production || config.site.origins.includes(origin) ? origin : SITE_URL;
+  } catch {
+    return SITE_URL;
+  }
+}
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -152,8 +172,16 @@ router.get('/pay/:token', safe(async (req, res) => {
       <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
   }
 
+  const web = pay.raw?.channel === 'web';
+  const site = siteOrigin(req);
+
   if (pay.status === 'paid') {
-    return res.send(page('Already paid', `<div class="card">
+    return res.send(page('Already paid', web ? `<div class="card">
+      <h1>This payment is already complete ✅</h1>
+      <p class="muted">Your full report for <b>${esc(pay.reg_no || 'your vehicle')}</b> and its GST invoice
+      are in your GaadiPe account.</p>
+      <button onclick="location.href=${esc(JSON.stringify(`${site}/app/reports`))}">Open my reports</button></div>`
+      : `<div class="card">
       <h1>This payment is already complete ✅</h1>
       <p class="muted">${pay.plan_kind === 'report'
         ? `Your full report for <b>${esc(pay.reg_no || 'your vehicle')}</b> has been sent.`
@@ -172,20 +200,21 @@ router.get('/pay/:token', safe(async (req, res) => {
   /* A payment started on the website must end on the website: sending a web
      customer to WhatsApp would hand them to a different product than the one
      they were using. The channel was recorded when the order was created. */
-  const backUrl = pay.raw?.channel === 'web' && pay.reg_no
-    ? `${SITE_URL}/app/vehicle/${encodeURIComponent(pay.reg_no)}`
+  const backUrl = web
+    ? `${site}/app/${pay.reg_no ? `vehicle/${encodeURIComponent(pay.reg_no)}` : 'reports'}`
     : null;
   const validDays = await settings.num('report_valid_days', 7);
   const planLine = isReport
     ? 'Full vehicle report'
     : `GaadiPe Watch · ${pay.duration_days || 28} days`;
+  const where = web ? 'in your GaadiPe account' : 'on WhatsApp';
   const benefits = isReport
-    ? [`Full report PDF on WhatsApp — download again for ${validDays} days`,
+    ? [`Full report PDF ${where} — download again for ${validDays} days`,
        'Loan / hypothecation, blacklist and NOC status',
-       'Challan numbers and most frequent offences',
+       'Every challan, with offence, place and amount',
        'Insurer, policy and PUC references',
        `${pay.duration_days || 28} days of alerts: new challans and document expiry`,
-       'GST invoice on WhatsApp']
+       `GST invoice ${where}`]
     : ['Daily checks on this vehicle',
        'A message the moment a new challan appears',
        'Reminders before insurance, PUC or fitness expires',
@@ -195,7 +224,9 @@ router.get('/pay/:token', safe(async (req, res) => {
   res.send(page('Checkout', `
 <div id="done" class="card" style="display:none">
   <h1>Payment successful ✅</h1>
-  <p class="muted" style="margin:0 0 14px">${isReport
+  <p class="muted" style="margin:0 0 14px">${web
+    ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready in your GaadiPe account.`
+    : isReport
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is on its way to your WhatsApp chat.`
     : 'Your confirmation is on its way to your WhatsApp chat.'}
   ${backUrl ? 'Taking you back to it…' : 'Opening WhatsApp…'}</p>
@@ -230,9 +261,9 @@ router.get('/pay/:token', safe(async (req, res) => {
   <div id="err" class="err"></div>
   <p class="muted" style="margin:12px 0 0;text-align:center">
     By paying you accept our
-    <a href="https://gaadipe.in/terms">Terms</a>,
-    <a href="https://gaadipe.in/refund">Refund</a> and
-    <a href="https://gaadipe.in/privacy">Privacy</a> policies.
+    <a href="${esc(site)}/terms" target="_blank" rel="noopener">Terms</a>,
+    <a href="${esc(site)}/refund" target="_blank" rel="noopener">Refund</a> and
+    <a href="${esc(site)}/privacy" target="_blank" rel="noopener">Privacy</a> policies.
   </p>
 </div>
 </div>

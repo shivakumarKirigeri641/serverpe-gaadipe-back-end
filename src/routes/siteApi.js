@@ -338,9 +338,11 @@ router.post('/buy', safe(async (req, res) => {
 
   const plan = await billing.reportPlan();
   const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
-  if (!plan || !razorpay.configured() || !base) {
-    console.error('[site] cannot sell a report: plan=%s razorpay=%s base=%s',
-      Boolean(plan), razorpay.configured(), Boolean(base));
+  // The site opens checkout through its own origin, so a public base URL (a
+  // tunnel, the API domain) is not needed for a website purchase.
+  if (!plan || !razorpay.configured()) {
+    console.error('[site] cannot sell a report: plan=%s razorpay=%s',
+      Boolean(plan), razorpay.configured());
     return res.status(503).json({ error: 'unavailable',
       message: 'Payments are not available right now. Please try again shortly.' });
   }
@@ -403,7 +405,8 @@ router.post('/buy', safe(async (req, res) => {
 
   await consent(row.id);
 
-  res.json({ ok: true, pay_url: `${base}/pay/${row.checkout_token}`,
+  res.json({ ok: true, pay_path: `/pay/${row.checkout_token}`,
+             pay_url: base ? `${base}/pay/${row.checkout_token}` : null,
              amount_paise: row.amount_paise });
 }));
 
