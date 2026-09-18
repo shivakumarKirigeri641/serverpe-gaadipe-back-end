@@ -39,6 +39,13 @@ async function windowOpen(mobile) {
   return Date.now() - new Date(row.last_inbound_at).getTime() < 24 * 60 * 60 * 1000;
 }
 
+/**
+ * The block list, asked at the one door every message leaves through. A number
+ * blocked in the admin panel must stop receiving alerts immediately, not when
+ * someone remembers to check in the job that sends them.
+ */
+const blocks = require('../admin/blocks');
+
 /** The testing guard from config: an empty list lets everyone through. */
 const allowed = (mobile) => !wa.allowedRecipients.length
   || wa.allowedRecipients.includes(String(mobile).replace(/\D/g, '').slice(-10));
@@ -52,6 +59,10 @@ async function post(payload, meta) {
   if (!allowed(mobile)) {
     console.warn('[wa] %s not in WHATSAPP_ALLOWED_RECIPIENTS — not sending %s', mobile, type);
     return { ok: false, error: 'recipient_not_allowed' };
+  }
+  if (await blocks.isBlocked('mobile', mobile)) {
+    console.warn('[wa] %s is blocked — not sending %s', mobile, type);
+    return { ok: false, error: 'blocked' };
   }
 
   if (!wa.token || !wa.phoneNumberId) {
@@ -215,6 +226,10 @@ async function document(mobile, filePath, { filename, caption } = {}) {
   if (!allowed(mobile)) {
     console.warn('[wa] %s not in WHATSAPP_ALLOWED_RECIPIENTS — not sending document', mobile);
     return { ok: false, error: 'recipient_not_allowed' };
+  }
+  if (await blocks.isBlocked('mobile', mobile)) {
+    console.warn('[wa] %s is blocked — not sending document', mobile);
+    return { ok: false, error: 'blocked' };
   }
   if (!fs.existsSync(filePath)) {
     console.error('[wa] no such file to send:', filePath);

@@ -114,6 +114,38 @@ const config = {
       .split(',').map(s => s.replace(/\D/g, '').slice(-10)).filter(s => s.length === 10),
   },
 
+  /**
+   * The admin panel, which is a separate front-end on its own origin.
+   *
+   * devOtp is a FIXED sign-in code for building against — signing in must not
+   * depend on a message arriving. It is a back door by definition, so it is
+   * empty in production and validate() refuses to boot if one is forced there.
+   */
+  admin: {
+    devOtp: String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+      ? ''
+      : String(process.env.ADMIN_DEV_OTP || '1234'),
+    // Browsers only send the panel's requests if this server names its origin.
+    origins: String(process.env.ADMIN_ORIGINS
+      || 'http://localhost:5173,http://localhost:4173')
+      .split(',').map(s => s.trim().replace(/\/+$/, '')).filter(Boolean),
+  },
+
+  /**
+   * gaadipe.in — the customer's own account on the website.
+   *
+   * Same reasoning as the admin panel's devOtp: a fixed code so the sign-in
+   * flow can be built before an SMS account exists, and never in production.
+   */
+  site: {
+    devOtp: String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+      ? ''
+      : String(process.env.SITE_DEV_OTP || '1234'),
+    origins: String(process.env.SITE_ORIGINS
+      || 'http://localhost:5174,http://localhost:4174,https://gaadipe.in,https://www.gaadipe.in')
+      .split(',').map(s => s.trim().replace(/\/+$/, '')).filter(Boolean),
+  },
+
   logCalls: bool(process.env.LOG_ULIP_CALLS, true),
 };
 
@@ -135,6 +167,20 @@ function validate() {
     if (config.env === 'production' && !wa.appSecret) {
       problems.push('WHATSAPP_APP_SECRET is required in production — without it any caller can post fake messages');
     }
+  }
+
+  // A fixed admin code on a live panel would hand every customer's details to
+  // anyone who guessed an admin's mobile number.
+  if (config.env === 'production' && process.env.ADMIN_DEV_OTP) {
+    problems.push('ADMIN_DEV_OTP must not be set in production — remove it before deploying');
+  }
+  if (config.env === 'production' && process.env.SITE_DEV_OTP) {
+    problems.push('SITE_DEV_OTP must not be set in production — remove it before deploying');
+  }
+  // A live site whose customers cannot receive a code cannot sign anyone in,
+  // and the failure would only show up as customers quietly giving up.
+  if (config.env === 'production' && !process.env.SMS_PROVIDER) {
+    problems.push('SMS_PROVIDER is required in production — site sign-in sends the code by SMS');
   }
 
   if (problems.length) throw new Error(`Configuration problems:\n  - ${problems.join('\n  - ')}`);

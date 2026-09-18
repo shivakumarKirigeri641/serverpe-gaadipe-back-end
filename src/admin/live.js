@@ -1,0 +1,137 @@
+/**
+ * src/admin/live.js — what is happening right now.
+ *
+ * The panel polls this every few seconds, so everything here is written to be
+ * cheap and to answer the same question twice without doing the work twice:
+ * `since` is a message id, not a timestamp, because ids are exact where clocks
+ * and ties are not — two messages in the same millisecond would otherwise be
+ * seen once and then missed.
+ *
+ * WHAT COUNTS AS LIVE: someone whose last inbound message is inside the 24-hour
+ * window, because that is exactly the period in which GaadiPe can answer them
+ * freely. Beyond it the conversation is history, not a conversation.
+ */
+
+const db = require('../db');
+
+/** One line per conversation, newest first: who, where they are, what they said. */
+async function conversations({ limit = 60, activeMinutes = null, q = '' } = {}) {
+  const term = String(q || '').trim();
+  const digits = term.replace(/\D/g, '');
+
+  const { rows } = await db.query(
+    `SELECT s.id, s.mobile, s.profile_name, s.state, s.state_reason,
+            s.last_inbound_at, s.last_outbound_at, s.context,
+            u.id AS user_id, u.wa_profile_name, u.is_paused, u.is_internal,
+            (s.last_inbound_at > now() - interval '24 hours') AS in_window,
+            (SELECT count(*) FROM whatsapp_messages m WHERE m.mobile = s.mobile) AS messages,
+            (SELECT m.body FROM whatsapp_messages m
+              WHERE m.mobile = s.mobile ORDER BY m.id DESC LIMIT 1)   AS last_body,
+            (SELECT m.direction FROM whatsapp_messages m
+              WHERE m.mobile = s.mobile ORDER BY m.id DESC LIMIT 1)   AS last_direction,
+            (SELECT max(m.id) FROM whatsapp_messages m WHERE m.mobile = s.mobile) AS last_message_id,
+            EXISTS (SELECT 1 FROM blocks b WHERE b.kind = 'mobile'
+                      AND b.value = s.mobile AND b.released_at IS NULL) AS blocked,
+            EXISTS (SELECT 1 FROM payments p WHERE p.user_id = u.id AND p.status = 'paid') AS has_paid
+       FROM whatsapp_sessions s
+       LEFT JOIN users u ON u.mobile = s.mobile
+      WHERE ($1 = '' OR s.mobile LIKE '%' || $2 || '%' OR s.profile_name ILIKE '%' || $1 || '%')
+        AND ($3::int IS NULL OR s.last_inbound_at > now() - ($3 || ' minutes')::interval)
+      ORDER BY greatest(coalesce(s.last_inbound_at, s.created_at),
+                        coalesce(s.last_outbound_at, s.created_at)) DESC
+      LIMIT $4`,
+    [term, digits, activeMinutes, Math.min(200, limit)]);
+
+  return rows.map(r => ({
+    ...r,
+    id: String(r.id),
+    user_id: r.user_id ? String(r.user_id) : null,
+    messages: Number(r.messages || 0),
+    last_message_id: r.last_message_id ? String(r.last_message_id) : null,
+  }));
+}
+
+/** The whole thread with one person, oldest first — how a chat is read. */
+async function thread(mobile, { limit = 200 } = {}) {
+  const m = String(mobile || '').replace(/\D/g, '').slice(-10);
+  const { rows } = await db.query(
+    `SELECT id, direction, message_type, body, template_name, wa_message_id,
+            error_message, created_at
+       FROM (SELECT * FROM whatsapp_messages WHERE mobile = $1
+              ORDER BY id DESC LIMIT $2) t
+      ORDER BY id`, [m, Math.min(500, limit)]);
+
+  const statuses = await db.query(
+    `SELECT wa_message_id, status, error_code, error_title, created_at
+       FROM whatsapp_status_logs WHERE mobile = $1
+      ORDER BY id DESC LIMIT 200`, [m]);
+
+  // Delivery state belongs on the message it describes, not in a second list
+  // the reader has to join up by eye.
+  const latest = new Map();
+  for (const s of statuses.rows) {
+    if (!latest.has(s.wa_message_id)) latest.set(s.wa_message_id, s);
+  }
+
+  return rows.map(r => ({
+    ...r,
+    id: String(r.id),
+    delivery: r.wa_message_id ? latest.get(r.wa_message_id) || null : null,
+  }));
+}
+
+/**
+ * The heartbeat the panel polls.
+ *
+ * Returns only what changed since the caller's last id, plus the few counters
+ * the header shows. Deliberately small: this runs every few seconds all day.
+ */
+async function pulse({ sinceMessageId = null } = {}) {
+  const since = sinceMessageId && /^\d+$/.test(String(sinceMessageId))
+    ? String(sinceMessageId) : null;
+
+  const { rows } = await db.query(
+    `SELECT m.id, m.mobile, m.direction, m.message_type, m.body, m.error_message,
+            m.created_at, s.profile_name, s.state
+       FROM whatsapp_messages m
+       LEFT JOIN whatsapp_sessions s ON s.mobile = m.mobile
+      WHERE ($1::bigint IS NULL OR m.id > $1::bigint)
+      ORDER BY m.id DESC LIMIT 40`, [since]);
+
+  const counts = await db.one(
+    `SELECT
+       (SELECT max(id) FROM whatsapp_messages)                          AS last_message_id,
+       (SELECT count(*) FROM whatsapp_sessions
+         WHERE last_inbound_at > now() - interval '15 minutes')         AS active_15m,
+       (SELECT count(*) FROM whatsapp_sessions
+         WHERE last_inbound_at > now() - interval '24 hours')           AS active_24h,
+       (SELECT count(*) FROM payments
+         WHERE status = 'created' AND created_at > now() - interval '30 minutes') AS paying_now,
+       (SELECT count(*) FROM event_log
+         WHERE kind = 'vehicle_check' AND created_at > now() - interval '15 minutes') AS checks_15m`);
+
+  return {
+    messages: rows.reverse().map(r => ({ ...r, id: String(r.id) })),
+    last_message_id: counts.last_message_id ? String(counts.last_message_id) : null,
+    active_15m: Number(counts.active_15m),
+    active_24h: Number(counts.active_24h),
+    paying_now: Number(counts.paying_now),
+    checks_15m: Number(counts.checks_15m),
+    at: new Date().toISOString(),
+  };
+}
+
+/** The most recent things that happened, whatever kind they were. */
+async function activity({ limit = 50 } = {}) {
+  const { rows } = await db.query(
+    `SELECT e.id, e.kind, e.detail, e.created_at, u.mobile, u.wa_profile_name AS name,
+            v.reg_no
+       FROM event_log e
+       LEFT JOIN users u ON u.id = e.user_id
+       LEFT JOIN vehicles v ON v.id = e.vehicle_id
+      WHERE e.kind <> 'funnel'
+      ORDER BY e.id DESC LIMIT $1`, [Math.min(200, limit)]);
+  return rows.map(r => ({ ...r, id: String(r.id) }));
+}
+
+module.exports = { conversations, thread, pulse, activity };

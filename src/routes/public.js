@@ -105,3 +105,6 @@ router.post('/policies/refresh', (_req, res) => {
 });
 
 module.exports = router;
+// The admin panel clears this after editing policy text: an edit nobody can
+// see for ten minutes looks like an edit that failed.
+module.exports.refresh = () => { cached = null; };

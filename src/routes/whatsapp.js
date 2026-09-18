@@ -31,6 +31,7 @@ const sig = require('../whatsapp/signature');
 const store = require('../whatsapp/store');
 const flow = require('../whatsapp/flow');
 const send = require('../whatsapp/send');
+const blocks = require('../admin/blocks');
 
 const router = express.Router();
 const wa = config.whatsapp;
@@ -93,6 +94,13 @@ async function handle(body) {
         // Testing guard: a number outside WHATSAPP_ALLOWED_RECIPIENTS is recorded
         // above but never moved through the flow, so its session state stays
         // untouched for when the bot opens to everyone.
+        // Blocked numbers are still RECORDED — a blocked number that abuses the
+        // service is exactly the one whose messages may be needed later — but
+        // nothing is ever said back to them.
+        if (rec && await blocks.isBlocked('mobile', rec.mobile)) {
+          console.log('[wa] %s is blocked — recorded, not answered', rec.mobile);
+          continue;
+        }
         if (rec && wa.replyEnabled && !send.allowed(rec.mobile)) {
           console.log('[wa] %s not in allowed recipients — recorded, not answered', rec.mobile);
           continue;

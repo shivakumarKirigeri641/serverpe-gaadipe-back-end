@@ -32,6 +32,8 @@ const reconcileJob = require('./jobs/reconcile');
 const whatsappRoutes = require('./routes/whatsapp');
 const paymentRoutes = require('./routes/payments');
 const checkoutRoutes = require('./routes/checkout');
+const adminRoutes = require('./routes/adminApi');
+const siteRoutes = require('./routes/siteApi');
 
 validate();   // fail at boot, not mid-request
 
@@ -45,6 +47,34 @@ app.use(express.json({
   limit: '256kb',
   verify: (req, _res, buf) => { req.rawBody = buf; },
 }));
+
+/* ------------------------------------------------------------------- admin */
+/**
+ * The admin panel is a separate front-end on its own origin, so the browser
+ * will not send its requests unless this server names that origin. Only the
+ * origins in ADMIN_ORIGINS are answered — a wildcard here would let any website
+ * a signed-in admin happens to visit call this API with their session.
+ */
+const cors = (allowedOrigins) => (req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && allowedOrigins.includes(origin.replace(/\/+$/, ''))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Max-Age', '600');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+};
+
+app.use('/admin/api', cors(config.admin.origins), adminRoutes);
+
+/* ------------------------------------------------------------- the website */
+// gaadipe.in, where a customer signs in with their own number to see their
+// vehicles, reports and invoices. Same data as WhatsApp, second door.
+app.use('/site/api', cors(config.site.origins), siteRoutes);
 
 /* ------------------------------------------------------------------ public */
 // Legal pages the website reads. No API key: Meta checks the privacy-policy

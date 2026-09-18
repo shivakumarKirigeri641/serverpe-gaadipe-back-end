@@ -28,6 +28,7 @@ const store = require('../vehicle/store');
 const send = require('../whatsapp/send');
 const report = require('../whatsapp/report');
 const settings = require('../util/settings');
+const blocks = require('../admin/blocks');
 
 const MS_MIN = 60 * 1000;
 
@@ -131,6 +132,17 @@ async function alreadySaid(watchId, key) {
 }
 
 async function checkOne(w) {
+  // Blocked while the watch was running: stop here rather than spending a
+  // lookup and then discovering the message cannot be sent.
+  const blocked = await blocks.anyBlocked({ mobile: w.mobile, regNo: w.reg_no });
+  if (blocked) {
+    console.log('[watch] skipping %s — %s is blocked', w.reg_no, blocked);
+    await db.query(
+      `UPDATE watches SET challan_next_check_at = now() + interval '6 hours', modified_at = now()
+        WHERE id = $1`, [w.id]);
+    return { sent: false, blocked };
+  }
+
   let data;
   try {
     data = await gateway.full(w.reg_no);

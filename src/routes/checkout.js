@@ -34,6 +34,7 @@ const fs = require('fs');
 const router = express.Router();
 
 const WA_NUMBER = process.env.WHATSAPP_BUSINESS_PHONENUMBER || '916363271302';
+const SITE_URL = (process.env.PUBLIC_SITE_URL || 'https://gaadipe.in').replace(/\/+$/, '');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
   c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -168,6 +169,12 @@ router.get('/pay/:token', safe(async (req, res) => {
     .toLowerCase().replace(/\b([a-z])/g, m => m.toUpperCase());
 
   const isReport = pay.plan_kind === 'report';
+  /* A payment started on the website must end on the website: sending a web
+     customer to WhatsApp would hand them to a different product than the one
+     they were using. The channel was recorded when the order was created. */
+  const backUrl = pay.raw?.channel === 'web' && pay.reg_no
+    ? `${SITE_URL}/app/vehicle/${encodeURIComponent(pay.reg_no)}`
+    : null;
   const validDays = await settings.num('report_valid_days', 7);
   const planLine = isReport
     ? 'Full vehicle report'
@@ -191,8 +198,10 @@ router.get('/pay/:token', safe(async (req, res) => {
   <p class="muted" style="margin:0 0 14px">${isReport
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is on its way to your WhatsApp chat.`
     : 'Your confirmation is on its way to your WhatsApp chat.'}
-  Opening WhatsApp…</p>
-  ${waButton('Open WhatsApp')}
+  ${backUrl ? 'Taking you back to it…' : 'Opening WhatsApp…'}</p>
+  ${backUrl
+    ? `<button onclick="location.href=${JSON.stringify(backUrl)}">See my report</button>`
+    : waButton('Open WhatsApp')}
 </div>
 
 <div id="main">
@@ -237,7 +246,9 @@ router.get('/pay/:token', safe(async (req, res) => {
     document.getElementById('main').style.display = 'none';
     document.getElementById('done').style.display = 'block';
     window.scrollTo(0, 0);
-    setTimeout(openWhatsApp, 600);
+    ${backUrl
+      ? `setTimeout(function () { location.href = ${JSON.stringify(backUrl)}; }, 900);`
+      : 'setTimeout(openWhatsApp, 600);'}
   }
   btn.onclick = function () {
     btn.disabled = true; err.textContent = '';
