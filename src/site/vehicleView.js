@@ -5,11 +5,11 @@
  * and a second implementation of that rule is how a free check quietly starts
  * showing paid detail.
  *
- * The rules are the same ones the WhatsApp report follows:
+ * The rules:
  *   never, to anyone   chassis, engine, the owner's name
- *   free               identity, document expiry dates, challan and FASTag totals
- *   paid               financer, blacklist and NOC, masked document numbers,
- *                      the challan list with offence and place
+ *   free               what the vehicle is, and WHICH documents have lapsed
+ *   paid               every date, the challan list, financer, blacklist, NOC,
+ *                      document references and FASTag
  */
 
 const report = require('../whatsapp/report');
@@ -25,12 +25,14 @@ const maskNumber = report.maskNumber;
  * loan recorded" has no reason left to pay, and a free check that answers the
  * question is not a funnel, it is the product given away.
  *
- * So the free check answers one question only: is this the vehicle I am looking
- * at? Maker, model and variant, fuel and class. Then it says HOW MANY things
- * need attention — enough to know it matters, never enough to act on.
+ * So the free check answers two questions and stops. Is this the vehicle I am
+ * looking at — maker, model and variant, fuel and class. And is anything
+ * plainly wrong with it — which documents have lapsed, by name.
  *
- * Counts are not values: "2 documents need attention" tells nobody which, or
- * when, or what it will cost to put right.
+ * A NAME WITHOUT A DATE cannot be acted on. "Insurance expired" is a fact a
+ * buyer is entitled to before paying, and it is what makes the free check worth
+ * running; when it expired, what else is due, what the challans come to and
+ * whether there is a loan on it are the report.
  */
 function basic(data) {
   const rc = data.rc || {};
@@ -49,10 +51,18 @@ function basic(data) {
       vehicle_class: rc.vehicle_class || null,
       fuel: rc.fuel || null,
     },
-    /* How much is wrong, never what. */
+    /*
+     * WHAT is wrong, never WHEN or BY HOW MUCH.
+     *
+     * "Insurance expired" is a fact a buyer is entitled to before paying, and
+     * saying it plainly is what makes the check worth running. The date it
+     * expired, how long ago, the policy behind it and what else is due — those
+     * are the report. A label without a date cannot be acted on: it can only be
+     * verified by buying, or by asking the seller a much better question.
+     */
     found: {
-      documents_expired: docs.filter(d => d.days < 0).length,
-      documents_due: docs.filter(d => d.days >= 0 && d.days <= 60).length,
+      expired: docs.filter(d => d.days < 0).map(d => d.label),
+      due_soon: docs.filter(d => d.days >= 0 && d.days <= 60).map(d => d.label),
       documents_total: docs.length,
       challans_pending: c.pending_count ?? 0,
       has_record: docs.length > 0,

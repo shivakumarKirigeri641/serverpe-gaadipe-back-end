@@ -55,6 +55,8 @@ const tokenOf = (req) => (req.get('authorization') || '').replace(/^Bearer\s+/i,
 /* ---------------------------------------------------------------- public */
 
 /** What a report costs, so the page never hard-codes a price that can change. */
+router.get('/declaration', (_req, res) => res.json({ text: DECLARATION }));
+
 router.get('/pricing', safe(async (_req, res) => {
   const plan = await billing.reportPlan();
   const validDays = await settings.num('report_valid_days', 7);
@@ -172,12 +174,27 @@ router.get('/vehicles', safe(async (req, res) => {
       WHERE uv.user_id = $1
       ORDER BY uv.last_checked_at DESC NULLS LAST`, [req.user.id]);
 
+  /*
+   * THE LIST OBEYS THE PAYWALL TOO. It used to send every expiry date for every
+   * vehicle — paid or not — so "My vehicles" quietly showed what the free check
+   * was careful to hide. Dates now travel only with a valid report; otherwise
+   * the list says which documents have lapsed, by name, and nothing more.
+   */
+  const report = require('../whatsapp/report');
+  const DATES = ['insurance_upto', 'pucc_upto', 'fitness_upto', 'tax_upto', 'permit_upto'];
   res.json({
-    rows: rows.map(r => ({
-      ...r,
-      report_id: r.report_id ? String(r.report_id) : null,
-      check_count: Number(r.check_count || 0),
-    })),
+    rows: rows.map((r) => {
+      const paid = Boolean(r.report_id);
+      const docs = report.documentsOf(r);
+      const out = {
+        ...r,
+        report_id: r.report_id ? String(r.report_id) : null,
+        check_count: Number(r.check_count || 0),
+        expired: docs.filter(d => d.days < 0).map(d => d.label),
+      };
+      if (!paid) for (const k of DATES) delete out[k];
+      return out;
+    }),
   });
 }));
 
@@ -201,9 +218,14 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
     });
   }
 
+  // The same offer as a fresh check: a vehicle opened from "My vehicles" is
+  // exactly as buyable as one just typed in, and the page should say so.
+  const plan = await billing.reportPlan();
   res.json({
     vehicle: paid ? view.full(data) : view.basic(data),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
+    can_buy: Boolean(plan && razorpay.configured() && !paid),
+    price_paise: plan?.price_paise ?? null,
   });
 }));
 
@@ -265,9 +287,24 @@ router.post('/check', safe(async (req, res) => {
  * activated, invoiced and delivered by exactly the code that has already been
  * proved on WhatsApp, including the webhook and the reconciler.
  */
+/**
+ * THE DECLARATION. The report states that its requester confirmed the vehicle
+ * and its owner are known to them; that sentence is only true if it was asked.
+ * So it is asked, it cannot be skipped, and the answer is recorded with the
+ * exact words shown, the time and the device — a checkbox the browser claims
+ * was ticked is not the same as a checkbox the server required.
+ */
+const DECLARATION = 'I confirm this vehicle is mine, or that its owner is known to me, and that '
+  + 'I am requesting its details for a lawful purpose. I take responsibility for how I use them.';
+
 router.post('/buy', safe(async (req, res) => {
   const parsed = plate.parse(req.body?.reg_no);
   if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+
+  if (req.body?.declared !== true) {
+    return res.status(400).json({ error: 'declaration_required',
+      message: 'Please confirm that this vehicle is yours or that its owner is known to you.' });
+  }
 
   const existing = await reports.validFor(req.user.id, parsed.regNo);
   if (existing) {
@@ -305,6 +342,7 @@ router.post('/buy', safe(async (req, res) => {
       [req.user.id, vehicle.id, JSON.stringify({
         mobile: req.user.mobile, reg_no: parsed.regNo, amount_paise: plan.price_paise,
         plan: plan.code, channel: 'web', documents: ['terms', 'refund', 'privacy'],
+        declaration: DECLARATION, declared: true,
         ip: req.ip, user_agent: req.get('user-agent') || null, at: new Date().toISOString() })]);
 
     const pending = await billing.createPending({
