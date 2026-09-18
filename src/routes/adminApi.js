@@ -592,6 +592,28 @@ router.get('/feedback', safe(async (req, res) => {
                                     user_id: r.user_id ? String(r.user_id) : null })) });
 }));
 
+/* -------------------------------------------------------------- security */
+
+/* Everything the guard refused or slowed down (user, 2026-09-18). */
+router.get('/security-events', safe(async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT e.*, count(*) OVER () AS total_rows FROM security_events e
+      WHERE ($1 = '' OR e.kind = $1) AND ($2 = '' OR e.ip = $2)
+      ORDER BY e.id DESC LIMIT $3 OFFSET $4`,
+    [String(req.query.kind || ''), String(req.query.ip || ''),
+     Math.min(200, Number(req.query.limit) || 25), Number(req.query.offset) || 0]);
+  const summary = await db.one(
+    `SELECT count(*) FILTER (WHERE created_at > now() - interval '1 day')::int AS today,
+            count(*) FILTER (WHERE created_at > now() - interval '1 day' AND severity = 'high')::int AS serious_today,
+            count(DISTINCT ip) FILTER (WHERE created_at > now() - interval '1 day')::int AS ips_today,
+            count(*)::int AS total
+       FROM security_events`);
+  const device = require('../site/device');
+  res.json({ total: rows[0] ? Number(rows[0].total_rows) : 0, summary,
+             rows: rows.map(({ total_rows, ...r }) => ({ ...r, id: String(r.id), user_id: r.user_id ? String(r.user_id) : null,
+               place: device.placeOf(device.locate(r.ip)), described: device.describe(device.parseUA(r.user_agent)) })) });
+}));
+
 /* ------------------------------------------------------ contact messages */
 
 /* What the website's "Contact us" form sent (user, 2026-09-18). */

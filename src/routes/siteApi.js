@@ -287,6 +287,13 @@ router.post('/check', safe(async (req, res) => {
   const parsed = plate.parse(req.body?.reg_no);
   if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
 
+  // Many DIFFERENT vehicles from one account or address in an hour is scraping.
+  const scan = await require('../security/guard').noteVehicleCheck(req, parsed.regNo);
+  if (!scan.ok) {
+    return res.status(429).json({ error: 'too_many_vehicles',
+      message: 'You have checked a lot of vehicles in a short time. Please try again in an hour.' });
+  }
+
   if (await blocks.isBlocked('vehicle', parsed.regNo)) {
     return res.status(403).json({ error: 'blocked',
       message: 'This vehicle cannot be checked. If it is yours, please write to support@gaadipe.in.' });
@@ -365,6 +372,26 @@ router.post('/buy', safe(async (req, res) => {
     return res.status(400).json({ error: 'declaration_required',
       message: 'Please confirm that this vehicle is yours or that its owner is known to you.' });
   }
+
+  /*
+   * WHO IS BUYING, FOR THE INVOICE (user, 2026-09-18): the name printed under
+   * "Billed to", and the state or union territory — the place of supply, which
+   * decides CGST+SGST (Karnataka) or IGST (anywhere else). Asked before Pay now,
+   * remembered on the account for next time, and kept on the payment so the
+   * invoice says what was entered for THIS purchase.
+   */
+  const { STATES } = require('../pay/invoice');
+  const buyerName = String(req.body?.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const buyerState = String(req.body?.state_code || '').replace(/\D/g, '').padStart(2, '0');
+  if (buyerName.length < 2) {
+    return res.status(400).json({ error: 'name_required', message: 'Please enter your name for the invoice.' });
+  }
+  if (!STATES[buyerState]) {
+    return res.status(400).json({ error: 'state_required', message: 'Please choose your state or union territory.' });
+  }
+  await db.query(
+    `UPDATE users SET display_name = $2, state_code = $3, modified_at = now() WHERE id = $1`,
+    [req.user.id, buyerName, buyerState]);
 
   const existing = await reports.validFor(req.user.id, parsed.regNo);
   if (existing) {
@@ -445,6 +472,10 @@ router.post('/buy', safe(async (req, res) => {
   }
 
   await consent(row.id);
+  // This purchase's buyer, as entered — the invoice reads it from here.
+  await db.query(
+    `UPDATE payments SET raw = COALESCE(raw,'{}'::jsonb) || $2::jsonb WHERE id = $1`,
+    [row.id, JSON.stringify({ buyer_name: buyerName, buyer_state_code: buyerState })]);
 
   res.json({ ok: true, pay_path: `/pay/${row.checkout_token}`,
              pay_url: base ? `${base}/pay/${row.checkout_token}` : null,

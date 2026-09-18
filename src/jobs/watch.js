@@ -264,7 +264,15 @@ async function eveningDigest() {
       mobile: person.mobile, wa_profile_name: person.name, preferred_language: person.preferred_language,
       reg_no: regs.length === 1 ? regs[0] : `${regs[0]} +${regs.length - 1} more`,
     };
-    await notify(w, ok, summary, byVehicle);
+    const r = await notify(w, ok, summary, byVehicle);
+    if (!r?.ok) {
+      // Nothing delivered: the findings stay queued for tomorrow evening, and
+      // today is marked so this does not retry every minute.
+      await db.query(
+        `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'watch_digest', $2)`,
+        [person.user_id, JSON.stringify({ ist_date: today, vehicles: regs, failed: true, error: String(r?.error || '').slice(0, 300) })]);
+      continue;
+    }
 
     await db.query(`UPDATE pending_alerts SET sent_at = now() WHERE id = ANY($1::bigint[])`, [ok.map((i) => i.id)]);
     for (const [reg, list] of byVehicle) {
@@ -304,7 +312,7 @@ async function notify(w, items, summary, byVehicle = null) {
       : `🔔 *${w.reg_no}*\n\n${summary}`;
     await send.text(w.mobile, `🔔 *Today's update from GaadiPe*\n\n${body}\n\n`
       + 'Open gaadipe.in to see the full record.');
-    return;
+    return { ok: true, template: null };
   }
 
   /*
@@ -332,14 +340,18 @@ async function notify(w, items, summary, byVehicle = null) {
   attempts.push({ name: await settings.get('template_vehicle_alert_fallback', 'gp_vehicle_alert_v2'),
                   language: 'en', params: [name, w.reg_no, summary, checkedOn] });
 
-  for (const t of attempts) {
+  /* ANYTHING GOES WRONG, THE FALLBACK IS TRIED (user, 2026-09-18) — not only a
+     template error: the language template may be pending, paused, renamed or
+     simply refused, and the customer should still hear. The fallback is the
+     last attempt and is always an approved template. */
+  for (let i = 0; i < attempts.length; i++) {
+    const t = attempts[i];
     const r = await send.template(w.mobile, t.name, t.params, { language: t.language });
-    if (r.ok) return;
-    // 1320xx is Meta saying the TEMPLATE is the problem (missing, unapproved,
-    // paused, wrong parameters). Anything else — a bad number, an outage — would
-    // fail the same way with the next template, so stop there.
-    if (!/13200[0-9]|13201[0-9]/.test(String(r.error || ''))) return;
-    console.warn('[watch] template %s (%s) refused — trying the next: %s', t.name, t.language, r.error);
+    if (r.ok) return { ok: true, template: t.name };
+    const last = i === attempts.length - 1;
+    console.warn('[watch] template %s (%s) failed%s: %s', t.name, t.language,
+      last ? ' — no fallback left' : ' — trying the fallback', r.error);
+    if (last) return { ok: false, error: r.error };
   }
 }
 

@@ -145,6 +145,52 @@ function repair(regNo) {
 }
 
 /**
+ * What makes a well-shaped number impossible, per kind — or null.
+ *
+ *   standard  KA01AB1234 · KA31N8147 · KA010001 — a real State/UT code, an RTO
+ *             code of 01–99, up to three series letters, a serial of 1–9999.
+ *   Delhi     DL3CAB1234 · DL10CA1234 — the same, but the RTO code is 1–2
+ *             digits as issued, and a series is required: Delhi numbers always
+ *             carry the vehicle-category letter (C, S, …) after the RTO code.
+ *   bh        22BH1234AB — the Bharat series: two-digit year of registration
+ *             (2021, when the scheme began, up to this year), BH, a four-digit
+ *             serial that is not 0000, one or two letters (never I or O).
+ *   legacy    MYS123 · BMR3411 · CRW1461 — before 1989: two or three letters
+ *             and a serial of 1–9999.
+ */
+function strictProblem(shape) {
+  const zero = (s) => /^0+$/.test(String(s || ''));
+  if (shape.format === 'standard') {
+    const [state, district, series, serial] = shape.parts;
+    if (zero(serial)) return 'The last part of a vehicle number cannot be 0000. It should look like KA01AB1234.';
+    if (state === 'DL') {
+      if (zero(district)) return 'That is not a Delhi RTO code. A Delhi number looks like DL3CAB1234 or DL10CA1234.';
+      if (!series) return 'A Delhi number has letters after the RTO code, like DL3CAB1234.';
+      return null;
+    }
+    if (zero(district)) return `${state}00 is not an RTO code. It should look like ${state}01AB1234.`;
+    return null;
+  }
+  if (shape.format === 'bh') {
+    const [year, , serial, letters] = shape.parts;
+    const y = Number(year);
+    const thisYear = new Date().getFullYear() % 100;
+    if (y < 21 || y > thisYear) {
+      return `A BH-series number starts with its year of registration (21 to ${thisYear}), like 22BH1234AB.`;
+    }
+    if (zero(serial)) return 'The four digits of a BH-series number cannot be 0000. It should look like 22BH1234AB.';
+    if (/[IO]/.test(letters)) return 'BH-series letters never include I or O. It should look like 22BH1234AB.';
+    return null;
+  }
+  if (shape.format === 'legacy') {
+    const [, serial] = shape.parts;
+    if (zero(serial)) return 'The number part cannot be zero. An old-style number looks like MYS1234.';
+    return null;
+  }
+  return null;
+}
+
+/**
  * Normalise, repair and validate together.
  * Returns { ok, regNo, pretty, format, repaired, error }.
  * `error` is written to be shown to a person as-is.
@@ -153,7 +199,7 @@ function parse(input) {
   const raw = normalize(input);
 
   if (!raw) {
-    return { ok: false, regNo: '', error: 'Please send the vehicle number, for example *KA02EX1480*.' };
+    return { ok: false, regNo: '', error: 'Please enter the vehicle number, for example KA01AB1234.' };
   }
 
   const regNo = repair(raw);
@@ -161,15 +207,15 @@ function parse(input) {
 
   if (regNo.length < 5) {
     return { ok: false, regNo, repaired,
-      error: `*${regNo}* looks too short for a vehicle number. Please check and send it again.` };
+      error: `${regNo} looks too short for a vehicle number. Please check it and try again.` };
   }
   if (regNo.length > 11) {
     return { ok: false, regNo, repaired,
-      error: `*${regNo}* looks too long for a vehicle number. Please send only the number, for example *KA02EX1480*.` };
+      error: `${regNo} looks too long for a vehicle number. Enter only the number, for example KA01AB1234.` };
   }
   if (!isValid(regNo)) {
     return { ok: false, regNo, repaired,
-      error: 'A vehicle number can only contain letters and digits. Please send it again.' };
+      error: 'A vehicle number can only contain letters and digits. Please try again.' };
   }
 
   const shape = shapeOf(regNo);
@@ -179,8 +225,8 @@ function parse(input) {
     const looksStateLike = /^[A-Z]{2}/.test(regNo);
     return { ok: false, regNo, repaired,
       error: looksStateLike && !STATE_CODES.has(regNo.slice(0, 2))
-        ? `I do not recognise *${regNo.slice(0, 2)}* as a State code. Please check the number and send it again.`
-        : `*${regNo}* does not look like a vehicle number. Please send it like *KA02EX1480*.` };
+        ? `${regNo.slice(0, 2)} is not a State code we recognise. Please check the number and try again.`
+        : `${regNo} does not look like a vehicle number. It should look like KA01AB1234.` };
   }
 
   /*
@@ -189,9 +235,22 @@ function parse(input) {
    * plate's serial is padded here, once, and every caller — the booking form,
    * the gate, a check from the panel — uses the same number.
    */
+  /*
+   * STRICT CHECKS, per kind (user, 2026-09-18). The shape can be right while
+   * the number is impossible: an RTO code of 00, a serial of 0000, a BH plate
+   * from a year before the scheme existed. Each is refused here, with a sentence
+   * that says what a correct one looks like, before a lookup is spent on it.
+   */
+  const bad = strictProblem(shape);
+  if (bad) return { ok: false, regNo, repaired, error: bad };
+
   if (shape.format === 'standard') {
     const [state, district, series, serial] = shape.parts;
-    const full = `${state}${district}${series}${serial.padStart(4, '0')}`;
+    /* THE RTO CODE IS TWO DIGITS (user, 2026-09-18): KA1AB1234 is KA01AB1234 on
+       VAHAN, GJ5CD45 is GJ05CD0045. Delhi is the exception — its records keep
+       the single digit (DL3CAB1234) — so it is left as typed. */
+    const rto = state === 'DL' ? district : String(district).padStart(2, '0');
+    const full = `${state}${rto}${series}${serial.padStart(4, '0')}`;
     return { ok: true, regNo: full, pretty: pretty(full), format: shape.format, repaired: repaired || full !== raw, error: null };
   }
 

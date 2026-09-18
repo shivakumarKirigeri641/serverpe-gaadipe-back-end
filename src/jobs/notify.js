@@ -265,6 +265,71 @@ async function feedback() {
   return n;
 }
 
+/* ─────────────────────────────────────────────────────────── security ──
+   Misbehaviour, batched (user, 2026-09-18): every event since the last security
+   email, grouped by what happened and from where, at most one email per
+   `security_alert_cooldown_minutes`. A flood becomes one email, not a thousand. */
+
+const SECURITY_WORDS = {
+  rate_limit: 'Too many requests from one address',
+  blocked_ip: 'Address blocked for flooding',
+  loop: 'The same request repeated in a loop',
+  scraping: 'Scraping pattern — many different vehicles checked',
+  bot: 'Automation tool on the site API (curl, Python, headless browser…)',
+  plain_request: 'Tried to call the API without encryption',
+  bad_envelope: 'Tampered or undecryptable request',
+  replay: 'Replayed request (copied and sent again)',
+};
+
+async function security() {
+  if (!(await on('notify_security'))) return 0;
+  const last = await db.one(
+    `SELECT coalesce(max(ref::bigint), 0) AS upto, max(sent_at) AS at FROM admin_notifications
+      WHERE kind = 'security' AND status = 'sent'`);
+  const cooldown = await settings.num('security_alert_cooldown_minutes', 15);
+  if (last.at && Date.now() - new Date(last.at).getTime() < cooldown * 60 * 1000) return 0;
+
+  const { rows } = await db.query(
+    `SELECT * FROM security_events WHERE id > $1 ORDER BY id LIMIT 500`, [last.upto]);
+  if (!rows.length) return 0;
+  const upto = rows[rows.length - 1].id;
+
+  return (await deliver('security', upto, async () => {
+    const groups = new Map();
+    for (const e of rows) {
+      const k = `${e.kind}|${e.ip || '?'}`;
+      const g = groups.get(k) || { kind: e.kind, ip: e.ip, n: 0, first: e.created_at, last: e.created_at,
+        severity: e.severity, surface: e.surface, mobile: e.mobile, path: e.path, ua: e.user_agent, detail: e.detail };
+      g.n += 1; g.last = e.created_at;
+      if (e.severity === 'high') g.severity = 'high';
+      groups.set(k, g);
+    }
+    const list = [...groups.values()].sort((a, b) => (b.severity === 'high') - (a.severity === 'high') || b.n - a.n);
+    const high = list.some((g) => g.severity === 'high');
+    return {
+      subject: `${high ? '🚨' : '⚠️'} Security · ${rows.length} event${rows.length === 1 ? '' : 's'} · ${list.map((g) => g.kind).filter((v, i, a) => a.indexOf(v) === i).join(', ')}`,
+      ...T.layout({
+        badge: { text: high ? 'Needs a look' : 'For your information', tone: high ? 'wrong' : 'watch' },
+        title: `${rows.length} suspicious request${rows.length === 1 ? '' : 's'} since the last alert`,
+        lead: 'GaadiPe refused or slowed these down automatically. Nothing needs doing unless it keeps coming from the same place — then block that number or vehicle in the panel.',
+        stats: [['Events', String(rows.length)], ['Addresses', String(new Set(rows.map((r) => r.ip)).size)],
+                ['Serious', String(rows.filter((r) => r.severity === 'high').length)]],
+        sections: list.slice(0, 12).map((g) => ({
+          heading: `${SECURITY_WORDS[g.kind] || g.kind}${g.severity === 'high' ? ' — serious' : ''}`,
+          rows: [
+            ['Times', String(g.n)], ['From IP', g.ip], ['Place (approximate)', device.placeOf(device.locate(g.ip))],
+            ['When', g.n > 1 ? `${T.ist(g.first)} → ${T.ist(g.last)}` : T.ist(g.last)],
+            ['Where', `${g.surface || '—'} · ${g.path || '—'}`], ['Customer', g.mobile ? T.mobile(g.mobile) : null],
+            ['Client', g.ua], ['Detail', g.detail ? JSON.stringify(g.detail).slice(0, 300) : null],
+          ],
+        })),
+        cta: { label: 'Open the security log', path: '/security' },
+        footer: `At most one security email every ${cooldown} minutes. Limits and this alert are under Settings → Security in the admin panel.`,
+      }),
+    };
+  })) ? 1 : 0;
+}
+
 /* ──────────────────────────────────────────────────────── daily summary ── */
 
 async function dailySummary() {
@@ -332,7 +397,7 @@ async function dailySummary() {
 async function runOnce() {
   if (!mailer.configured()) return { skipped: 'mail not configured' };
   const out = {};
-  for (const [k, fn] of Object.entries({ signIns, payments, contacts, feedback, dailySummary })) {
+  for (const [k, fn] of Object.entries({ signIns, payments, contacts, feedback, security, dailySummary })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
   const total = Object.values(out).reduce((t, v) => t + (Number(v) || 0), 0);
@@ -356,4 +421,4 @@ function start(everySeconds = 30) {
   console.log(`  admin email: every ${everySeconds}s from ${process.env.NOREPLYMAIL}`);
 }
 
-module.exports = { start, runOnce, signIns, payments, contacts, feedback, dailySummary };
+module.exports = { start, runOnce, signIns, payments, contacts, feedback, security, dailySummary };

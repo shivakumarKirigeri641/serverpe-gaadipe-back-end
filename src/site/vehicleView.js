@@ -118,6 +118,16 @@ function full(data) {
       active: /^A/i.test(tag.status || tag.tag_status || ''),
       balance: tag.balance ?? null,
       issued_on: tag.issue_date || null,
+      // Every tag on record, active first — one vehicle often has an old closed
+      // tag and a live one, and showing only one misleads either way.
+      tags: (data.fastag?.tags || []).map((t) => ({
+        tag_id: t.tag_id || t.tid || null,
+        status: t.status || t.tag_status || null,
+        active: t.is_active === true || /^A/i.test(t.status || t.tag_status || ''),
+        issued_on: t.issue_date || null,
+        vehicle_class: t.vehicle_class || null,
+        bank: t.bank_id || null,
+      })).sort((a, b) => Number(b.active) - Number(a.active)),
     } : null,
     checked_at: data.fetched_at || new Date().toISOString(),
   };

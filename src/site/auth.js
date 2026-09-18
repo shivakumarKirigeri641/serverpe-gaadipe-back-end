@@ -249,6 +249,7 @@ const publicUser = (u) => ({
   name: u.display_name || u.wa_profile_name || null,
   email: u.email || null,
   language: u.preferred_language || 'en',
+  state_code: u.state_code || null,
   joined_at: u.created_at,
 });
 
