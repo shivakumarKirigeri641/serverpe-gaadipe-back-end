@@ -59,6 +59,8 @@ async function forPayment({ paymentRowId, userId, vehicleId }) {
   return {
     // The declaration of purpose, exactly as it was shown and ticked.
     declaration: d.declaration || null,
+    declaration_language: d.declaration_language || 'en',
+    declaration_en: d.declaration_en || (d.declaration_language === 'hi' ? null : d.declaration) || null,
     declared: d.declared === true,
     declared_at: purchase?.created_at || d.at || null,
     declaration_ref: purchase ? `C-${purchase.id}` : null,

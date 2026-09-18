@@ -67,17 +67,21 @@ function consentBlock(doc, y, consent, { compact = false } = {}) {
 
   y = T.kvCard(doc, rows, y, { cols: 2 });
 
-  // The declaration itself, in the words the requester ticked.
-  const words = consent.declaration
+  // The declaration itself, in the words the requester ticked. A Hindi one is
+  // printed as its English text — the document font has no Devanagari — and
+  // says so, rather than implying the requester read English.
+  const inHindi = consent.declaration_language === 'hi';
+  const words = (inHindi ? consent.declaration_en : consent.declaration)
     || 'The requester confirmed that this vehicle and its owner are known to them, and that these '
        + 'details were requested for a lawful and legitimate purpose, taking full responsibility for their use.';
+  const said = inHindi ? ' (shown and accepted in Hindi; English text of the same declaration)' : '';
 
   if (!compact) {
     doc.fillColor(T.BRAND.ink).font(doc._F.bold).fontSize(7.8)
        .text('Declaration by the requester', T.M, y + 2, { width: W });
   }
   doc.fillColor(T.BRAND.body).font(doc._F.oblique).fontSize(7.8)
-     .text(`${compact ? 'Declared: ' : ''}“${words}”`, T.M, compact ? y + 2 : doc.y + 2,
+     .text(`${compact ? 'Declared: ' : ''}“${words}”${said}`, T.M, compact ? y + 2 : doc.y + 2,
        { width: W, align: 'justify' });
 
   // What the purchase meant, stated once, in plain terms. The invoice carries

@@ -55,7 +55,10 @@ const tokenOf = (req) => (req.get('authorization') || '').replace(/^Bearer\s+/i,
 /* ---------------------------------------------------------------- public */
 
 /** What a report costs, so the page never hard-codes a price that can change. */
-router.get('/declaration', (_req, res) => res.json({ text: DECLARATION }));
+router.get('/declaration', (req, res) => {
+  const language = langOf(req.query.lang);
+  res.json({ text: DECLARATIONS[language], language });
+});
 
 router.get('/pricing', safe(async (_req, res) => {
   const plan = await billing.reportPlan();
@@ -297,8 +300,20 @@ router.post('/check', safe(async (req, res) => {
  * exact words shown, the time and the device — a checkbox the browser claims
  * was ticked is not the same as a checkbox the server required.
  */
-const DECLARATION = 'I confirm this vehicle is mine, or that its owner is known to me, and that '
-  + 'I am requesting its details for a lawful purpose. I take responsibility for how I use them.';
+/*
+ * In both languages the site is read in. The customer ticks the words they
+ * READ, so those are what is recorded — with the English beside them, because
+ * the documents are English and a tax record should not depend on a
+ * translation being made later.
+ */
+const DECLARATIONS = {
+  en: 'I confirm this vehicle is mine, or that its owner is known to me, and that '
+    + 'I am requesting its details for a lawful purpose. I take responsibility for how I use them.',
+  hi: 'मैं पुष्टि करता/करती हूँ कि यह वाहन मेरा है, या इसके मालिक को मैं जानता/जानती हूँ, और मैं '
+    + 'इसकी जानकारी एक वैध उद्देश्य के लिए माँग रहा/रही हूँ। इसके उपयोग की पूरी ज़िम्मेदारी मेरी है।',
+};
+const langOf = (v) => (v === 'hi' ? 'hi' : 'en');
+const DECLARATION = DECLARATIONS.en;
 
 router.post('/buy', safe(async (req, res) => {
   const parsed = plate.parse(req.body?.reg_no);
@@ -351,7 +366,10 @@ router.post('/buy', safe(async (req, res) => {
     [req.user.id, vehicle.id, JSON.stringify({
       mobile: req.user.mobile, reg_no: parsed.regNo, amount_paise: plan.price_paise,
       plan: plan.code, channel: 'web', documents: ['terms', 'refund', 'privacy'],
-      declaration: DECLARATION, declared: true, payment_row: String(paymentRowId),
+      declaration: DECLARATIONS[langOf(req.body?.language)],
+      declaration_language: langOf(req.body?.language),
+      declaration_en: DECLARATION,
+      declared: true, payment_row: String(paymentRowId),
       ip: req.ip, user_agent: req.get('user-agent') || null, at: new Date().toISOString() })]);
 
   if (!row) {
