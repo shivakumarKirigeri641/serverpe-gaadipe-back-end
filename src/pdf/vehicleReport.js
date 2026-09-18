@@ -304,10 +304,22 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
          + 'and chassis and engine numbers are never disclosed.',
          T.M, y + 4, { width: W, align: 'justify' });
 
+    /* WHOSE COPY THIS IS (user, 2026-09-18): the buyer on every page, and a
+       tag in the file's own properties that ties it to the account even if the
+       visible lines are cropped. */
+    const digits = String(requester.mobile || '').replace(/\D/g, '');
+    const mark = report.sample ? 'SAMPLE · not issued to anyone'
+      : [`Issued to ${requester.name || 'customer'}`, digits ? `••••${digits.slice(-4)}` : null,
+         report.report_number, T.fmtDate(report.created_at || new Date())].filter(Boolean).join('  ·  ');
+    doc.info.Subject = `GaadiPe vehicle report ${report.report_number || ''}`.trim();
+    doc.info.Keywords = `gp:${require('crypto').createHmac('sha256', process.env.VEHICLE_LOOKUP_KEY || 'gaadipe')
+      .update(`${report.report_number}|${digits}`).digest('hex').slice(0, 16)}`;
+
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(range.start + i);
       T.watermark(doc);
+      T.personalMark(doc, mark);
       T.pageFurniture(doc, {
         page: i + 1, total: range.count, docNumber: report.report_number,
         generatedAt, business,

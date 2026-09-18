@@ -358,9 +358,36 @@ const watermark = (doc, text = "GaadiPe") => {
   doc.restore();   // restores opacity, fill, rotation
 };
 
+/* The buyer, woven into every page (user, 2026-09-18): a faint diagonal line
+   repeated across the page — "Issued to <name> · ••••2415 · RPT… · <date>".
+   Light enough to read through, impossible to crop out of a screenshot, so a
+   forwarded report always says whose it was. */
+const personalMark = (doc, line) => {
+  if (!line) return;
+  const W = doc.page.width, H = doc.page.height;
+  // Rotated lines run past the page edge, and pdfkit starts a new page when text
+  // passes the bottom margin — so the margins are opened wide while drawing.
+  const margins = { ...doc.page.margins };
+  const { x: px, y: py } = doc;
+  doc.page.margins = { top: 0, left: 0, right: 0, bottom: -10 * H };
+  doc.save();
+  doc.opacity(0.07);
+  doc.rotate(-32, { origin: [W / 2, H / 2] });
+  doc.fillColor(BRAND.ink).font(doc._F.regular).fontSize(8);
+  let row = 0;
+  for (let y = -H * 0.3; y < H * 1.3; y += 120, row += 1) {
+    for (let x = -W * 0.5; x < W * 1.2; x += 330) {
+      doc.text(line, x + (row % 2 ? 165 : 0), y, { width: 320, lineBreak: false });
+    }
+  }
+  doc.restore();
+  doc.page.margins = margins;
+  doc.x = px; doc.y = py;
+};
+
 module.exports = {
   BRAND, M, init, money, money0, fmtDate, fmtDateTime, titleCase, daysUntil, logoMark,
   card, label, kv, kvCard, sectionTitle, statCards, chip, table, header, pageFurniture,
-  ensureSpace, safeBottom, watermark,
+  ensureSpace, safeBottom, watermark, personalMark,
   iconCheck, iconLock,
 };

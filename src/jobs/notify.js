@@ -279,6 +279,8 @@ const SECURITY_WORDS = {
   plain_request: 'Tried to call the API without encryption',
   bad_envelope: 'Tampered or undecryptable request',
   replay: 'Replayed request (copied and sent again)',
+  key_misuse: 'Encryption key used from another browser, tool or account',
+  full_view_cap: 'Daily limit of full records reached by one account',
 };
 
 async function security() {

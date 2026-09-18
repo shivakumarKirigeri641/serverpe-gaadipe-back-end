@@ -35,7 +35,9 @@ const crypto = require('crypto');
 const settings = require('../util/settings');
 const { record } = require('./guard');
 
-const KEY_TTL_MS = 12 * 60 * 60 * 1000;
+/* 30 minutes, renewed silently by the page (user, 2026-09-18): a key lifted out
+   of a browser is useless within half an hour. */
+const KEY_TTL_MS = 30 * 60 * 1000;
 const MAX_SKEW_MS = 5 * 60 * 1000;
 const INFO = Buffer.from('gaadipe/tunnel/v1');
 
@@ -69,9 +71,18 @@ function open(key, text) {
   return JSON.parse(Buffer.concat([d.update(body), d.final()]).toString('utf8'));
 }
 
-/* Key token: { k: session key, e: expiry } sealed with the master key. */
-function issueToken(sessionKey) {
-  const payload = Buffer.concat([sessionKey, Buffer.from(String(Date.now() + KEY_TTL_MS))]);
+/*
+ * THE KEY BELONGS TO ONE BROWSER (user, 2026-09-18). The token carries a
+ * fingerprint of the browser that made the handshake — its user agent and the
+ * device id it keeps — so a key copied into a script, or into another browser,
+ * is refused and reported.
+ */
+const fingerprint = (req) => crypto.createHash('sha256')
+  .update(`${req.get('user-agent') || ''}|${req.get('x-gp-d') || ''}`).digest().subarray(0, 16);
+
+/* Key token: session key (32) · browser fingerprint (16) · expiry, sealed with the master key. */
+function issueToken(sessionKey, fp) {
+  const payload = Buffer.concat([sessionKey, fp, Buffer.from(String(Date.now() + KEY_TTL_MS))]);
   const iv = crypto.randomBytes(12);
   const c = crypto.createCipheriv('aes-256-gcm', masterKey(), iv);
   const body = Buffer.concat([c.update(payload), c.final()]);
@@ -79,19 +90,24 @@ function issueToken(sessionKey) {
 }
 function readToken(token) {
   const raw = Buffer.from(String(token || ''), 'base64url');
-  if (raw.length < 12 + 32 + 16) return null;
+  if (raw.length < 12 + 32 + 16 + 16) return null;
   try {
     const iv = raw.subarray(0, 12); const tag = raw.subarray(raw.length - 16); const body = raw.subarray(12, raw.length - 16);
     const d = crypto.createDecipheriv('aes-256-gcm', masterKey(), iv);
     d.setAuthTag(tag);
     const payload = Buffer.concat([d.update(body), d.final()]);
     const key = payload.subarray(0, 32);
-    const exp = Number(payload.subarray(32).toString());
-    return exp > Date.now() ? key : null;
+    const fp = payload.subarray(32, 48);
+    const exp = Number(payload.subarray(48).toString());
+    return exp > Date.now() ? { key, fp } : null;
   } catch {
     return null;
   }
 }
+
+/* Which signed-in session each key serves (see below). */
+const pins = new Map();
+setInterval(() => { const t = Date.now(); for (const [k, v] of pins) if (v.until < t) pins.delete(k); }, 60 * 1000).unref();
 
 /* Replay protection: every nonce is accepted once, within the skew window. */
 const seen = new Map();
@@ -124,7 +140,7 @@ function tunnel(surface, { exempt = () => false } = {}) {
         const key = Buffer.from(crypto.hkdfSync('sha256', shared, Buffer.concat([clientPub, serverPub]), INFO, 32));
         // `now` lets the page correct its own clock: a phone set five minutes
         // wrong would otherwise fail the replay check on every request.
-        return res.json({ k: issueToken(key), pub: b64(serverPub), ttl: KEY_TTL_MS, now: Date.now() });
+        return res.json({ k: issueToken(key, fingerprint(req)), pub: b64(serverPub), ttl: KEY_TTL_MS, now: Date.now() });
       } catch (e) {
         await record('bad_envelope', req, { surface, detail: { stage: 'handshake', error: e.message } });
         return res.status(400).json({ error: 'bad_handshake' });
@@ -133,8 +149,27 @@ function tunnel(surface, { exempt = () => false } = {}) {
 
     /* 2 · an encrypted call */
     if (req.method === 'POST' && req.path === '/_x') {
-      const key = readToken(req.get('x-gp-k'));
-      if (!key) return res.status(401).json({ error: 'rekey' });      // expired or restarted: the page redoes the handshake
+      const tok = readToken(req.get('x-gp-k'));
+      if (!tok) return res.status(401).json({ error: 'rekey' });      // expired or restarted: the page redoes the handshake
+      if (!crypto.timingSafeEqual(tok.fp, fingerprint(req))) {
+        // A key used from a browser other than the one it was made for.
+        await record('key_misuse', req, { surface, severity: 'high', detail: { reason: 'key used from a different browser or tool' } });
+        return res.status(401).json({ error: 'rekey' });
+      }
+      /* AND TO ONE SIGNED-IN SESSION: the first session a key is used with is
+         the only one it serves. The page agrees a new key when it signs in or
+         out, so a person never meets this; a key reused for another account does. */
+      const tokId = String(req.get('x-gp-k')).slice(0, 32);
+      const auth = req.get('authorization') ? crypto.createHash('sha256').update(req.get('authorization')).digest('hex') : null;
+      if (auth) {
+        const pinned = pins.get(tokId);
+        if (pinned && pinned.auth !== auth) {
+          await record('key_misuse', req, { surface, detail: { reason: 'key reused with a different signed-in session' } });
+          return res.status(401).json({ error: 'rekey' });
+        }
+        if (!pinned) pins.set(tokId, { auth, until: Date.now() + KEY_TTL_MS });
+      }
+      const key = tok.key;
       let env;
       try {
         env = open(key, req.body?.d);

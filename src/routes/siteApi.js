@@ -269,7 +269,7 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
   // exactly as buyable as one just typed in, and the page should say so.
   const plan = await billing.reportPlan();
   res.json({
-    vehicle: paid ? view.full(data) : view.basic(data),
+    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     can_buy: Boolean(plan && razorpay.configured() && !paid),
     price_paise: plan?.price_paise ?? null,
@@ -327,7 +327,7 @@ router.post('/check', safe(async (req, res) => {
 
   const plan = await billing.reportPlan();
   res.json({
-    vehicle: paid ? view.full(data) : view.basic(data),
+    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     can_buy: Boolean(plan && razorpay.configured() && !paid),
     price_paise: plan?.price_paise ?? null,
@@ -355,6 +355,33 @@ router.post('/check', safe(async (req, res) => {
  * the documents are English and a tax record should not depend on a
  * translation being made later.
  */
+/*
+ * A PAID RECORD, SERVED (user, 2026-09-18). Two protections on the full record:
+ *   · a daily cap per account (full_views_per_day_user). A paying customer opens
+ *     a handful; a scraper opens hundreds. Past the cap the basic view is shown
+ *     with a note — never an error, since they have paid — the PDF report stays
+ *     downloadable, and the admin hears about it.
+ *   · the account's watermark (security/watermark.js): the same data, fields in
+ *     an order unique to this account, so a leaked copy can be traced.
+ */
+async function fullRecord(req, regNo, data) {
+  const cap = await settings.num('full_views_per_day_user', 25);
+  const today = await db.one(
+    `SELECT count(*)::int AS n FROM event_log
+      WHERE user_id = $1 AND kind = 'full_view'
+        AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'`,
+    [req.user.id]);
+  if (today.n >= cap) {
+    await require('../security/guard').record('full_view_cap', req, {
+      surface: 'site', detail: { views_today: today.n, cap, reg_no: regNo } });
+    return { ...view.basic(data), limited: true, limit_per_day: cap };
+  }
+  await db.query(
+    `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'full_view', $2)`,
+    [req.user.id, JSON.stringify({ reg_no: regNo, ip: req.ip })]);
+  return require('../security/watermark').watermark(view.full(data), req.user.id);
+}
+
 const DECLARATIONS = {
   en: 'I confirm this vehicle is mine, or that its owner is known to me, and that '
     + 'I am requesting its details for a lawful purpose. I take responsibility for how I use them.',
