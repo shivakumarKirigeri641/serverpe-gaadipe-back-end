@@ -53,7 +53,9 @@ const fmtDate = (d) => {
  * so a fresh deployment never reissues a number.
  */
 async function nextNumber(c) {
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  // The date in INDIA: in UTC, anything issued before 5:30 am IST would carry
+  // yesterday's date — wrong on a tax invoice, and out of step with its invoice date.
+  const stamp = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
 
   // The counter is per DAY, matching the number format. Postgres does the
   // increment and returns the claimed value in one statement, so two payments

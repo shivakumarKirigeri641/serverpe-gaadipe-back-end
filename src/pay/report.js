@@ -55,7 +55,9 @@ function describeDevice(ua) {
 
 /** RPT20260908GP1, RPT20260908GP2, … — same scheme as invoices. */
 async function nextNumber(c) {
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  // The date in INDIA: in UTC, anything issued before 5:30 am IST would carry
+  // yesterday's date — wrong on a tax invoice, and out of step with its invoice date.
+  const stamp = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
   const { rows } = await c.query(
     `INSERT INTO document_counters (key, next_value)
           VALUES ($1, 2)
