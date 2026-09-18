@@ -28,7 +28,12 @@ const cache = require('./util/cache');
 const vehicleRoutes = require('./routes/vehicle');
 const publicRoutes = require('./routes/public');
 const watchJob = require('./jobs/watch');
+const reconcileJob = require('./jobs/reconcile');
 const whatsappRoutes = require('./routes/whatsapp');
+const paymentRoutes = require('./routes/payments');
+const checkoutRoutes = require('./routes/checkout');
+const adminRoutes = require('./routes/adminApi');
+const siteRoutes = require('./routes/siteApi');
 
 validate();   // fail at boot, not mid-request
 
@@ -43,16 +48,65 @@ app.use(express.json({
   verify: (req, _res, buf) => { req.rawBody = buf; },
 }));
 
+/* ------------------------------------------------------------------- admin */
+/**
+ * The admin panel is a separate front-end on its own origin, so the browser
+ * will not send its requests unless this server names that origin. Only the
+ * origins in ADMIN_ORIGINS are answered — a wildcard here would let any website
+ * a signed-in admin happens to visit call this API with their session.
+ */
+const cors = (allowedOrigins) => (req, res, next) => {
+  const origin = req.get('origin');
+  if (origin && allowedOrigins.includes(origin.replace(/\/+$/, ''))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Refresh');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.setHeader('Access-Control-Max-Age', '600');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+};
+
+app.use('/admin/api', cors(config.admin.origins), adminRoutes);
+
+/* ------------------------------------------------------------- the website */
+// gaadipe.in, where a customer signs in with their own number to see their
+// vehicles, reports and invoices. Same data as WhatsApp, second door.
+app.use('/site/api', cors(config.site.origins), siteRoutes);
+
 /* ------------------------------------------------------------------ public */
 // Legal pages the website reads. No API key: Meta checks the privacy-policy
 // URL during app review, and the path matches what the deployed front-end
 // already calls.
+//
+// CORS IS OPEN HERE, and only here. This is published legal text — the terms a
+// customer agreed to, the privacy policy Meta reviews — and it is meant to be
+// readable by any page that wants to show it. The browser was refusing to let
+// gaadipe.in read its own terms until this was added.
+app.use('/serverpe/platform/gaadipe/v1/public/users', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.use('/serverpe/platform/gaadipe/v1/public/users', publicRoutes);
 
 // Meta's webhook, on the same public prefix as the policies — the shape the
 // other ServerPe products already use. No API key: the caller is Meta, and it
 // authenticates itself by signing the body with the app secret.
 app.use('/serverpe/platform/gaadipe/v1/public/users', whatsappRoutes);
+
+// Razorpay's webhook. Also unauthenticated, and for the same reason: the caller
+// is Razorpay, and it proves itself by signing the body with the webhook secret.
+app.use('/serverpe/platform/gaadipe/v1/public/users', paymentRoutes);
+
+// The hosted checkout page, at /pay/<token>. Public by design: the token IS the
+// authorisation, it belongs to exactly one payment, and it grants nothing
+// except the right to pay that one amount.
+app.use('/', checkoutRoutes);
 
 /* -------------------------------------------------------------------- auth */
 /** Constant-time compare, so a wrong key cannot be found by timing. */
@@ -94,6 +148,37 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ success: false, error: 'server_error' });
 });
 
+/**
+ * Warn — loudly, and without refusing to boot — when the code on disk expects
+ * migrations the database has not had.
+ *
+ * Deploying new code and forgetting `npm run migrate` is the classic way a
+ * release half-works: the process starts, and the first customer to reach the
+ * new path hits a missing table. Refusing to boot would take the gateway and
+ * the payment webhooks down over a column; saying so on line one of the log
+ * does not.
+ */
+async function checkMigrations() {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const db = require('./db');
+    const files = fs.readdirSync(path.join(__dirname, '..', 'migrations'))
+      .filter(f => f.endsWith('.sql'));
+    const { rows } = await db.query('SELECT filename FROM schema_migrations');
+    const done = new Set(rows.map(r => r.filename));
+    const pending = files.filter(f => !done.has(f)).sort();
+    if (pending.length) {
+      console.error(`  ⚠  ${pending.length} migration(s) NOT APPLIED: ${pending.join(', ')}`
+        + ' — run `npm run migrate`');
+    } else {
+      console.log('  migrations: up to date');
+    }
+  } catch (e) {
+    console.error('  ⚠  could not check migrations:', e.message);
+  }
+}
+
 app.listen(config.port, () => {
   console.log(`GaadiPe vehicle gateway listening on http://localhost:${config.port}`);
   console.log(`  ULIP: ${config.ulip.baseUrl}  (primary VAHAN/${config.ulip.vahanPrimary})`);
@@ -101,12 +186,25 @@ app.listen(config.port, () => {
   console.log(`  api keys configured: ${config.apiKeys.length}`);
   // The watch job only runs where WhatsApp is configured: a gateway-only
   // deployment has no one to notify.
-  if (config.whatsapp.phoneNumberId && config.whatsapp.replyEnabled) {
+  // The watch job sends alerts by WhatsApp template, so it needs WhatsApp set
+  // up — but not the chat bot's replies: the evening alerts go out even while
+  // the product is web-first.
+  if (config.whatsapp.phoneNumberId) {
     watchJob.start(Number(process.env.WATCH_TICK_SECONDS) || 60);
   }
+  // A webhook is a delivery attempt, not a guarantee. This is what stops a
+  // captured payment from silently delivering nothing — on the website too, so
+  // it runs whether or not WhatsApp is on.
+  reconcileJob.start(Number(process.env.RECONCILE_TICK_SECONDS) || 60);
+  // Emails to the admin: sign-ins, payments, contact messages, the day's summary.
+  require('./jobs/notify').start(Number(process.env.NOTIFY_TICK_SECONDS) || 30);
   if (config.whatsapp.phoneNumberId) {
     console.log(`  whatsapp: +${config.whatsapp.ownNumber} id ${config.whatsapp.phoneNumberId}`
       + `  signature ${config.whatsapp.appSecret ? 'enforced' : 'OFF'}`
-      + `  replies ${config.whatsapp.replyEnabled ? 'ON' : 'off (record only)'}`);
+      + `  replies ${config.whatsapp.replyEnabled ? 'ON' : 'off (record only)'}`
+      + (config.whatsapp.allowedRecipients.length
+          ? `  TEST MODE: only ${config.whatsapp.allowedRecipients.length} allowed number(s)`
+          : ''));
   }
+  checkMigrations();
 });

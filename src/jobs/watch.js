@@ -6,7 +6,8 @@
  * Every pass does three things, in this order:
  *
  *   1. re-check the vehicles that are due, and compare against what we last saw
- *   2. tell people what changed — one message per vehicle per day, never three
+ *   2. queue what changed, and each evening send one message per mobile
+ *      covering all its vehicles (eveningDigest)
  *   3. move trials and subscriptions through their lifecycle
  *
  * WHY THE DIFF MATTERS MORE THAN THE FETCH: a customer does not want to know
@@ -28,8 +29,16 @@ const store = require('../vehicle/store');
 const send = require('../whatsapp/send');
 const report = require('../whatsapp/report');
 const settings = require('../util/settings');
+const blocks = require('../admin/blocks');
 
 const MS_MIN = 60 * 1000;
+
+// Written out rather than toLocaleDateString, which returns "Sep" in one place
+// and "Sept" in another for the same product.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const fmtDate = (d) =>
+  `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 
 /* Which document warnings are worth sending, and when. A 60-day horizon on
    insurance gives time to shop for a policy; PUC can be done the same day. */
@@ -47,7 +56,7 @@ async function due(limit = 50) {
   const { rows } = await db.query(
     `SELECT w.id, w.user_id, w.vehicle_id, w.expires_at, w.fail_count,
             w.challan_interval_hours,
-            v.reg_no, u.mobile, u.wa_profile_name, u.is_paused
+            v.reg_no, u.mobile, u.wa_profile_name, u.is_paused, u.preferred_language
        FROM watches w
        JOIN vehicles v ON v.id = w.vehicle_id
        JOIN users    u ON u.id = w.user_id
@@ -69,8 +78,11 @@ async function previous(vehicleId) {
 
 /**
  * What is worth telling this person today.
- * Returns short phrases; the caller joins them with " · " because a template
- * variable may not contain a newline.
+ *
+ * Returns { key, text } pairs. `text` is the phrase shown — the caller joins
+ * them with " · " because a template variable may not contain a newline.
+ * `key` is what makes it the SAME finding tomorrow: the phrase cannot be,
+ * because "expires in 29 days" becomes "expires in 28 days" overnight.
  */
 function findings(data, before) {
   const out = [];
@@ -82,39 +94,58 @@ function findings(data, before) {
   const was = before.challan?.pending_count ?? null;
   if (now !== null && was !== null && now > was) {
     const n = now - was;
-    out.push(`${n} new challan${n === 1 ? '' : 's'}`);
+    out.push({ key: `challans:${now}`, label: 'New challan', text: `${n} new challan${n === 1 ? '' : 's'}` });
   } else if (now !== null && was === null && now > 0) {
-    out.push(`${now} pending challan${now === 1 ? '' : 's'}`);
+    out.push({ key: `challans:${now}`, label: 'Pending challans', text: `${now} pending challan${now === 1 ? '' : 's'}` });
   }
 
-  // Documents that have crossed into their warning window, or lapsed.
+  // Documents that have crossed into their warning window, or lapsed. One key
+  // per document, per expiry date, per stage: a renewed document has a new
+  // date and may be warned about again; "expiring" and "expired" are two
+  // different pieces of news.
   for (const d of report.documentsOf(data.rc || {})) {
     const horizon = WARN_DAYS[d.label];
     if (horizon === undefined) continue;
-    if (d.days < 0) out.push(`${d.label} expired ${report.human(d.days)}`);
-    else if (d.days <= horizon) out.push(`${d.label} expires ${report.human(d.days)}`);
+    const date = new Date(d.date).toISOString().slice(0, 10);
+    if (d.days < 0) {
+      out.push({ key: `${d.label}:${date}:expired`, label: d.label, text: `${d.label} expired ${report.human(d.days)}` });
+    } else if (d.days <= horizon) {
+      out.push({ key: `${d.label}:${date}:expiring`, label: d.label, text: `${d.label} expires ${report.human(d.days)}` });
+    }
   }
 
   return out;
 }
 
 /**
- * Say it once. A document that expires in 30 days would otherwise produce the
- * same sentence every day for a month, which is how a useful service becomes
- * the thing someone mutes.
+ * Say it once per watch. A document that expires in 30 days would otherwise
+ * produce a message every day for a month, which is how a useful service
+ * becomes the thing someone mutes.
  */
-async function alreadySaid(watchId, phrase) {
+async function alreadySaid(watchId, key) {
   const row = await db.one(
     `SELECT 1 FROM event_log
       WHERE kind = 'watch_alert'
         AND detail->>'watch_id' = $1
-        AND detail->'items' ? $2
-        AND created_at > now() - interval '7 days'
-      LIMIT 1`, [String(watchId), phrase]);
+        AND detail->'keys' ? $2
+      UNION ALL
+     SELECT 1 FROM pending_alerts WHERE watch_id = $1::bigint AND key = $2
+      LIMIT 1`, [String(watchId), key]);
   return Boolean(row);
 }
 
 async function checkOne(w) {
+  // Blocked while the watch was running: stop here rather than spending a
+  // lookup and then discovering the message cannot be sent.
+  const blocked = await blocks.anyBlocked({ mobile: w.mobile, regNo: w.reg_no });
+  if (blocked) {
+    console.log('[watch] skipping %s — %s is blocked', w.reg_no, blocked);
+    await db.query(
+      `UPDATE watches SET challan_next_check_at = now() + interval '6 hours', modified_at = now()
+        WHERE id = $1`, [w.id]);
+    return { sent: false, blocked };
+  }
+
   let data;
   try {
     data = await gateway.full(w.reg_no);
@@ -140,47 +171,176 @@ async function checkOne(w) {
   // Store AFTER diffing — the comparison needs the old snapshot.
   await store.record(w.user_id, data).catch(e => console.error('[watch] store:', e.message));
 
-  const interval = await settings.num('watch_check_interval_minutes', 24 * 60);
+  // Each dataset is rescheduled on its own clock. Challans are the only thing
+  // that genuinely changes week to week; an RC's expiry dates do not move
+  // between checks, and a FASTag's status almost never does. Checking all three
+  // daily costs 112 upstream calls a cycle against 20 for these intervals — the
+  // difference between surviving a ULIP price list and not.
+  const fallback = await settings.num('watch_check_interval_minutes', 48 * 60);
+  const every = {
+    challan: await settings.num('watch_interval_minutes_challan', fallback),
+    rc:      await settings.num('watch_interval_minutes_rc', fallback),
+    fastag:  await settings.num('watch_interval_minutes_fastag', fallback),
+  };
   await db.query(
     `UPDATE watches
         SET last_checked_at = now(), fail_count = 0,
             challan_next_check_at = now() + ($2 || ' minutes')::interval,
-            rc_next_check_at      = now() + ($2 || ' minutes')::interval,
-            fastag_next_check_at  = now() + ($2 || ' minutes')::interval,
+            rc_next_check_at      = now() + ($3 || ' minutes')::interval,
+            fastag_next_check_at  = now() + ($4 || ' minutes')::interval,
             modified_at = now()
-      WHERE id = $1`, [w.id, String(interval)]);
+      WHERE id = $1`,
+    [w.id, String(every.challan), String(every.rc), String(every.fastag)]);
 
   const fresh = [];
   for (const item of items) {
-    if (!await alreadySaid(w.id, item)) fresh.push(item);
+    if (!await alreadySaid(w.id, item.key)) fresh.push(item);
   }
   if (!fresh.length) return { sent: false, items };
 
-  const summary = fresh.join(' · ');
-  await notify(w, summary, data);
-  await db.query(
-    `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'watch_alert', $3)`,
-    [w.user_id, w.vehicle_id,
-     JSON.stringify({ watch_id: String(w.id), reg_no: w.reg_no, items: fresh, summary })]);
-  return { sent: true, items: fresh };
+  /* QUEUED, NOT SENT (user, 2026-09-18). The evening digest sends it, together
+     with anything else found for this person's vehicles today. */
+  for (const i of fresh) {
+    await db.query(
+      `INSERT INTO pending_alerts (user_id, watch_id, vehicle_id, reg_no, key, label, text)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (watch_id, key) DO NOTHING`,
+      [w.user_id, w.id, w.vehicle_id, w.reg_no, i.key, i.label, i.text]);
+  }
+  return { sent: false, queued: true, items: fresh };
+}
+
+/* The time in India, whatever the server's clock is set to. */
+const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000);
+
+/**
+ * THE EVENING DIGEST (user, 2026-09-18): once a day, from 7 pm IST, one message
+ * per mobile covering every vehicle with something new — a new challan, a
+ * document newly expiring or newly expired. Nobody gets two in a day; nobody
+ * hears about the same thing twice; nothing goes out after 10 pm.
+ */
+async function eveningDigest() {
+  const from = await settings.num('alert_send_hour_ist', 19);
+  const until = await settings.num('alert_send_until_hour_ist', 22);
+  const hour = istNow().getUTCHours();
+  if (hour < from || hour >= until) return { sent: 0, reason: 'outside the evening window' };
+
+  const today = istNow().toISOString().slice(0, 10);
+  const { rows: people } = await db.query(
+    `SELECT DISTINCT p.user_id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
+            u.preferred_language, u.is_paused
+       FROM pending_alerts p JOIN users u ON u.id = p.user_id
+      WHERE p.sent_at IS NULL AND NOT u.is_paused
+        AND NOT EXISTS (SELECT 1 FROM event_log e
+                         WHERE e.user_id = p.user_id AND e.kind = 'watch_digest'
+                           AND e.detail->>'ist_date' = $1)`, [today]);
+
+  let sent = 0;
+  for (const person of people) {
+    if (await blocks.isBlocked('mobile', person.mobile)) continue;
+    const { rows: items } = await db.query(
+      `SELECT p.id, p.watch_id, p.vehicle_id, p.reg_no, p.key, p.label, p.text
+         FROM pending_alerts p JOIN watches w ON w.id = p.watch_id
+        WHERE p.user_id = $1 AND p.sent_at IS NULL AND w.is_active
+        ORDER BY p.reg_no, p.id`, [person.user_id]);
+    // Blocked vehicles are left out, and their findings set aside for good.
+    const ok = [];
+    for (const i of items) {
+      if (await blocks.isBlocked('vehicle', i.reg_no)) {
+        await db.query(`UPDATE pending_alerts SET sent_at = now() WHERE id = $1`, [i.id]);
+      } else ok.push(i);
+    }
+    if (!ok.length) continue;
+
+    const byVehicle = new Map();
+    for (const i of ok) {
+      if (!byVehicle.has(i.reg_no)) byVehicle.set(i.reg_no, []);
+      byVehicle.get(i.reg_no).push(i);
+    }
+    const regs = [...byVehicle.keys()];
+    const summary = regs.map((r) => `${r}: ${byVehicle.get(r).map((i) => i.text).join(', ')}`)
+      .join(' · ').slice(0, 900);
+    const w = {
+      mobile: person.mobile, wa_profile_name: person.name, preferred_language: person.preferred_language,
+      reg_no: regs.length === 1 ? regs[0] : `${regs[0]} +${regs.length - 1} more`,
+    };
+    await notify(w, ok, summary, byVehicle);
+
+    await db.query(`UPDATE pending_alerts SET sent_at = now() WHERE id = ANY($1::bigint[])`, [ok.map((i) => i.id)]);
+    for (const [reg, list] of byVehicle) {
+      await db.query(
+        `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'watch_alert', $3)`,
+        [person.user_id, list[0].vehicle_id,
+         JSON.stringify({ watch_id: String(list[0].watch_id), reg_no: reg,
+                          items: list.map((i) => i.text), keys: list.map((i) => i.key), digest: true })]);
+    }
+    await db.query(
+      `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'watch_digest', $2)`,
+      [person.user_id, JSON.stringify({ ist_date: today, vehicles: regs, items: ok.length })]);
+    sent += 1;
+  }
+  if (sent) console.log('[watch] evening digest sent to %d customer(s)', sent);
+  return { sent };
 }
 
 /**
  * Send the alert. Inside the 24-hour window a plain message is free and reads
  * better; outside it, only an approved template will deliver.
  */
-async function notify(w, summary, data) {
+/**
+ * ONE MESSAGE PER VEHICLE PER PASS, whatever was found. Every template message
+ * outside the window is billed by Meta, and three messages about one vehicle
+ * on one morning read as spam — so the findings share a single message:
+ * parameter 3 names what needs attention, parameter 4 says what about it.
+ */
+async function notify(w, items, summary, byVehicle = null) {
   const name = (w.wa_profile_name || 'there').split(' ')[0];
+  const what = [...new Set(items.map(i => i.label))].join(', ');
 
   if (await send.windowOpen(w.mobile)) {
-    await send.text(w.mobile,
-      `🔔 *${w.reg_no}*\n\n${summary}\n\n`
-      + 'Reply with this vehicle number to see the full record.');
+    // Inside the 24-hour window a plain message is free, and can list vehicles line by line.
+    const body = byVehicle
+      ? [...byVehicle].map(([reg, list]) => `🚗 *${reg}*\n${list.map((i) => `• ${i.text}`).join('\n')}`).join('\n\n')
+      : `🔔 *${w.reg_no}*\n\n${summary}`;
+    await send.text(w.mobile, `🔔 *Today's update from GaadiPe*\n\n${body}\n\n`
+      + 'Open gaadipe.in to see the full record.');
     return;
   }
 
-  const template = await settings.get('template_vehicle_alert', 'gp_watchalert_v1');
-  await send.template(w.mobile, template, [name, w.reg_no, 'Needs attention', summary]);
+  /*
+   * THE CUSTOMER'S LANGUAGE FIRST, THEN A NET UNDER IT.
+   *
+   * Meta rejects a template that is pending approval, paused, or was never
+   * submitted in that language — and a rejected alert is an alert the customer
+   * never gets. So each template is tried in turn until one is accepted, and
+   * the last is one already approved. Its parameters differ (3 carries the
+   * details, 4 the date of the check), which is why each attempt carries its
+   * own list rather than sharing one.
+   */
+  const checkedOn = fmtDate(new Date());
+  const attempts = [];
+  // Until Meta approves the per-language templates, only the approved v2 is used.
+  const languagesLive = String(await settings.get('template_vehicle_alert_languages_live', 'false')) === 'true';
+  if (languagesLive && w.preferred_language === 'hi') {
+    attempts.push({ name: await settings.get('template_vehicle_alert_hi', 'gp_vehicle_alert_hi_v1'),
+                    language: 'hi', params: [name, w.reg_no, what, summary] });
+  }
+  if (languagesLive) {
+    attempts.push({ name: await settings.get('template_vehicle_alert_en', 'gp_vehicle_alert_en_v1'),
+                    language: 'en', params: [name, w.reg_no, what, summary] });
+  }
+  attempts.push({ name: await settings.get('template_vehicle_alert_fallback', 'gp_vehicle_alert_v2'),
+                  language: 'en', params: [name, w.reg_no, summary, checkedOn] });
+
+  for (const t of attempts) {
+    const r = await send.template(w.mobile, t.name, t.params, { language: t.language });
+    if (r.ok) return;
+    // 1320xx is Meta saying the TEMPLATE is the problem (missing, unapproved,
+    // paused, wrong parameters). Anything else — a bad number, an outage — would
+    // fail the same way with the next template, so stop there.
+    if (!/13200[0-9]|13201[0-9]/.test(String(r.error || ''))) return;
+    console.warn('[watch] template %s (%s) refused — trying the next: %s', t.name, t.language, r.error);
+  }
 }
 
 /**
@@ -212,7 +372,7 @@ async function lifecycle() {
     const when = new Date(t.expires_at);
     if (await send.windowOpen(t.mobile)) {
       await send.text(t.mobile,
-        `Your free trial for *${t.reg_no}* ends on *${when.toDateString()}*.\n\n`
+        `Your free trial for *${t.reg_no}* ends on *${fmtDate(when)}*.\n\n`
         + `To keep monitoring this vehicle, it is ₹${price} for 28 days. `
         + 'Nothing is charged automatically.');
     } else {
@@ -224,6 +384,89 @@ async function lifecycle() {
        SELECT user_id, 'trial_ending_notice', $2 FROM watches WHERE id = $1`,
       [t.id, JSON.stringify({ watch_id: String(t.id), reg_no: t.reg_no })]);
   }
+
+  /* --------------------------------------------------- paid, ending soon */
+
+  // A trial ending is a sales moment; a paid subscription ending is a service
+  // one. Someone who paid expects to be told before their alerts stop, and
+  // being dropped in silence is how a renewable customer is lost for good.
+  const renewalDays = await settings.num('renewal_notice_days', 3);
+  const dueRenewal = await db.query(
+    `SELECT s.id, s.ends_on, v.reg_no, u.mobile, u.wa_profile_name,
+            pl.kind AS plan_kind, pl.price_paise AS plan_price_paise
+       FROM subscriptions s
+       JOIN vehicles v ON v.id = s.vehicle_id
+       JOIN users    u ON u.id = s.user_id
+       JOIN plans    pl ON pl.id = s.plan_id
+      WHERE s.is_active
+        AND s.ends_on <= (CURRENT_DATE + ($1 || ' days')::interval)
+        AND s.ends_on >= CURRENT_DATE
+        AND NOT u.is_paused
+        AND NOT EXISTS (
+          SELECT 1 FROM event_log e
+           WHERE e.kind = 'renewal_notice'
+             AND e.detail->>'subscription_id' = s.id::text
+             AND e.detail->>'ends_on' = s.ends_on::text)`,
+    [String(renewalDays)]);
+
+  for (const s of dueRenewal.rows) {
+    const name = (s.wa_profile_name || 'there').split(' ')[0];
+    const isReport = s.plan_kind === 'report';
+    const price = isReport
+      ? Math.round(s.plan_price_paise / 100)
+      : Math.round(await settings.num('renewal_paise', 3900) / 100);
+    const ends = fmtDate(new Date(s.ends_on));
+
+    if (isReport && await send.windowOpen(s.mobile)) {
+      // A report is bought again, not renewed: the offer is today's records and
+      // a fresh 28 days of alerts, at the same one-time price.
+      await send.text(s.mobile,
+        `Alerts for *${s.reg_no}* end on *${ends}*.\n\n`
+        + `Send me *${s.reg_no}* to see today's records — a fresh full report is ₹${price} `
+        + 'and includes another 28 days of alerts. Nothing renews automatically.');
+    } else if (await send.windowOpen(s.mobile)) {
+      await send.text(s.mobile,
+        `Monitoring for *${s.reg_no}* ends on *${ends}*.\n\n`
+        + `To continue, it is ₹${price} for the next 28 days. `
+        + 'Nothing is charged automatically — send me the vehicle number when you '
+        + 'are ready and I will send a payment link.');
+    } else {
+      const tpl = await settings.get('template_renewal_due', 'gp_premiumrenewal_v1');
+      // gp_premiumrenewal_v1 asks for days remaining, not a date.
+      const daysLeft = Math.max(0, Math.round(
+        (new Date(s.ends_on) - Date.now()) / (24 * 60 * 60 * 1000)));
+      await send.template(s.mobile, tpl, [name, s.reg_no, String(daysLeft)]);
+    }
+
+    // The marker is built in SQL, not in JavaScript. The de-duplication above
+    // compares against `ends_on::text`, and a JS-formatted date will not match
+    // it — String(date) yields "Wed Sep 10 2026 …", so the notice was sent
+    // again on every pass. Formatting both sides in the same place removes the
+    // possibility rather than fixing one instance of it.
+    await db.query(
+      `INSERT INTO event_log (user_id, kind, detail)
+       SELECT user_id, 'renewal_notice',
+              jsonb_build_object('subscription_id', id::text,
+                                 'reg_no', $2::text,
+                                 'ends_on', ends_on::text)
+         FROM subscriptions WHERE id = $1`,
+      [s.id, s.reg_no]);
+  }
+
+  // Subscriptions that have run out stop being active, which stops their watch.
+  const lapsed = await db.query(
+    `UPDATE subscriptions SET is_active = false, modified_at = now()
+      WHERE is_active AND ends_on < CURRENT_DATE
+      RETURNING id, user_id`);
+  for (const l of lapsed.rows) {
+    await db.query(
+      `UPDATE watches SET is_active = false, modified_at = now()
+        WHERE subscription_id = $1`, [l.id]);
+    await db.query(
+      `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'subscription_lapsed', $2)`,
+      [l.user_id, JSON.stringify({ subscription_id: String(l.id) })]);
+  }
+  if (lapsed.rowCount) console.log('[watch] %d subscription(s) lapsed', lapsed.rowCount);
 
   // Expire what has run out. Nothing is said here: the notice above already
   // said it, and a second message at the moment of expiry reads as nagging.
@@ -239,7 +482,8 @@ async function lifecycle() {
   }
   if (expired.rowCount) console.log('[watch] %d watch(es) expired', expired.rowCount);
 
-  return { notified: ending.rowCount, expired: expired.rowCount };
+  return { notified: ending.rowCount, renewals: dueRenewal.rowCount,
+           lapsed: lapsed.rowCount, expired: expired.rowCount };
 }
 
 /** One pass. Safe to call as often as you like; it only acts on what is due. */
@@ -248,17 +492,20 @@ async function runOnce() {
   const list = await due();
   let sent = 0;
 
+  let queued = 0;
   for (const w of list) {
     const r = await checkOne(w);
-    if (r.sent) sent++;
+    if (r.queued) queued += r.items.length;
   }
+  const digest = await eveningDigest();
+  sent = digest.sent || 0;
   const life = await lifecycle();
 
-  if (list.length || life.notified || life.expired) {
-    console.log('[watch] checked %d, alerted %d, notices %d, expired %d (%dms)',
-      list.length, sent, life.notified, life.expired, Date.now() - started);
+  if (list.length || sent || life.notified || life.renewals || life.expired) {
+    console.log('[watch] checked %d, queued %d finding(s), evening messages %d, trial-notices %d, renewal-notices %d, expired %d (%dms)',
+      list.length, queued, sent, life.notified, life.renewals, life.expired, Date.now() - started);
   }
-  return { checked: list.length, sent, ...life };
+  return { checked: list.length, queued, sent, ...life };
 }
 
 /** Start the loop. One timer, and it never overlaps itself. */
@@ -275,4 +522,4 @@ function start(everySeconds = 60) {
   console.log(`  watch job: every ${everySeconds}s`);
 }
 
-module.exports = { start, runOnce, checkOne, findings, lifecycle, due };
+module.exports = { start, runOnce, checkOne, findings, lifecycle, due, eveningDigest };

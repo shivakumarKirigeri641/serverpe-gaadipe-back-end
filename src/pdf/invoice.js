@@ -11,7 +11,9 @@ const T = require("./theme");
  *
  * Returns a Promise<Buffer>.
  */
-const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = null }) =>
+const { consentBlock, consentLine } = require('./consent');
+
+const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = null, consent = null }) =>
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "A4", margin: T.M, bufferPages: true });
     const chunks = [];
@@ -47,7 +49,11 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
       [business.gstin ? `GSTIN: ${business.gstin}` : null, business.pan ? `PAN: ${business.pan}` : null]
         .filter(Boolean).join("   ·   "),
       business.product_support_email || business.support_email,
+      // A customer querying a charge should be able to reach us from the
+      // invoice itself, without going looking for the number.
+      business.whatsapp_number ? `WhatsApp: ${business.whatsapp_number}` : null,
       business.product_website,
+      business.proprietor_name ? `Proprietor: ${business.proprietor_name}` : null,
     ].filter(Boolean).forEach((l) => {
       doc.text(l, T.M + 12, sy, { width: colW - 24 });
       sy = doc.y + 1;
@@ -79,11 +85,11 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
 
     y = T.sectionTitle(doc, "Particulars", y);
     y = T.table(doc, [
-      { label: "Description", width: 258 },
-      { label: "SAC", width: 58 },
-      { label: "Qty", width: 34, align: "center" },
-      { label: "Rate", width: 80, align: "right" },
-      { label: "Taxable", width: 85, align: "right" },
+      { label: "Description", width: 300 },
+      { label: "SAC", width: 52, nowrap: true },
+      { label: "Qty", width: 34, align: "center", nowrap: true },
+      { label: "Rate", width: 66, align: "right", nowrap: true },
+      { label: "Taxable", width: 71, align: "right", nowrap: true },
     ], lineRows.map((it) => [
       it.description || `Full Vehicle Report${it.reg_no ? ` — ${it.reg_no}` : ""}`,
       sac, "1", T.money(it.taxable), T.money(it.taxable),
@@ -131,6 +137,21 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
        );
     y += totalsH + 16;
 
+    /* ── what the money bought, and until when ──
+       A table cell is clipped to one line, so the service period cannot live in
+       the description: it ends up as an ellipsis. It also happens to be the
+       first thing a customer looks for, which is reason enough for it to have a
+       block of its own. */
+    if (lineItem.period_from || lineItem.period_to) {
+      y = T.sectionTitle(doc, "Service Period", y, T.BRAND.brand);
+      y = T.kvCard(doc, [
+        ["Vehicle", lineItem.reg_no || "—"],
+        ["Monitoring from", T.fmtDate(lineItem.period_from)],
+        ["Monitoring until", T.fmtDate(lineItem.period_to)],
+        ["Renewal due on", T.fmtDate(lineItem.period_to)],
+      ], y, { cols: 2 });
+    }
+
     /* ── payment reference ── */
     if (lineItem.payment_id || lineItem.order_id) {
       y = T.sectionTitle(doc, "Payment Reference", y, T.BRAND.green);
@@ -144,8 +165,23 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
       ], y, { cols: 2 });
     }
 
+    /* ── what was agreed to ── */
+    if (consent) y = consentBlock(doc, y, consent, { compact: true });
+
     /* ── grievance strip ── */
-    if (business.grievance_officer_name) {
+    if (business.grievance_officer_name && consent) {
+      // One line when the consent record is on the page — a whole card for a
+      // single sentence is what pushed the invoice onto a second, empty page.
+      y = T.ensureSpace(doc, y, 18);
+      doc.fillColor(T.BRAND.body).font(doc._F.regular).fontSize(7.6)
+         .text(`Support & grievance: ${business.grievance_officer_name}`
+               + `${business.grievance_officer_designation ? `, ${business.grievance_officer_designation}` : ''}`
+               + `  ·  ${business.grievance_officer_email || business.support_email || ''}`
+               + `${business.grievance_response_hours ? `  ·  response within ${business.grievance_response_hours}h` : ''}`,
+               T.M, y, { width: W });
+      y = doc.y + 8;
+    } else if (business.grievance_officer_name) {
+      y = T.ensureSpace(doc, y, 52);
       T.card(doc, T.M, y, W, 40, { fill: T.BRAND.soft });
       T.label(doc, "Support & grievance", T.M + 12, y + 9);
       doc.fillColor(T.BRAND.body).font(doc._F.regular).fontSize(7.8)
@@ -171,7 +207,7 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
                     "informative in nature and relate to vehicle particulars only. ServerPe App Solutions is NOT " +
                     "RESPONSIBLE for any misleading activity, or for any misuse of the content supplied. Please read " +
                     "and understand the Terms, Consents and Policies carefully before proceeding. " +
-                    (business?.purpose_declaration_doc ||
+                    (consentLine(consent) || business?.purpose_declaration_doc ||
                      "Requester's declaration: the requester confirmed that the vehicle(s) and their owner(s) are known to them and that these details were requested for a lawful, legitimate purpose, taking full responsibility for their use."),
       });
     }
