@@ -58,8 +58,8 @@ async function nextNumber(c) {
   // The date in INDIA: in UTC, anything issued before 5:30 am IST would carry
   // yesterday's date — wrong on a tax invoice, and out of step with its invoice date.
   const stamp = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
-  // Each day starts at document_number_start (2: GP1 is already in use), so a
-  // day's first document is GP2. The counter stores the NEXT number to hand out.
+  // Each day starts at document_number_start (default 1), so a
+  // day's first document is GP1. The counter stores the NEXT number to hand out.
   const { rows } = await c.query(
     `INSERT INTO document_counters (key, next_value)
           VALUES ($1, greatest(1, coalesce((SELECT value::int FROM app_settings

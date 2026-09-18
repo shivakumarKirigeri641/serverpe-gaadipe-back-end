@@ -61,8 +61,8 @@ async function nextNumber(c) {
   // increment and returns the claimed value in one statement, so two payments
   // landing in the same millisecond get different numbers without any locking
   // of our own.
-  // Each day starts at document_number_start (2: GP1 is already in use), so a
-  // day's first document is GP2. The counter stores the NEXT number to hand out.
+  // Each day starts at document_number_start (default 1), so a
+  // day's first document is GP1. The counter stores the NEXT number to hand out.
   const { rows } = await c.query(
     `INSERT INTO document_counters (key, next_value)
           VALUES ($1, greatest(1, coalesce((SELECT value::int FROM app_settings
