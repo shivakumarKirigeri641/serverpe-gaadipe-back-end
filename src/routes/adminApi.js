@@ -482,10 +482,12 @@ router.post('/policies/:slug', needs('settings'), safe(async (req, res) => {
 router.get('/feedback', safe(async (req, res) => {
   const { rows } = await db.query(
     `SELECT f.id, f.mobile, f.reg_no, f.body, f.created_at,
-            u.id AS user_id, u.wa_profile_name AS name
+            u.id AS user_id, u.wa_profile_name AS name, count(*) OVER () AS total_rows
        FROM feedback f LEFT JOIN users u ON u.id = f.user_id
-      ORDER BY f.id DESC LIMIT $1`, [Math.min(200, Number(req.query.limit) || 100)]);
-  res.json({ rows: rows.map(r => ({ ...r, id: String(r.id),
+      ORDER BY f.id DESC LIMIT $1 OFFSET $2`,
+    [Math.min(200, Number(req.query.limit) || 100), Number(req.query.offset) || 0]);
+  res.json({ total: rows[0] ? Number(rows[0].total_rows) : 0,
+             rows: rows.map(({ total_rows, ...r }) => ({ ...r, id: String(r.id),
                                     user_id: r.user_id ? String(r.user_id) : null })) });
 }));
 
@@ -516,13 +518,15 @@ router.post('/admins/:id/active', needs('admins'), safe(async (req, res) => {
 
 router.get('/audit', safe(async (req, res) => {
   const { rows } = await db.query(
-    `SELECT a.id, a.action, a.detail, a.ip, a.created_at, u.name, u.mobile
+    `SELECT a.id, a.action, a.detail, a.ip, a.created_at, u.name, u.mobile,
+            count(*) OVER () AS total_rows
        FROM admin_audit a LEFT JOIN admin_users u ON u.id = a.admin_id
       WHERE ($1 = '' OR a.action = $1)
       ORDER BY a.id DESC LIMIT $2 OFFSET $3`,
     [String(req.query.action || ''), Math.min(200, Number(req.query.limit) || 100),
      Number(req.query.offset) || 0]);
-  res.json({ rows: rows.map(r => ({ ...r, id: String(r.id) })) });
+  res.json({ total: rows[0] ? Number(rows[0].total_rows) : 0,
+             rows: rows.map(({ total_rows, ...r }) => ({ ...r, id: String(r.id) })) });
 }));
 
 /* ------------------------------------------------------------ maintenance */
