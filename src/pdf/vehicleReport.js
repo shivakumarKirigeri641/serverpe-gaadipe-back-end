@@ -81,6 +81,22 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {} }) =>
       business,
     });
 
+    /*
+     * A SAMPLE IS LABELLED AS ONE, on every page and in the file itself.
+     *
+     * This document exists to be shown on the website, where it will be
+     * downloaded, forwarded and screenshotted. A realistic-looking vehicle
+     * report with invented contents, passed on without its context, is exactly
+     * the thing that must not be mistakable for a real record.
+     */
+    if (report.sample) {
+      doc.rect(T.M, y, W, 22).fill('#fff6e6');
+      doc.fillColor('#8f5600').font(doc._F.bold).fontSize(9)
+         .text('SAMPLE — an illustration of the GaadiPe report. Not a real vehicle, '
+               + 'and not a Government record.', T.M + 10, y + 6.5, { width: W - 20 });
+      y += 32;
+    }
+
     /* ── the vehicle ── */
     y = T.sectionTitle(doc, 'Vehicle', y, T.BRAND.brand);
     y = T.kvCard(doc, [
