@@ -80,6 +80,18 @@ app.use('/site/api', cors(config.site.origins), siteRoutes);
 // Legal pages the website reads. No API key: Meta checks the privacy-policy
 // URL during app review, and the path matches what the deployed front-end
 // already calls.
+//
+// CORS IS OPEN HERE, and only here. This is published legal text — the terms a
+// customer agreed to, the privacy policy Meta reviews — and it is meant to be
+// readable by any page that wants to show it. The browser was refusing to let
+// gaadipe.in read its own terms until this was added.
+app.use('/serverpe/platform/gaadipe/v1/public/users', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 app.use('/serverpe/platform/gaadipe/v1/public/users', publicRoutes);
 
 // Meta's webhook, on the same public prefix as the policies — the shape the

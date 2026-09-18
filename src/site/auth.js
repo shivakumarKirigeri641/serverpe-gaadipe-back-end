@@ -33,10 +33,29 @@ const SAME_ANSWER = {
   message: 'If that number can be reached, a code has been sent to it.',
 };
 
+/**
+ * THE TESTING GUARD, shared with WhatsApp.
+ *
+ * While WHATSAPP_ALLOWED_RECEPIENTS is set, the site signs in ONLY those
+ * numbers. Without this, any number typed into the login box creates a real
+ * customer row with real vehicles and payments against it — test rubbish that
+ * then has to be picked out of the database by hand. Empty list means everyone,
+ * which is what production runs.
+ */
+const allowedForTesting = (m) => !config.whatsapp.allowedRecipients.length
+  || config.whatsapp.allowedRecipients.includes(m);
+
 async function requestCode({ mobile, ip }) {
   const m = localMobile(mobile);
   if (m.length !== 10) {
     return { ok: false, error: 'bad_mobile', message: 'Please enter a ten-digit mobile number.' };
+  }
+
+  if (!allowedForTesting(m)) {
+    // Answered exactly like any other number, so the guard does not tell a
+    // stranger which numbers are special.
+    console.warn('[site] sign-in requested by %s — not in WHATSAPP_ALLOWED_RECEPIENTS', m);
+    return SAME_ANSWER;
   }
 
   // Rate limit before anything else: this is the only thing standing between a
@@ -94,6 +113,12 @@ async function requestCode({ mobile, ip }) {
  */
 async function verifyCode({ mobile, code, ip, userAgent }) {
   const m = localMobile(mobile);
+
+  if (!allowedForTesting(m)) {
+    return { ok: false, error: 'not_allowed',
+      message: 'GaadiPe is in testing and is open to a few numbers only.' };
+  }
+
   const row = await db.one(
     `SELECT * FROM site_otps
       WHERE mobile = $1 AND consumed_at IS NULL AND expires_at > now()
