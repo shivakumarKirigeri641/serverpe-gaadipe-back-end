@@ -53,15 +53,20 @@ const fmtDate = (d) => {
  * so a fresh deployment never reissues a number.
  */
 async function nextNumber(c) {
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  // The date in INDIA: in UTC, anything issued before 5:30 am IST would carry
+  // yesterday's date — wrong on a tax invoice, and out of step with its invoice date.
+  const stamp = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
 
   // The counter is per DAY, matching the number format. Postgres does the
   // increment and returns the claimed value in one statement, so two payments
   // landing in the same millisecond get different numbers without any locking
   // of our own.
+  // Each day starts at document_number_start (default 1), so a
+  // day's first document is GP1. The counter stores the NEXT number to hand out.
   const { rows } = await c.query(
     `INSERT INTO document_counters (key, next_value)
-          VALUES ($1, 2)
+          VALUES ($1, greatest(1, coalesce((SELECT value::int FROM app_settings
+                                             WHERE key = 'document_number_start'), 1)) + 1)
      ON CONFLICT (key) DO UPDATE
             SET next_value = document_counters.next_value + 1,
                 modified_at = now()

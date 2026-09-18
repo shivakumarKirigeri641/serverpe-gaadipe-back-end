@@ -55,10 +55,15 @@ function describeDevice(ua) {
 
 /** RPT20260908GP1, RPT20260908GP2, … — same scheme as invoices. */
 async function nextNumber(c) {
-  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  // The date in INDIA: in UTC, anything issued before 5:30 am IST would carry
+  // yesterday's date — wrong on a tax invoice, and out of step with its invoice date.
+  const stamp = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '');
+  // Each day starts at document_number_start (default 1), so a
+  // day's first document is GP1. The counter stores the NEXT number to hand out.
   const { rows } = await c.query(
     `INSERT INTO document_counters (key, next_value)
-          VALUES ($1, 2)
+          VALUES ($1, greatest(1, coalesce((SELECT value::int FROM app_settings
+                                             WHERE key = 'document_number_start'), 1)) + 1)
      ON CONFLICT (key) DO UPDATE
             SET next_value = document_counters.next_value + 1, modified_at = now()
       RETURNING next_value - 1 AS claimed`, [`report:${stamp}`]);
