@@ -93,9 +93,9 @@ function findings(data, before) {
   const was = before.challan?.pending_count ?? null;
   if (now !== null && was !== null && now > was) {
     const n = now - was;
-    out.push({ key: `challans:${now}`, text: `${n} new challan${n === 1 ? '' : 's'}` });
+    out.push({ key: `challans:${now}`, label: 'New challan', text: `${n} new challan${n === 1 ? '' : 's'}` });
   } else if (now !== null && was === null && now > 0) {
-    out.push({ key: `challans:${now}`, text: `${now} pending challan${now === 1 ? '' : 's'}` });
+    out.push({ key: `challans:${now}`, label: 'Pending challans', text: `${now} pending challan${now === 1 ? '' : 's'}` });
   }
 
   // Documents that have crossed into their warning window, or lapsed. One key
@@ -107,9 +107,9 @@ function findings(data, before) {
     if (horizon === undefined) continue;
     const date = new Date(d.date).toISOString().slice(0, 10);
     if (d.days < 0) {
-      out.push({ key: `${d.label}:${date}:expired`, text: `${d.label} expired ${report.human(d.days)}` });
+      out.push({ key: `${d.label}:${date}:expired`, label: d.label, text: `${d.label} expired ${report.human(d.days)}` });
     } else if (d.days <= horizon) {
-      out.push({ key: `${d.label}:${date}:expiring`, text: `${d.label} expires ${report.human(d.days)}` });
+      out.push({ key: `${d.label}:${date}:expiring`, label: d.label, text: `${d.label} expires ${report.human(d.days)}` });
     }
   }
 
@@ -196,7 +196,7 @@ async function checkOne(w) {
   if (!fresh.length) return { sent: false, items };
 
   const summary = fresh.map(i => i.text).join(' · ');
-  await notify(w, summary, data);
+  await notify(w, fresh, summary);
   await db.query(
     `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'watch_alert', $3)`,
     [w.user_id, w.vehicle_id,
@@ -209,8 +209,15 @@ async function checkOne(w) {
  * Send the alert. Inside the 24-hour window a plain message is free and reads
  * better; outside it, only an approved template will deliver.
  */
-async function notify(w, summary, data) {
+/**
+ * ONE MESSAGE PER VEHICLE PER PASS, whatever was found. Every template message
+ * outside the window is billed by Meta, and three messages about one vehicle
+ * on one morning read as spam — so the findings share a single message:
+ * parameter 3 names what needs attention, parameter 4 says what about it.
+ */
+async function notify(w, items, summary) {
   const name = (w.wa_profile_name || 'there').split(' ')[0];
+  const what = [...new Set(items.map(i => i.label))].join(', ');
 
   if (await send.windowOpen(w.mobile)) {
     await send.text(w.mobile,
@@ -219,8 +226,9 @@ async function notify(w, summary, data) {
     return;
   }
 
-  const template = await settings.get('template_vehicle_alert', 'gp_watchalert_v1');
-  await send.template(w.mobile, template, [name, w.reg_no, 'Needs attention', summary]);
+  // gp_vehicle_alert_v2: 1 name · 2 vehicle number · 3 what · 4 details.
+  const template = await settings.get('template_vehicle_alert', 'gp_vehicle_alert_v2');
+  await send.template(w.mobile, template, [name, w.reg_no, what, summary]);
 }
 
 /**
