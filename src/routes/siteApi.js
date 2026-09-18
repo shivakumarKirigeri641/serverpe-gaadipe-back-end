@@ -261,7 +261,9 @@ router.post('/check', safe(async (req, res) => {
     });
   }
 
-  const data = await gateway.full(parsed.regNo);
+  // A paid customer sees every challan, so the whole list is asked for up front.
+  const paid = await reports.validFor(req.user.id, parsed.regNo);
+  const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' } : {});
   await quota.record(req.user.id, parsed.regNo, { repeat: q.repeat, found: data?.success === true });
 
   if (!data?.success) {
@@ -275,7 +277,6 @@ router.post('/check', safe(async (req, res) => {
 
   await store.record(req.user.id, data).catch(e => console.error('[site] store:', e.message));
 
-  const paid = await reports.validFor(req.user.id, parsed.regNo);
   const plan = await billing.reportPlan();
   res.json({
     vehicle: paid ? view.full(data) : view.basic(data),
