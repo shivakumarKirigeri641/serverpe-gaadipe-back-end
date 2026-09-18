@@ -16,17 +16,73 @@ const report = require('../whatsapp/report');
 
 const maskNumber = report.maskNumber;
 
-/** The basic view: enough to know whether the vehicle is in order. */
+/**
+ * The free view: enough to know this is the right vehicle, and nothing else.
+ *
+ * WHAT IT DELIBERATELY DOES NOT CARRY. An earlier version gave away every
+ * expiry date, the challan total and whether a financer was recorded — which is
+ * the entire report. Somebody who can already read "PUC expired, 3 challans,
+ * loan recorded" has no reason left to pay, and a free check that answers the
+ * question is not a funnel, it is the product given away.
+ *
+ * So the free check answers one question only: is this the vehicle I am looking
+ * at? Maker, model and variant, fuel and class. Then it says HOW MANY things
+ * need attention — enough to know it matters, never enough to act on.
+ *
+ * Counts are not values: "2 documents need attention" tells nobody which, or
+ * when, or what it will cost to put right.
+ */
 function basic(data) {
   const rc = data.rc || {};
   const c = data.challans || {};
-  const tag = (data.fastag?.tags || []).find(t => /^A/i.test(t.status || t.tag_status || ''))
-    || (data.fastag?.tags || [])[0] || null;
+  const docs = report.documentsOf(rc);
 
   return {
     reg_no: data.vehicle_number,
     pretty: data.vehicle_number_pretty || data.vehicle_number,
     paid: false,
+    identity: {
+      maker: rc.maker || null,
+      // VAHAN carries the variant inside the model ("H/H.SPLENDOR PLUS"), so
+      // the two are one field rather than an invented split.
+      model: rc.model || null,
+      vehicle_class: rc.vehicle_class || null,
+      fuel: rc.fuel || null,
+    },
+    /* How much is wrong, never what. */
+    found: {
+      documents_expired: docs.filter(d => d.days < 0).length,
+      documents_due: docs.filter(d => d.days >= 0 && d.days <= 60).length,
+      documents_total: docs.length,
+      challans_pending: c.pending_count ?? 0,
+      has_record: docs.length > 0,
+    },
+    /* Named so the buyer knows what they are buying — with no answers in it. */
+    locked: [
+      'Loan / hypothecation status',
+      'Blacklist and NOC status',
+      'Insurance, PUC, road tax, fitness and permit validity',
+      'Every challan, with its offence, place and amount',
+      'Insurer, policy and PUC references',
+      'FASTag status and balance',
+      'RTO, registration date and how many owners',
+    ],
+    checked_at: data.fetched_at || new Date().toISOString(),
+  };
+}
+
+/** The paid view: everything the report holds, with the same masking. */
+function full(data) {
+  const rc = data.rc || {};
+  const c = data.challans || {};
+  const tag = (data.fastag?.tags || []).find(t => /^A/i.test(t.status || t.tag_status || ''))
+    || (data.fastag?.tags || [])[0] || null;
+
+  const out = {
+    reg_no: data.vehicle_number,
+    pretty: data.vehicle_number_pretty || data.vehicle_number,
+    paid: true,
+    locked: null,
     identity: {
       maker: rc.maker || null,
       model: rc.model || null,
@@ -48,38 +104,13 @@ function basic(data) {
       days: d.days,
       state: d.days < 0 ? 'expired' : d.days <= 30 ? 'due' : 'valid',
     })),
-    challans: {
-      pending_count: c.pending_count ?? null,
-      pending_amount_paise: c.pending_amount_paise ?? null,
-      disposed_count: c.disposed_count ?? null,
-      // The list itself is what the report is for.
-      locked: (c.pending_count || 0) > 0,
-    },
     fastag: tag ? {
       active: /^A/i.test(tag.status || tag.tag_status || ''),
       balance: tag.balance ?? null,
       issued_on: tag.issue_date || null,
     } : null,
-    // What paying adds, named rather than hinted at, and only where there is
-    // something real behind it.
-    locked: {
-      financer: Boolean(rc.financer),
-      blacklist: Boolean(rc.blacklist_status && !/^(NA|NONE|-)$/i.test(String(rc.blacklist_status))),
-      noc: Boolean(rc.noc_details && !/^(NA|NONE|-)$/i.test(String(rc.noc_details))),
-      challan_details: (c.pending_count || 0) > 0,
-      document_numbers: Boolean(rc.insurance_policy || rc.pucc_number || rc.permit_number),
-    },
     checked_at: data.fetched_at || new Date().toISOString(),
   };
-}
-
-/** The paid view: everything the report holds, with the same masking. */
-function full(data) {
-  const rc = data.rc || {};
-  const c = data.challans || {};
-  const out = basic(data);
-  out.paid = true;
-  out.locked = null;
 
   out.ownership = {
     owner_serial: rc.owner_serial ?? null,
@@ -99,7 +130,9 @@ function full(data) {
   };
 
   out.challans = {
-    ...out.challans,
+    pending_count: c.pending_count ?? 0,
+    pending_amount_paise: c.pending_amount_paise ?? null,
+    disposed_count: c.disposed_count ?? 0,
     locked: false,
     disposed_amount_paise: c.disposed_amount_paise ?? null,
     summary: c.summary || null,
