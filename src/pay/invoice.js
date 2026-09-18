@@ -34,8 +34,9 @@ const STATES = {
   '10':'Bihar','11':'Sikkim','12':'Arunachal Pradesh','13':'Nagaland','14':'Manipur',
   '15':'Mizoram','16':'Tripura','17':'Meghalaya','18':'Assam','19':'West Bengal',
   '20':'Jharkhand','21':'Odisha','22':'Chhattisgarh','23':'Madhya Pradesh','24':'Gujarat',
-  '27':'Maharashtra','29':'Karnataka','30':'Goa','32':'Kerala','33':'Tamil Nadu',
-  '34':'Puducherry','35':'Andaman & Nicobar','36':'Telangana','37':'Andhra Pradesh',
+  '26':'Dadra & Nagar Haveli and Daman & Diu','27':'Maharashtra','29':'Karnataka','30':'Goa',
+  '31':'Lakshadweep','32':'Kerala','33':'Tamil Nadu','34':'Puducherry','35':'Andaman & Nicobar',
+  '36':'Telangana','37':'Andhra Pradesh','38':'Ladakh',
 };
 
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -85,7 +86,7 @@ async function forPayment(paymentId) {
   if (existing) return { invoice: existing, created: false };
 
   const pay = await db.one(
-    `SELECT p.*, u.mobile, u.wa_profile_name, u.state_code, u.email,
+    `SELECT p.*, u.mobile, u.wa_profile_name, u.display_name, u.state_code, u.email,
             v.reg_no, s.ends_on, s.starts_on, pl.kind AS plan_kind
        FROM payments p
        JOIN users u ON u.id = p.user_id
@@ -113,7 +114,8 @@ async function forPayment(paymentId) {
   // GaadiPe sells to consumers, and an unregistered buyer's supply is where the
   // supplier is.
   const home = String(business.home_state_code || '29');
-  const buyerState = pay.state_code || home;
+  // What the buyer entered before paying wins; then the account; then home.
+  const buyerState = pay.raw?.buyer_state_code || pay.state_code || home;
   const interstate = String(buyerState) !== home;
 
   const cgst = interstate ? 0 : Math.round(tax / 2);
@@ -132,7 +134,7 @@ async function forPayment(paymentId) {
        RETURNING *`,
       [pay.user_id, pay.subscription_id, pay.id, number, base, gstPercent,
        cgst, sgst, igst, gross, buyerState,
-       pay.wa_profile_name || pay.mobile, token, consent ? JSON.stringify(consent) : null]);
+       pay.raw?.buyer_name || pay.display_name || pay.wa_profile_name || pay.mobile, token, consent ? JSON.stringify(consent) : null]);
     return rows[0];
   });
 
@@ -197,4 +199,4 @@ async function forPayment(paymentId) {
   return { invoice: { ...row, pdf_path: file }, created: true, pdf, pay };
 }
 
-module.exports = { forPayment, nextNumber };
+module.exports = { forPayment, nextNumber, STATES };

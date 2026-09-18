@@ -269,7 +269,7 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
   // exactly as buyable as one just typed in, and the page should say so.
   const plan = await billing.reportPlan();
   res.json({
-    vehicle: paid ? view.full(data) : view.basic(data),
+    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     can_buy: Boolean(plan && razorpay.configured() && !paid),
     price_paise: plan?.price_paise ?? null,
@@ -286,6 +286,13 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
 router.post('/check', safe(async (req, res) => {
   const parsed = plate.parse(req.body?.reg_no);
   if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+
+  // Many DIFFERENT vehicles from one account or address in an hour is scraping.
+  const scan = await require('../security/guard').noteVehicleCheck(req, parsed.regNo);
+  if (!scan.ok) {
+    return res.status(429).json({ error: 'too_many_vehicles',
+      message: 'You have checked a lot of vehicles in a short time. Please try again in an hour.' });
+  }
 
   if (await blocks.isBlocked('vehicle', parsed.regNo)) {
     return res.status(403).json({ error: 'blocked',
@@ -320,7 +327,7 @@ router.post('/check', safe(async (req, res) => {
 
   const plan = await billing.reportPlan();
   res.json({
-    vehicle: paid ? view.full(data) : view.basic(data),
+    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     can_buy: Boolean(plan && razorpay.configured() && !paid),
     price_paise: plan?.price_paise ?? null,
@@ -348,6 +355,33 @@ router.post('/check', safe(async (req, res) => {
  * the documents are English and a tax record should not depend on a
  * translation being made later.
  */
+/*
+ * A PAID RECORD, SERVED (user, 2026-09-18). Two protections on the full record:
+ *   · a daily cap per account (full_views_per_day_user). A paying customer opens
+ *     a handful; a scraper opens hundreds. Past the cap the basic view is shown
+ *     with a note — never an error, since they have paid — the PDF report stays
+ *     downloadable, and the admin hears about it.
+ *   · the account's watermark (security/watermark.js): the same data, fields in
+ *     an order unique to this account, so a leaked copy can be traced.
+ */
+async function fullRecord(req, regNo, data) {
+  const cap = await settings.num('full_views_per_day_user', 25);
+  const today = await db.one(
+    `SELECT count(*)::int AS n FROM event_log
+      WHERE user_id = $1 AND kind = 'full_view'
+        AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'`,
+    [req.user.id]);
+  if (today.n >= cap) {
+    await require('../security/guard').record('full_view_cap', req, {
+      surface: 'site', detail: { views_today: today.n, cap, reg_no: regNo } });
+    return { ...view.basic(data), limited: true, limit_per_day: cap };
+  }
+  await db.query(
+    `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'full_view', $2)`,
+    [req.user.id, JSON.stringify({ reg_no: regNo, ip: req.ip })]);
+  return require('../security/watermark').watermark(view.full(data), req.user.id);
+}
+
 const DECLARATIONS = {
   en: 'I confirm this vehicle is mine, or that its owner is known to me, and that '
     + 'I am requesting its details for a lawful purpose. I take responsibility for how I use them.',
@@ -365,6 +399,26 @@ router.post('/buy', safe(async (req, res) => {
     return res.status(400).json({ error: 'declaration_required',
       message: 'Please confirm that this vehicle is yours or that its owner is known to you.' });
   }
+
+  /*
+   * WHO IS BUYING, FOR THE INVOICE (user, 2026-09-18): the name printed under
+   * "Billed to", and the state or union territory — the place of supply, which
+   * decides CGST+SGST (Karnataka) or IGST (anywhere else). Asked before Pay now,
+   * remembered on the account for next time, and kept on the payment so the
+   * invoice says what was entered for THIS purchase.
+   */
+  const { STATES } = require('../pay/invoice');
+  const buyerName = String(req.body?.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const buyerState = String(req.body?.state_code || '').replace(/\D/g, '').padStart(2, '0');
+  if (buyerName.length < 2) {
+    return res.status(400).json({ error: 'name_required', message: 'Please enter your name for the invoice.' });
+  }
+  if (!STATES[buyerState]) {
+    return res.status(400).json({ error: 'state_required', message: 'Please choose your state or union territory.' });
+  }
+  await db.query(
+    `UPDATE users SET display_name = $2, state_code = $3, modified_at = now() WHERE id = $1`,
+    [req.user.id, buyerName, buyerState]);
 
   const existing = await reports.validFor(req.user.id, parsed.regNo);
   if (existing) {
@@ -445,6 +499,10 @@ router.post('/buy', safe(async (req, res) => {
   }
 
   await consent(row.id);
+  // This purchase's buyer, as entered — the invoice reads it from here.
+  await db.query(
+    `UPDATE payments SET raw = COALESCE(raw,'{}'::jsonb) || $2::jsonb WHERE id = $1`,
+    [row.id, JSON.stringify({ buyer_name: buyerName, buyer_state_code: buyerState })]);
 
   res.json({ ok: true, pay_path: `/pay/${row.checkout_token}`,
              pay_url: base ? `${base}/pay/${row.checkout_token}` : null,

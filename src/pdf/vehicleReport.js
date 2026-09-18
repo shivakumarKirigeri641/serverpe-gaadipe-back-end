@@ -239,17 +239,44 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       }
     }
 
-    /* ── fastag ── */
-    const tag = (data.fastag?.tags || [])[0];
-    if (tag) {
-      y = T.ensureSpace(doc, y, 80);
-      y = T.sectionTitle(doc, 'FASTag', y, T.BRAND.brand);
+    /* ── fastag ──
+       EVERY TAG (user, 2026-09-18). A vehicle often has more than one on record —
+       an old tag blacklisted or closed, and the one on the windscreen now.
+       Printing only the first showed "Inactive" for a vehicle that had an active
+       tag. So: the summary first (is there an active tag?), then every tag, the
+       active ones at the top. */
+    const tags = [...(data.fastag?.tags || [])].sort((a, b) =>
+      Number(Boolean(b.is_active || /active/i.test(b.status || '') && !/inactive/i.test(b.status || '')))
+      - Number(Boolean(a.is_active || /active/i.test(a.status || '') && !/inactive/i.test(a.status || ''))));
+    if (tags.length) {
+      const isActive = (t) => t.is_active === true
+        || (/active/i.test(String(t.status || '')) && !/inactive|deactiv/i.test(String(t.status || '')));
+      const active = tags.filter(isActive);
+      y = T.ensureSpace(doc, y, 110);
+      y = T.sectionTitle(doc, `FASTag (${tags.length} on record)`, y,
+        active.length ? T.BRAND.green : (T.BRAND.red || T.BRAND.brand));
       y = T.kvCard(doc, [
-        ['Status', titleCase(tag.status) || '—'],
-        ['Issued on', fmt(tag.issue_date)],
-        ['Vehicle class', tag.vehicle_class || '—'],
-        ['Commercial', tag.commercial ? 'Yes' : 'No'],
+        ['Active tag', active.length ? `Yes — ${active.length} active` : 'No active tag',
+          active.length ? T.BRAND.green : (T.BRAND.red || T.BRAND.brand)],
+        ['Tags on record', String(tags.length)],
+        ...(data.fastag?.last_seen_plaza ? [['Last toll seen', `${data.fastag.last_seen_plaza}${data.fastag.last_seen_at ? ` · ${fmt(data.fastag.last_seen_at)}` : ''}`]] : []),
       ], y, { cols: 2 });
+      y = T.table(doc, [
+        { label: 'Tag ID', width: W * 0.33, nowrap: true },
+        { label: 'Status', width: W * 0.14, nowrap: true },
+        { label: 'Issued', width: W * 0.14, nowrap: true },
+        { label: 'Class', width: W * 0.09, nowrap: true },
+        { label: 'Bank', width: W * 0.12, nowrap: true },
+        { label: 'Commercial', width: W * 0.18, nowrap: true },
+      ], tags.map((t) => [
+        t.tag_id || t.tid || '—',
+        isActive(t) ? 'Active' : (titleCase(t.status) || 'Inactive'),
+        fmt(t.issue_date),
+        t.vehicle_class || '—',
+        t.bank_id || '—',
+        t.commercial ? 'Yes' : 'No',
+      ]), y, { rowH: 15, maxRows: Infinity });
+      y += 6;
     }
 
     /* ── who asked for this ── */
@@ -277,10 +304,22 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
          + 'and chassis and engine numbers are never disclosed.',
          T.M, y + 4, { width: W, align: 'justify' });
 
+    /* WHOSE COPY THIS IS (user, 2026-09-18): the buyer on every page, and a
+       tag in the file's own properties that ties it to the account even if the
+       visible lines are cropped. */
+    const digits = String(requester.mobile || '').replace(/\D/g, '');
+    const mark = report.sample ? 'SAMPLE · not issued to anyone'
+      : [`Issued to ${requester.name || 'customer'}`, digits ? `••••${digits.slice(-4)}` : null,
+         report.report_number, T.fmtDate(report.created_at || new Date())].filter(Boolean).join('  ·  ');
+    doc.info.Subject = `GaadiPe vehicle report ${report.report_number || ''}`.trim();
+    doc.info.Keywords = `gp:${require('crypto').createHmac('sha256', process.env.VEHICLE_LOOKUP_KEY || 'gaadipe')
+      .update(`${report.report_number}|${digits}`).digest('hex').slice(0, 16)}`;
+
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(range.start + i);
       T.watermark(doc);
+      T.personalMark(doc, mark);
       T.pageFurniture(doc, {
         page: i + 1, total: range.count, docNumber: report.report_number,
         generatedAt, business,

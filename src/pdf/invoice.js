@@ -33,46 +33,59 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
       business,
     });
 
-    /* ── seller / buyer cards ── */
+    /* ── seller / buyer cards ──
+       MEASURED, THEN DRAWN (user, 2026-09-18): a fixed-height card let a long
+       address run out of the bottom and made the two cards disagree. Each card's
+       lines are measured first, both cards take the taller height, and every
+       line sits on the same 7.6pt rhythm with the same gap.
+       What is shown is deliberately short: the GSTIN (no PAN — the GSTIN
+       already carries it), the support email and website, and the proprietor
+       by first name. No phone number: support is by email. */
     const colW = (W - 12) / 2;
-    const boxH = 104;
-    T.card(doc, T.M, y, colW, boxH, { fill: T.BRAND.soft });
-    T.card(doc, T.M + colW + 12, y, colW, boxH, { fill: T.BRAND.soft });
+    const pad = 12;
+    const innerW = colW - pad * 2;
+    const firstName = String(business.proprietor_name || "").trim().split(/\s+/)[0] || null;
 
-    T.label(doc, "Billed by", T.M + 12, y + 10);
-    doc.fillColor(T.BRAND.ink).font(doc._F.bold).fontSize(10.5)
-       .text(business.business_name || "ServerPe App Solutions", T.M + 12, y + 24, { width: colW - 24, lineBreak: false });
-    doc.fillColor(T.BRAND.body).font(doc._F.regular).fontSize(7.6);
-    let sy = y + 39;
-    [
+    const sellerLines = [
       business.registered_address,
-      [business.gstin ? `GSTIN: ${business.gstin}` : null, business.pan ? `PAN: ${business.pan}` : null]
-        .filter(Boolean).join("   ·   "),
+      business.gstin ? `GSTIN: ${business.gstin}` : null,
       business.product_support_email || business.support_email,
-      // A customer querying a charge should be able to reach us from the
-      // invoice itself, without going looking for the number.
-      business.whatsapp_number ? `WhatsApp: ${business.whatsapp_number}` : null,
       business.product_website,
-      business.proprietor_name ? `Proprietor: ${business.proprietor_name}` : null,
-    ].filter(Boolean).forEach((l) => {
-      doc.text(l, T.M + 12, sy, { width: colW - 24 });
-      sy = doc.y + 1;
-    });
+      firstName ? `Proprietor: ${firstName}` : null,
+    ].filter(Boolean);
 
-    const bx = T.M + colW + 24;
-    T.label(doc, "Billed to", bx, y + 10);
-    doc.fillColor(T.BRAND.ink).font(doc._F.bold).fontSize(10.5)
-       .text(invoice.customer_name || "Customer", bx, y + 24, { width: colW - 24, lineBreak: false });
-    doc.fillColor(T.BRAND.body).font(doc._F.regular).fontSize(7.6);
-    let cy = y + 39;
-    [
+    const buyerLines = [
       invoice.customer_gstin ? `GSTIN: ${invoice.customer_gstin}` : null,
       invoice.customer_mobile ? `Mobile: ${invoice.customer_mobile}` : null,
       invoice.customer_email,
-      invoice.place_of_supply ? `Place of supply: ${invoice.place_of_supply}` +
-        (invoice.place_of_supply_code ? ` (${invoice.place_of_supply_code})` : "") : null,
-      invoice.is_interstate ? "Inter-state supply" : "Intra-state supply",
-    ].filter(Boolean).forEach((l) => { doc.text(l, bx, cy, { width: colW - 24 }); cy = doc.y + 1; });
+      invoice.place_of_supply
+        ? `State / UT: ${invoice.place_of_supply}${invoice.place_of_supply_code ? ` (${invoice.place_of_supply_code})` : ""}`
+        : null,
+      invoice.is_interstate ? "Inter-state supply — IGST" : "Intra-state supply — CGST + SGST",
+    ].filter(Boolean);
+
+    const LINE_GAP = 2.5;
+    const measure = (lines) => {
+      doc.font(doc._F.regular).fontSize(7.6);
+      return lines.reduce((h, l) => h + doc.heightOfString(l, { width: innerW }) + LINE_GAP, 0);
+    };
+    const bodyTop = 40;                      // label at +10, name at +22, lines from +40
+    const boxH = Math.max(96, bodyTop + Math.max(measure(sellerLines), measure(buyerLines)) + 10);
+
+    const drawCard = (x, label, name, lines) => {
+      T.card(doc, x, y, colW, boxH, { fill: T.BRAND.soft });
+      T.label(doc, label, x + pad, y + 10);
+      doc.fillColor(T.BRAND.ink).font(doc._F.bold).fontSize(10.5)
+         .text(name, x + pad, y + 22, { width: innerW, height: 14, ellipsis: true, lineBreak: false });
+      doc.fillColor(T.BRAND.body).font(doc._F.regular).fontSize(7.6);
+      let ly = y + bodyTop;
+      for (const l of lines) {
+        doc.text(l, x + pad, ly, { width: innerW, lineGap: 0 });
+        ly = doc.y + LINE_GAP;
+      }
+    };
+    drawCard(T.M, "Billed by", business.business_name || "ServerPe App Solutions", sellerLines);
+    drawCard(T.M + colW + 12, "Billed to", invoice.customer_name || "Customer", buyerLines);
 
     y += boxH + 14;
 
@@ -85,11 +98,13 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
 
     y = T.sectionTitle(doc, "Particulars", y);
     y = T.table(doc, [
-      { label: "Description", width: 300 },
-      { label: "SAC", width: 52, nowrap: true },
+      // A little under the page width, so the right-aligned figures in the
+      // last column do not touch the edge.
+      { label: "Description", width: 284 },
+      { label: "SAC", width: 56, nowrap: true },
       { label: "Qty", width: 34, align: "center", nowrap: true },
-      { label: "Rate", width: 66, align: "right", nowrap: true },
-      { label: "Taxable", width: 71, align: "right", nowrap: true },
+      { label: "Rate", width: 70, align: "right", nowrap: true },
+      { label: "Taxable", width: 76, align: "right", nowrap: true },
     ], lineRows.map((it) => [
       it.description || `Full Vehicle Report${it.reg_no ? ` — ${it.reg_no}` : ""}`,
       sac, "1", T.money(it.taxable), T.money(it.taxable),
@@ -116,7 +131,7 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
     }
     rows.push(["Total tax", T.money(invoice.total_tax)]);
 
-    const totalsH = rows.length * 18 + 44;
+    const totalsH = rows.length * 18 + 36;
     T.card(doc, boxX, y, boxW, totalsH, { fill: T.BRAND.soft });
     let ty = y + 12;
     rows.forEach(([k, v]) => { ty = T.kv(doc, k, v, boxX + 12, ty, boxW - 24, { size: 8.5 }); ty -= 1.5; });
@@ -142,26 +157,21 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
        the description: it ends up as an ellipsis. It also happens to be the
        first thing a customer looks for, which is reason enough for it to have a
        block of its own. */
-    if (lineItem.period_from || lineItem.period_to) {
-      y = T.sectionTitle(doc, "Service Period", y, T.BRAND.brand);
+    /* One card, not two (user, 2026-09-18): the separate Service Period card
+       pushed the consent record onto a second page. The vehicle is already in
+       the table above. No "renewal" line — nothing renews; a new purchase is a
+       new invoice. */
+    if (lineItem.payment_id || lineItem.order_id || lineItem.period_from || lineItem.period_to) {
+      const monitoring = (lineItem.period_from || lineItem.period_to)
+        ? [["Monitoring", `${T.fmtDate(lineItem.period_from)} – ${T.fmtDate(lineItem.period_to)}`]] : [];
+      y = T.sectionTitle(doc, "Payment & service", y, T.BRAND.green);
       y = T.kvCard(doc, [
-        ["Vehicle", lineItem.reg_no || "—"],
-        ["Monitoring from", T.fmtDate(lineItem.period_from)],
-        ["Monitoring until", T.fmtDate(lineItem.period_to)],
-        ["Renewal due on", T.fmtDate(lineItem.period_to)],
-      ], y, { cols: 2 });
-    }
-
-    /* ── payment reference ── */
-    if (lineItem.payment_id || lineItem.order_id) {
-      y = T.sectionTitle(doc, "Payment Reference", y, T.BRAND.green);
-      y = T.kvCard(doc, [
-        ["Payment ID", lineItem.payment_id],
-        ["Order ID", lineItem.order_id],
-        ["Method", lineItem.method ? String(lineItem.method).toUpperCase() : "ONLINE"],
+        ["Payment ID", lineItem.payment_id || "—"],
         ["Paid at", T.fmtDateTime(lineItem.paid_at)],
-        ["Gateway", "Razorpay"],
+        ["Order ID", lineItem.order_id || "—"],
         ["Status", "PAID", T.BRAND.green],
+        ["Method", lineItem.method ? String(lineItem.method).toUpperCase() : "Online · Razorpay"],
+        ...monitoring,
       ], y, { cols: 2 });
     }
 

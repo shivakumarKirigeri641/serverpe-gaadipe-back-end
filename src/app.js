@@ -60,7 +60,7 @@ const cors = (allowedOrigins) => (req, res, next) => {
   if (origin && allowedOrigins.includes(origin.replace(/\/+$/, ''))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Refresh');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Refresh, X-GP-K, X-GP-D');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
     res.setHeader('Access-Control-Max-Age', '600');
@@ -69,12 +69,22 @@ const cors = (allowedOrigins) => (req, res, next) => {
   next();
 };
 
-app.use('/admin/api', cors(config.admin.origins), adminRoutes);
+/* Every JSON call to the panel and the site goes through the same chain (user,
+   2026-09-18): refused IPs, automation tools and the per-IP rate first; then the
+   encrypted envelope is opened; then the same-call-in-a-loop check; then the
+   routes. PDF downloads stay plain — they are files, not JSON. */
+const { gate, loopGuard } = require('./security/guard');
+const { tunnel } = require('./security/tunnel');
+const fileRoute = (req) => /^\/(reports|invoices)\/[^/]+\/file$/.test(req.path);
+
+app.use('/admin/api', cors(config.admin.origins), gate('admin'), tunnel('admin', { exempt: fileRoute }),
+  loopGuard('admin'), adminRoutes);
 
 /* ------------------------------------------------------------- the website */
 // gaadipe.in, where a customer signs in with their own number to see their
 // vehicles, reports and invoices. Same data as WhatsApp, second door.
-app.use('/site/api', cors(config.site.origins), siteRoutes);
+app.use('/site/api', cors(config.site.origins), gate('site'), tunnel('site', { exempt: fileRoute }),
+  loopGuard('site'), siteRoutes);
 
 /* ------------------------------------------------------------------ public */
 // Legal pages the website reads. No API key: Meta checks the privacy-policy
