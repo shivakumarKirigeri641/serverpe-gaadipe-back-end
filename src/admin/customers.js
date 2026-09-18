@@ -22,12 +22,29 @@ const device = require('../site/device');
 
 /* What the list can be sorted by. Names, not raw SQL, so a query parameter can
    never reach the ORDER BY clause. */
+
+/*
+ * A SESSION, MEASURED (user, 2026-09-18). Duration runs to the sign-out for a
+ * session that was signed out, otherwise to its last activity. "Online" means
+ * active in the last 15 minutes and not ended.
+ */
+const SESSION_COLS = `
+  s.id, s.user_id, s.created_at, s.last_used_at, s.ended_at, s.ended_reason, s.request_count,
+  s.ip, s.last_ip, s.device_id, s.user_agent, s.sign_in_id,
+  greatest(0, extract(epoch FROM (CASE WHEN s.ended_reason = 'signed_out' AND s.ended_at IS NOT NULL
+                                       THEN s.ended_at ELSE s.last_used_at END) - s.created_at))::int AS seconds,
+  CASE WHEN s.ended_at IS NULL AND s.last_used_at > now() - interval '15 minutes' THEN 'online'
+       WHEN s.ended_at IS NULL THEN 'idle'
+       ELSE coalesce(s.ended_reason, 'ended') END AS state`;
+
 const SORTS = {
   last_seen: 'u.last_seen_at DESC NULLS LAST',
   joined: 'u.created_at DESC',
   paid: 'paid_paise DESC NULLS LAST',
   checks: 'vehicles_checked DESC',
   reports: 'reports_bought DESC',
+  sign_ins: 'sign_ins DESC NULLS LAST',
+  time: 'seconds_on_site DESC NULLS LAST',
 };
 
 /**
@@ -61,8 +78,16 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
          FROM payments GROUP BY user_id
      ), docs AS (
        SELECT user_id, count(*) AS reports_bought FROM vehicle_reports GROUP BY user_id
+     ), visits AS (
+       SELECT user_id, count(*) AS sign_ins, sum(seconds) AS seconds_on_site,
+              max(created_at) AS last_sign_in_at,
+              max(ended_at) FILTER (WHERE ended_reason = 'signed_out') AS last_sign_out_at,
+              count(*) FILTER (WHERE state = 'online') AS online
+         FROM (SELECT ${SESSION_COLS} FROM site_sessions s) x GROUP BY user_id
      )
-     SELECT u.id, u.mobile, u.wa_profile_name AS name, u.is_internal, u.is_paused,
+     SELECT u.id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name, u.is_internal, u.is_paused,
+            coalesce(vi.sign_ins, 0) AS sign_ins, coalesce(vi.seconds_on_site, 0) AS seconds_on_site,
+            vi.last_sign_in_at, vi.last_sign_out_at, coalesce(vi.online, 0) > 0 AS online,
             u.created_at, u.last_seen_at,
             pu.vehicles_checked, pu.checks_made, pu.last_check_at,
             coalesce(m.payments_made, 0) AS payments_made,
@@ -85,6 +110,7 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
        LEFT JOIN per_user pu ON pu.id = u.id
        LEFT JOIN money m     ON m.user_id = u.id
        LEFT JOIN docs d      ON d.user_id = u.id
+       LEFT JOIN visits vi   ON vi.user_id = u.id
       WHERE ($1 = '' OR u.mobile LIKE '%' || $2 || '%'
              OR u.wa_profile_name ILIKE '%' || $1 || '%'
              OR EXISTS (SELECT 1 FROM user_vehicles uv2
@@ -107,6 +133,8 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
       ...r,
       id: String(r.id),
       vehicles_checked: Number(r.vehicles_checked || 0),
+      sign_ins: Number(r.sign_ins || 0),
+      seconds_on_site: Number(r.seconds_on_site || 0),
       checks_made: Number(r.checks_made || 0),
       payments_made: Number(r.payments_made || 0),
       paid_paise: Number(r.paid_paise || 0),
@@ -191,8 +219,10 @@ async function detail(userId) {
         `SELECT * FROM site_sign_ins WHERE user_id = $1 OR mobile = $2
           ORDER BY id DESC LIMIT 500`, [userId, user.mobile]),
       db.query(
-        `SELECT id, ip, last_ip, user_agent, device_id, created_at, last_used_at, ended_at, ended_reason
-           FROM site_sessions WHERE user_id = $1 ORDER BY id DESC LIMIT 200`, [userId]),
+        `SELECT ${SESSION_COLS}, g.city, g.region, g.country, g.device_model, g.device_vendor,
+                g.device_type, g.os, g.os_version, g.browser, g.browser_version
+           FROM site_sessions s LEFT JOIN site_sign_ins g ON g.id = s.sign_in_id
+          WHERE s.user_id = $1 ORDER BY s.id DESC LIMIT 500`, [userId]),
     ]);
 
   const totals = {
@@ -220,7 +250,8 @@ async function detail(userId) {
     sign_ins: signIns.rows.map(r => ({ ...r, id: String(r.id), described: device.describe(r),
       name: user.display_name || user.wa_profile_name || null,
       place: device.placeOf(r.city || r.region || r.country ? r : device.locate(r.ip)) })),
-    sessions: sessions.rows.map(r => ({ ...r, id: String(r.id), described: device.describe(device.parseUA(r.user_agent)) })),
+    sessions: sessions.rows.map(sessionOut),
+    visits: summarise(sessions.rows),
   };
 }
 
@@ -232,4 +263,43 @@ async function setPaused(userId, paused) {
   return rows[0] || null;
 }
 
-module.exports = { list, detail, setPaused, SORTS };
+/* One session as the panel shows it: device and place from its sign-in step
+   when there is one, parsed from the user agent otherwise. */
+function sessionOut(r) {
+  const parsed = r.device_type ? r : { ...device.parseUA(r.user_agent) };
+  return {
+    ...r,
+    id: String(r.id),
+    user_id: r.user_id ? String(r.user_id) : null,
+    seconds: Number(r.seconds || 0),
+    request_count: Number(r.request_count || 0),
+    described: device.describe(parsed),
+    place: device.placeOf(r.city || r.region || r.country ? r : device.locate(r.ip)),
+  };
+}
+
+/* The whole of someone's visits, in the figures people ask for first. */
+function summarise(rows) {
+  const n = rows.length;
+  const secs = rows.map((r) => Number(r.seconds || 0));
+  const total = secs.reduce((t, x) => t + x, 0);
+  const signedOut = rows.filter((r) => r.ended_reason === 'signed_out');
+  return {
+    sign_ins: n,
+    online_now: rows.some((r) => r.state === 'online'),
+    open_sessions: rows.filter((r) => !r.ended_at).length,
+    seconds_total: total,
+    seconds_average: n ? Math.round(total / n) : 0,
+    seconds_longest: n ? Math.max(...secs) : 0,
+    requests_total: rows.reduce((t, r) => t + Number(r.request_count || 0), 0),
+    signed_out: signedOut.length,
+    expired: rows.filter((r) => r.ended_reason === 'expired').length,
+    first_sign_in_at: n ? rows[n - 1].created_at : null,
+    last_sign_in_at: n ? rows[0].created_at : null,
+    last_sign_out_at: signedOut.length ? signedOut[0].ended_at : null,
+    last_active_at: n ? rows.reduce((m, r) => (new Date(r.last_used_at) > new Date(m) ? r.last_used_at : m), rows[0].last_used_at) : null,
+    devices: new Set(rows.map((r) => r.device_id).filter(Boolean)).size,
+  };
+}
+
+module.exports = { list, detail, setPaused, SORTS, SESSION_COLS, sessionOut, summarise };

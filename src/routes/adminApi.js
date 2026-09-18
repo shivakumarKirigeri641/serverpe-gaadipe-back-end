@@ -157,6 +157,44 @@ router.get('/sign-ins', safe(async (req, res) => {
   });
 }));
 
+/*
+ * Every website visit (user, 2026-09-18): when it began, how long it lasted,
+ * how it ended — signed out, expired, deactivated, or still open — how much was
+ * done in it, and from which device and place.
+ */
+router.get('/sessions', safe(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const term = q ? `%${q.replace(/[%_]/g, '')}%` : '';
+  const state = String(req.query.state || '');
+  const { rows } = await db.query(
+    `SELECT * FROM (
+       SELECT ${customers.SESSION_COLS}, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
+              g.city, g.region, g.country, g.device_model, g.device_vendor, g.device_type,
+              g.os, g.os_version, g.browser, g.browser_version,
+              count(*) OVER () AS total_rows
+         FROM site_sessions s
+         JOIN users u ON u.id = s.user_id
+         LEFT JOIN site_sign_ins g ON g.id = s.sign_in_id
+        WHERE ($1 = '' OR u.mobile ILIKE $1 OR u.display_name ILIKE $1 OR u.wa_profile_name ILIKE $1
+               OR s.ip ILIKE $1 OR s.device_id ILIKE $1)
+     ) x
+     WHERE ($2 = '' OR state = $2)
+     ORDER BY id DESC LIMIT $3 OFFSET $4`,
+    [term, state, Math.min(200, Number(req.query.limit) || 25), Number(req.query.offset) || 0]);
+  const totals = await db.one(
+    `SELECT count(*) FILTER (WHERE state = 'online') AS online,
+            count(*) FILTER (WHERE created_at > now() - interval '1 day') AS today,
+            coalesce(round(avg(seconds)), 0) AS avg_seconds,
+            coalesce(sum(seconds), 0) AS total_seconds,
+            count(*) AS sessions
+       FROM (SELECT ${customers.SESSION_COLS} FROM site_sessions s) x`);
+  res.json({
+    total: rows[0] ? Number(rows[0].total_rows) : 0,
+    totals: Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, Number(v)])),
+    rows: rows.map(({ total_rows, ...r }) => customers.sessionOut(r)),
+  });
+}));
+
 /* Period against period, the fleet by class and document state, and when people check. */
 const insights = require('../admin/insights');
 const device = require('../site/device');

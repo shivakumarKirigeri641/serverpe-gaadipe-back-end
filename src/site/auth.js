@@ -264,7 +264,9 @@ async function sessionFor(token, ctx = {}) {
   }
   if (await blocks.isBlocked('mobile', row.mobile)) return null;
 
-  await db.query(`UPDATE site_sessions SET last_used_at = now(), last_ip = coalesce($2, last_ip) WHERE id = $1`,
+  await db.query(
+    `UPDATE site_sessions SET last_used_at = now(), last_ip = coalesce($2, last_ip),
+            request_count = request_count + 1 WHERE id = $1`,
     [row.id, ctx.ip || null]);
   return { sessionId: row.id, id: String(row.id), userId: String(row.user_id || row.id), user: row };
 }
@@ -290,7 +292,8 @@ async function deactivate(userId, { reason } = {}) {
       `UPDATE users SET deactivated_at = now(), deactivated_reason = $2,
               is_paused = true, modified_at = now() WHERE id = $1`, [userId, reason || null]);
     await c.query(`UPDATE watches SET is_active = false, modified_at = now() WHERE user_id = $1`, [userId]);
-    await c.query(`UPDATE site_sessions SET ended_at = now() WHERE user_id = $1 AND ended_at IS NULL`, [userId]);
+    await c.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'deactivated'
+                    WHERE user_id = $1 AND ended_at IS NULL`, [userId]);
     await c.query(
       `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'account_deactivated', $2)`,
       [userId, JSON.stringify({ reason: reason || null, at: new Date().toISOString() })]);
