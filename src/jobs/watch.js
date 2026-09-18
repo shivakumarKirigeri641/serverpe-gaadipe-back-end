@@ -238,12 +238,16 @@ async function notify(w, items, summary) {
    */
   const checkedOn = fmtDate(new Date());
   const attempts = [];
-  if (w.preferred_language === 'hi') {
+  // Until Meta approves the per-language templates, only the approved v2 is used.
+  const languagesLive = String(await settings.get('template_vehicle_alert_languages_live', 'false')) === 'true';
+  if (languagesLive && w.preferred_language === 'hi') {
     attempts.push({ name: await settings.get('template_vehicle_alert_hi', 'gp_vehicle_alert_hi_v1'),
                     language: 'hi', params: [name, w.reg_no, what, summary] });
   }
-  attempts.push({ name: await settings.get('template_vehicle_alert_en', 'gp_vehicle_alert_en_v1'),
-                  language: 'en', params: [name, w.reg_no, what, summary] });
+  if (languagesLive) {
+    attempts.push({ name: await settings.get('template_vehicle_alert_en', 'gp_vehicle_alert_en_v1'),
+                    language: 'en', params: [name, w.reg_no, what, summary] });
+  }
   attempts.push({ name: await settings.get('template_vehicle_alert_fallback', 'gp_vehicle_alert_v2'),
                   language: 'en', params: [name, w.reg_no, summary, checkedOn] });
 
