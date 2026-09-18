@@ -11,7 +11,9 @@ const T = require("./theme");
  *
  * Returns a Promise<Buffer>.
  */
-const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = null }) =>
+const { consentBlock, consentLine } = require('./consent');
+
+const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = null, consent = null }) =>
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "A4", margin: T.M, bufferPages: true });
     const chunks = [];
@@ -163,8 +165,23 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
       ], y, { cols: 2 });
     }
 
+    /* ── what was agreed to ── */
+    if (consent) y = consentBlock(doc, y, consent, { compact: true });
+
     /* ── grievance strip ── */
-    if (business.grievance_officer_name) {
+    if (business.grievance_officer_name && consent) {
+      // One line when the consent record is on the page — a whole card for a
+      // single sentence is what pushed the invoice onto a second, empty page.
+      y = T.ensureSpace(doc, y, 18);
+      doc.fillColor(T.BRAND.body).font(doc._F.regular).fontSize(7.6)
+         .text(`Support & grievance: ${business.grievance_officer_name}`
+               + `${business.grievance_officer_designation ? `, ${business.grievance_officer_designation}` : ''}`
+               + `  ·  ${business.grievance_officer_email || business.support_email || ''}`
+               + `${business.grievance_response_hours ? `  ·  response within ${business.grievance_response_hours}h` : ''}`,
+               T.M, y, { width: W });
+      y = doc.y + 8;
+    } else if (business.grievance_officer_name) {
+      y = T.ensureSpace(doc, y, 52);
       T.card(doc, T.M, y, W, 40, { fill: T.BRAND.soft });
       T.label(doc, "Support & grievance", T.M + 12, y + 9);
       doc.fillColor(T.BRAND.body).font(doc._F.regular).fontSize(7.8)
@@ -190,7 +207,7 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
                     "informative in nature and relate to vehicle particulars only. ServerPe App Solutions is NOT " +
                     "RESPONSIBLE for any misleading activity, or for any misuse of the content supplied. Please read " +
                     "and understand the Terms, Consents and Policies carefully before proceeding. " +
-                    (business?.purpose_declaration_doc ||
+                    (consentLine(consent) || business?.purpose_declaration_doc ||
                      "Requester's declaration: the requester confirmed that the vehicle(s) and their owner(s) are known to them and that these details were requested for a lawful, legitimate purpose, taking full responsibility for their use."),
       });
     }

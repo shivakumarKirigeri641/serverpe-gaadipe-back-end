@@ -173,6 +173,21 @@ async function verifyCode({ mobile, code, ip, userAgent }) {
     `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'site_sign_in', $2)`,
     [user.id, JSON.stringify({ mobile: m, ip: ip || null, user_agent: userAgent || null })]);
 
+  /*
+   * The sign-in page says "by signing in you accept our Terms, Privacy policy
+   * and Refund policy". A sentence on a page is not a record; this is. Written
+   * on every sign-in, with the versions in force, so the agreement a purchase
+   * was made under can always be named.
+   */
+  const { policyVersions } = require('../pay/consent');
+  const v = await policyVersions();
+  await db.query(
+    `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'consent_accepted', $2)`,
+    [user.id, JSON.stringify({ mobile: m, role: 'customer', channel: 'web',
+      documents: ['terms', 'privacy', 'refund'], policy_version: v.terms,
+      versions: v, ip: ip || null, user_agent: userAgent || null,
+      at: new Date().toISOString() })]);
+
   return { ok: true, token, user: publicUser({ ...user, deactivated_at: null }) };
 }
 

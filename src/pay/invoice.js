@@ -93,6 +93,12 @@ async function forPayment(paymentId) {
   const business = await db.one(
     `SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
 
+  // The agreement this payment was made under, frozen onto the invoice.
+  const consent = await require('./consent').forPayment({
+    paymentRowId: pay.id, userId: pay.user_id,
+    vehicleId: pay.raw?.vehicle_id ? Number(pay.raw.vehicle_id) : null,
+  }).catch(() => null);
+
   const gstPercent = 18;
   const gross = pay.amount_paise;
   const base = Math.round(gross / (1 + gstPercent / 100));
@@ -116,12 +122,12 @@ async function forPayment(paymentId) {
       `INSERT INTO invoices
          (user_id, subscription_id, payment_id, invoice_number, base_paise,
           gst_percent, cgst_paise, sgst_paise, igst_paise, total_paise,
-          place_of_supply, buyer_name, access_token)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          place_of_supply, buyer_name, access_token, consent)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING *`,
       [pay.user_id, pay.subscription_id, pay.id, number, base, gstPercent,
        cgst, sgst, igst, gross, buyerState,
-       pay.wa_profile_name || pay.mobile, token]);
+       pay.wa_profile_name || pay.mobile, token, consent ? JSON.stringify(consent) : null]);
     return rows[0];
   });
 
@@ -129,6 +135,7 @@ async function forPayment(paymentId) {
   // a separate `gst` object printed a correct invoice with every figure zero —
   // the worst kind of bug in a statutory document, because it looks finished.
   const pdf = await buildInvoice({
+    consent,
     invoice: {
       invoice_number: row.invoice_number,
       invoice_date: row.invoice_date,

@@ -286,7 +286,12 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
     if (withText) await send.text(pay.mobile, await report.buildFor(data, { detailed: true }));
 
     const paidFrom = pay.raw?.paid_from || {};
+    const consent = await require('../pay/consent').forPayment({
+      paymentRowId: pay.id, userId: pay.user_id,
+      vehicleId: pay.raw?.vehicle_id ? Number(pay.raw.vehicle_id) : null,
+    }).catch(() => null);
     ({ report: doc } = await reports.issue({
+      consent,
       userId: pay.user_id,
       vehicleId: pay.raw?.vehicle_id || null,
       paymentId: pay.id,

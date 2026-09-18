@@ -525,6 +525,26 @@ router.get('/audit', safe(async (req, res) => {
   res.json({ rows: rows.map(r => ({ ...r, id: String(r.id) })) });
 }));
 
+/* ------------------------------------------------------------ maintenance */
+
+const maintenance = require('../admin/maintenance');
+
+router.get('/maintenance/preview', needs('admins'), safe(async (_req, res) =>
+  res.json(await maintenance.preview())));
+
+/**
+ * Clear customer and test data. Owner only, and the word CLEAN must be typed:
+ * a button alone is one careless click away from an empty database.
+ */
+router.post('/maintenance/clean', needs('admins'), safe(async (req, res) => {
+  if (req.body?.confirm !== 'CLEAN') {
+    return res.status(400).json({ error: 'not_confirmed', message: 'Type CLEAN to confirm.' });
+  }
+  const out = await maintenance.clean({ adminId: req.admin.id, ip: ipOf(req) });
+  if (!out.ok) return res.status(403).json({ error: 'not_allowed', message: out.message });
+  res.json(out);
+}));
+
 /* ----------------------------------------------------------------- health */
 
 /** Is anything quietly broken? The panel shows this as a strip of lights. */

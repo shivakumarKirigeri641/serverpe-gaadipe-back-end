@@ -61,7 +61,9 @@ const clip = (s, n) => {
   return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t;
 };
 
-const buildVehicleReport = ({ report, business = {}, data, requester = {} }) =>
+const { consentBlock, consentLine } = require('./consent');
+
+const buildVehicleReport = ({ report, business = {}, data, requester = {}, consent = null }) =>
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: T.M, bufferPages: true });
     const chunks = [];
@@ -261,7 +263,12 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {} }) =>
       ['IP address', requester.ip || '—'],
     ], y, { cols: 2 });
 
-    doc.fillColor(T.BRAND.muted).font(doc._F.regular).fontSize(7.2)
+    // The recorded consent, when there is one. Documents issued before consent
+    // was frozen onto them keep the general declaration below.
+    const frozen = consent || report.consent || null;
+    if (frozen) y = consentBlock(doc, y + 8, frozen);
+
+    if (!frozen) doc.fillColor(T.BRAND.muted).font(doc._F.regular).fontSize(7.2)
        .text(
          'Declaration: the requester confirmed that this vehicle and its owner are known to them, '
          + 'and that these details were requested for a lawful and legitimate purpose, taking full '

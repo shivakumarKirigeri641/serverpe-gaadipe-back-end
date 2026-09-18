@@ -72,7 +72,7 @@ async function nextNumber(c) {
  * @param {object} requester  { mobile, name, ip, userAgent, channel }
  */
 async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data, requester = {},
-                       validUntil = null }) {
+                       validUntil = null, consent = null }) {
   const business = await db.one(
     `SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
 
@@ -84,15 +84,16 @@ async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data
       `INSERT INTO vehicle_reports
          (report_number, user_id, vehicle_id, payment_id, subscription_id, reg_no,
           requested_by, requester_name, ip, user_agent, device, channel,
-          snapshot, access_token, valid_until)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+          snapshot, access_token, valid_until, consent)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING *`,
       [number, userId || null, vehicleId || null, paymentId || null, subscriptionId || null,
        regNo, requester.mobile || null, requester.name || null,
        requester.ip || null, requester.userAgent || null, device,
        requester.channel || 'whatsapp',
        JSON.stringify(data), crypto.randomBytes(16).toString('hex'),
-       validUntil ? new Date(validUntil).toISOString() : null]);
+       validUntil ? new Date(validUntil).toISOString() : null,
+       consent ? JSON.stringify(consent) : null]);
     return rows[0];
   });
 
@@ -100,6 +101,7 @@ async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data
     report: row,
     business,
     data,
+    consent,
     requester: {
       name: requester.name, mobile: requester.mobile,
       ip: requester.ip, device, channel: requester.channel || 'whatsapp',
