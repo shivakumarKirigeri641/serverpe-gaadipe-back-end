@@ -17,6 +17,47 @@ const SENDER = process.env.SMS_SENDER_ID || 'GAADPE';
 
 const configured = () => Boolean(PROVIDER);
 
+/*
+ * FAST2SMS, DLT route (user, 2026-09-18) — the same sender (SRVRPE) and the same
+ * registered OTP template (FAST2SMS_DLT_MESSAGE_ID) the Pravesha service uses.
+ * That template has three placeholders, filled in order: the code, the product
+ * name, and how long the code lasts ("10 minutes"). A different count is
+ * rejected by the operator and the SMS simply never arrives.
+ *
+ * The key goes in the `authorization` HEADER: sent in the POST body Fast2SMS
+ * answers 401, which reads exactly like a wrong key.
+ */
+async function sendViaFast2sms({ mobile, variables }) {
+  const key = process.env.FAST2SMSAPIKEY || process.env.FAST2SMS_API_KEY || '';
+  const sender = process.env.FAST2SMS_SENDER_ID || '';
+  const messageId = process.env.FAST2SMS_DLT_MESSAGE_ID || '';
+  if (!key || !sender || !messageId) {
+    throw new Error('Fast2SMS is not configured (FAST2SMSAPIKEY, FAST2SMS_SENDER_ID, FAST2SMS_DLT_MESSAGE_ID)');
+  }
+  const values = [variables.code, variables.brand || 'GaadiPe', `${variables.minutes || 10} minutes`]
+    .map((v) => String(v).replace(/\|/g, ' ')).join('|');
+  const res = await fetch('https://www.fast2sms.com/dev/bulkV2', {
+    method: 'POST',
+    headers: { authorization: key, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      route: process.env.FAST2SMS_ROUTE || 'dlt',
+      sender_id: sender,
+      message: messageId,
+      variables_values: values,
+      numbers: mobile,
+      flash: '0',
+      ...(process.env.FAST2SMS_ENTITY_ID ? { entity_id: process.env.FAST2SMS_ENTITY_ID } : {}),
+    }).toString(),
+    signal: AbortSignal.timeout(12000),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !(body.return === true || body.return === 'true')) {
+    const why = Array.isArray(body.message) ? body.message.join('; ') : body.message || `HTTP ${res.status}`;
+    throw new Error(`Fast2SMS refused: ${why}`);
+  }
+  return { id: body.request_id || null };
+}
+
 /**
  * MSG91's flow API: a template registered with DLT, variables filled in.
  * The template id, not the message text, is what is registered — sending text
@@ -77,18 +118,20 @@ async function send(mobile, text, { variables = {}, templateId = null } = {}) {
   if (m.length !== 10) return { ok: false, error: 'bad_mobile' };
 
   if (!configured()) {
-    console.warn('[sms] no SMS_PROVIDER set — would have sent to %s: %s', m, text);
+    // Never the text: it carries the code.
+    console.warn('[sms] no SMS_PROVIDER set — would have sent a message to ••••%s', m.slice(-4));
     return { ok: true, simulated: true };
   }
 
   try {
-    const out = PROVIDER === 'msg91' ? await sendViaMsg91({ mobile: m, variables, templateId })
+    const out = PROVIDER === 'fast2sms' ? await sendViaFast2sms({ mobile: m, variables })
+      : PROVIDER === 'msg91' ? await sendViaMsg91({ mobile: m, variables, templateId })
       : PROVIDER === 'twilio' ? await sendViaTwilio({ mobile: m, text })
       : (() => { throw new Error(`Unknown SMS_PROVIDER "${PROVIDER}"`); })();
-    console.log('[sms] sent to %s via %s', m, PROVIDER);
+    console.log('[sms] sent to ••••%s via %s', m.slice(-4), PROVIDER);
     return { ok: true, id: out.id };
   } catch (e) {
-    console.error('[sms] send to %s failed: %s', m, e.message);
+    console.error('[sms] send to ••••%s failed: %s', m.slice(-4), e.message);
     return { ok: false, error: e.message };
   }
 }

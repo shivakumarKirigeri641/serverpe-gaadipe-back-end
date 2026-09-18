@@ -6,7 +6,8 @@
  * Every pass does three things, in this order:
  *
  *   1. re-check the vehicles that are due, and compare against what we last saw
- *   2. tell people what changed — one message per vehicle per day, never three
+ *   2. queue what changed, and each evening send one message per mobile
+ *      covering all its vehicles (eveningDigest)
  *   3. move trials and subscriptions through their lifecycle
  *
  * WHY THE DIFF MATTERS MORE THAN THE FETCH: a customer does not want to know
@@ -127,6 +128,8 @@ async function alreadySaid(watchId, key) {
       WHERE kind = 'watch_alert'
         AND detail->>'watch_id' = $1
         AND detail->'keys' ? $2
+      UNION ALL
+     SELECT 1 FROM pending_alerts WHERE watch_id = $1::bigint AND key = $2
       LIMIT 1`, [String(watchId), key]);
   return Boolean(row);
 }
@@ -195,14 +198,89 @@ async function checkOne(w) {
   }
   if (!fresh.length) return { sent: false, items };
 
-  const summary = fresh.map(i => i.text).join(' · ');
-  await notify(w, fresh, summary);
-  await db.query(
-    `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'watch_alert', $3)`,
-    [w.user_id, w.vehicle_id,
-     JSON.stringify({ watch_id: String(w.id), reg_no: w.reg_no,
-                      items: fresh.map(i => i.text), keys: fresh.map(i => i.key), summary })]);
-  return { sent: true, items: fresh };
+  /* QUEUED, NOT SENT (user, 2026-09-18). The evening digest sends it, together
+     with anything else found for this person's vehicles today. */
+  for (const i of fresh) {
+    await db.query(
+      `INSERT INTO pending_alerts (user_id, watch_id, vehicle_id, reg_no, key, label, text)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (watch_id, key) DO NOTHING`,
+      [w.user_id, w.id, w.vehicle_id, w.reg_no, i.key, i.label, i.text]);
+  }
+  return { sent: false, queued: true, items: fresh };
+}
+
+/* The time in India, whatever the server's clock is set to. */
+const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000);
+
+/**
+ * THE EVENING DIGEST (user, 2026-09-18): once a day, from 7 pm IST, one message
+ * per mobile covering every vehicle with something new — a new challan, a
+ * document newly expiring or newly expired. Nobody gets two in a day; nobody
+ * hears about the same thing twice; nothing goes out after 10 pm.
+ */
+async function eveningDigest() {
+  const from = await settings.num('alert_send_hour_ist', 19);
+  const until = await settings.num('alert_send_until_hour_ist', 22);
+  const hour = istNow().getUTCHours();
+  if (hour < from || hour >= until) return { sent: 0, reason: 'outside the evening window' };
+
+  const today = istNow().toISOString().slice(0, 10);
+  const { rows: people } = await db.query(
+    `SELECT DISTINCT p.user_id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
+            u.preferred_language, u.is_paused
+       FROM pending_alerts p JOIN users u ON u.id = p.user_id
+      WHERE p.sent_at IS NULL AND NOT u.is_paused
+        AND NOT EXISTS (SELECT 1 FROM event_log e
+                         WHERE e.user_id = p.user_id AND e.kind = 'watch_digest'
+                           AND e.detail->>'ist_date' = $1)`, [today]);
+
+  let sent = 0;
+  for (const person of people) {
+    if (await blocks.isBlocked('mobile', person.mobile)) continue;
+    const { rows: items } = await db.query(
+      `SELECT p.id, p.watch_id, p.vehicle_id, p.reg_no, p.key, p.label, p.text
+         FROM pending_alerts p JOIN watches w ON w.id = p.watch_id
+        WHERE p.user_id = $1 AND p.sent_at IS NULL AND w.is_active
+        ORDER BY p.reg_no, p.id`, [person.user_id]);
+    // Blocked vehicles are left out, and their findings set aside for good.
+    const ok = [];
+    for (const i of items) {
+      if (await blocks.isBlocked('vehicle', i.reg_no)) {
+        await db.query(`UPDATE pending_alerts SET sent_at = now() WHERE id = $1`, [i.id]);
+      } else ok.push(i);
+    }
+    if (!ok.length) continue;
+
+    const byVehicle = new Map();
+    for (const i of ok) {
+      if (!byVehicle.has(i.reg_no)) byVehicle.set(i.reg_no, []);
+      byVehicle.get(i.reg_no).push(i);
+    }
+    const regs = [...byVehicle.keys()];
+    const summary = regs.map((r) => `${r}: ${byVehicle.get(r).map((i) => i.text).join(', ')}`)
+      .join(' · ').slice(0, 900);
+    const w = {
+      mobile: person.mobile, wa_profile_name: person.name, preferred_language: person.preferred_language,
+      reg_no: regs.length === 1 ? regs[0] : `${regs[0]} +${regs.length - 1} more`,
+    };
+    await notify(w, ok, summary, byVehicle);
+
+    await db.query(`UPDATE pending_alerts SET sent_at = now() WHERE id = ANY($1::bigint[])`, [ok.map((i) => i.id)]);
+    for (const [reg, list] of byVehicle) {
+      await db.query(
+        `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'watch_alert', $3)`,
+        [person.user_id, list[0].vehicle_id,
+         JSON.stringify({ watch_id: String(list[0].watch_id), reg_no: reg,
+                          items: list.map((i) => i.text), keys: list.map((i) => i.key), digest: true })]);
+    }
+    await db.query(
+      `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'watch_digest', $2)`,
+      [person.user_id, JSON.stringify({ ist_date: today, vehicles: regs, items: ok.length })]);
+    sent += 1;
+  }
+  if (sent) console.log('[watch] evening digest sent to %d customer(s)', sent);
+  return { sent };
 }
 
 /**
@@ -215,14 +293,17 @@ async function checkOne(w) {
  * on one morning read as spam — so the findings share a single message:
  * parameter 3 names what needs attention, parameter 4 says what about it.
  */
-async function notify(w, items, summary) {
+async function notify(w, items, summary, byVehicle = null) {
   const name = (w.wa_profile_name || 'there').split(' ')[0];
   const what = [...new Set(items.map(i => i.label))].join(', ');
 
   if (await send.windowOpen(w.mobile)) {
-    await send.text(w.mobile,
-      `🔔 *${w.reg_no}*\n\n${summary}\n\n`
-      + 'Reply with this vehicle number to see the full record.');
+    // Inside the 24-hour window a plain message is free, and can list vehicles line by line.
+    const body = byVehicle
+      ? [...byVehicle].map(([reg, list]) => `🚗 *${reg}*\n${list.map((i) => `• ${i.text}`).join('\n')}`).join('\n\n')
+      : `🔔 *${w.reg_no}*\n\n${summary}`;
+    await send.text(w.mobile, `🔔 *Today's update from GaadiPe*\n\n${body}\n\n`
+      + 'Open gaadipe.in to see the full record.');
     return;
   }
 
@@ -411,17 +492,20 @@ async function runOnce() {
   const list = await due();
   let sent = 0;
 
+  let queued = 0;
   for (const w of list) {
     const r = await checkOne(w);
-    if (r.sent) sent++;
+    if (r.queued) queued += r.items.length;
   }
+  const digest = await eveningDigest();
+  sent = digest.sent || 0;
   const life = await lifecycle();
 
-  if (list.length || life.notified || life.renewals || life.expired) {
-    console.log('[watch] checked %d, alerted %d, trial-notices %d, renewal-notices %d, expired %d (%dms)',
-      list.length, sent, life.notified, life.renewals, life.expired, Date.now() - started);
+  if (list.length || sent || life.notified || life.renewals || life.expired) {
+    console.log('[watch] checked %d, queued %d finding(s), evening messages %d, trial-notices %d, renewal-notices %d, expired %d (%dms)',
+      list.length, queued, sent, life.notified, life.renewals, life.expired, Date.now() - started);
   }
-  return { checked: list.length, sent, ...life };
+  return { checked: list.length, queued, sent, ...life };
 }
 
 /** Start the loop. One timer, and it never overlaps itself. */
@@ -438,4 +522,4 @@ function start(everySeconds = 60) {
   console.log(`  watch job: every ${everySeconds}s`);
 }
 
-module.exports = { start, runOnce, checkOne, findings, lifecycle, due };
+module.exports = { start, runOnce, checkOne, findings, lifecycle, due, eveningDigest };

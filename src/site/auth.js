@@ -131,10 +131,15 @@ async function requestCodeInner({ mobile, ip }) {
   if (fixed) {
     console.warn('[site] DEV SIGN-IN: %s may sign in with the fixed code %s', m, fixed);
   } else {
-    await sms.send(m,
+    const sent = await sms.send(m,
       `${code} is your GaadiPe login code. It is valid for ${minutes} minutes. `
       + 'Do not share it with anyone.',
       { variables: { code, minutes: String(minutes) } });
+    // A code that never left must not be answered with "a code is on its way".
+    if (!sent.ok) {
+      return { ok: false, error: 'sms_failed',
+        message: 'We could not send the code just now. Please try again in a minute.' };
+    }
   }
 
   return SAME_ANSWER;

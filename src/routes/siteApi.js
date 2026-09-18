@@ -72,6 +72,47 @@ router.get('/pricing', safe(async (_req, res) => {
   });
 }));
 
+/*
+ * CONTACT US (user, 2026-09-18). Public — a person with a problem may not be
+ * able to sign in. Stored, and emailed to the admin by the notify job. Five
+ * messages an hour from one IP; a hidden field that people never fill catches
+ * the robots that do. Signed in, the message is tied to the account.
+ */
+router.post('/contact', safe(async (req, res) => {
+  const b = req.body || {};
+  const clip = (v, n) => String(v ?? '').trim().slice(0, n);
+  if (clip(b.website, 200)) return res.json({ ok: true });            // the trap: say nothing
+  const name = clip(b.name, 80);
+  const message = clip(b.message, 3000);
+  const email = clip(b.email, 160);
+  const mobile = String(b.mobile || '').replace(/\D/g, '').slice(-10);
+  const language = b.language === 'hi' ? 'hi' : 'en';
+  const hi = language === 'hi';
+
+  if (name.length < 2) return res.status(400).json({ error: 'bad_name', message: hi ? 'कृपया अपना नाम लिखें।' : 'Please tell us your name.' });
+  if (message.length < 5) return res.status(400).json({ error: 'bad_message', message: hi ? 'कृपया अपना संदेश लिखें।' : 'Please write your message.' });
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'bad_email', message: hi ? 'ईमेल पता सही नहीं लगता।' : 'That email address does not look right.' });
+  if (mobile && !/^[6-9]\d{9}$/.test(mobile)) return res.status(400).json({ error: 'bad_mobile', message: hi ? 'कृपया दस अंकों का मोबाइल नंबर लिखें।' : 'Please enter a ten-digit mobile number.' });
+  if (!email && !mobile) return res.status(400).json({ error: 'no_contact', message: hi ? 'जवाब के लिए ईमेल या मोबाइल नंबर दें।' : 'Please give an email or a mobile number so we can reply.' });
+
+  const perHour = await settings.num('contact_per_hour_per_ip', 5);
+  const recent = await db.one(
+    `SELECT count(*)::int AS n FROM contact_messages WHERE ip IS NOT DISTINCT FROM $1 AND created_at > now() - interval '1 hour'`,
+    [req.ip || null]);
+  if (recent.n >= perHour) {
+    return res.status(429).json({ error: 'too_many', message: hi ? 'बहुत सारे संदेश भेजे गए। कृपया थोड़ी देर बाद कोशिश करें।' : 'Too many messages from here. Please try again a little later.' });
+  }
+
+  const session = await auth.sessionFor(tokenOf(req)).catch(() => null);
+  const reg = clip(b.reg_no, 14).toUpperCase().replace(/[^A-Z0-9]/g, '') || null;
+  await db.query(
+    `INSERT INTO contact_messages (name, mobile, email, subject, message, reg_no, user_id, language, ip, user_agent)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [name, mobile || session?.user?.mobile || null, email || session?.user?.email || null, clip(b.subject, 140) || null,
+     message, reg, session?.user?.id || null, language, req.ip || null, clip(req.get('user-agent'), 600) || null]);
+  res.json({ ok: true, message: hi ? 'धन्यवाद — आपका संदेश हमें मिल गया है। हम जल्द जवाब देंगे।' : 'Thank you — your message has reached us. We will reply soon.' });
+}));
+
 router.post('/session/otp', safe(async (req, res) => {
   const out = await auth.requestCode({ mobile: req.body?.mobile, ctx: device.contextOf(req) });
   if (!out.ok) return res.status(out.error === 'wait' ? 429 : 400).json(out);

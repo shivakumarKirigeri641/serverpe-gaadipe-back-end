@@ -592,6 +592,42 @@ router.get('/feedback', safe(async (req, res) => {
                                     user_id: r.user_id ? String(r.user_id) : null })) });
 }));
 
+/* ------------------------------------------------------ contact messages */
+
+/* What the website's "Contact us" form sent (user, 2026-09-18). */
+router.get('/contact-messages', safe(async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT c.*, count(*) OVER () AS total_rows,
+            (SELECT n.status FROM admin_notifications n WHERE n.kind = 'contact' AND n.ref = c.id::text) AS emailed
+       FROM contact_messages c
+      WHERE ($1 = '' OR c.status = $1)
+      ORDER BY c.id DESC LIMIT $2 OFFSET $3`,
+    [String(req.query.status || ''), Math.min(200, Number(req.query.limit) || 25), Number(req.query.offset) || 0]);
+  res.json({ total: rows[0] ? Number(rows[0].total_rows) : 0,
+             rows: rows.map(({ total_rows, ...r }) => ({ ...r, id: String(r.id), user_id: r.user_id ? String(r.user_id) : null })) });
+}));
+
+router.put('/contact-messages/:id', safe(async (req, res) => {
+  const status = String(req.body?.status || '');
+  if (!['new', 'replied', 'closed'].includes(status)) {
+    return res.status(400).json({ error: 'bad_status', message: 'Status must be new, replied or closed.' });
+  }
+  await db.query(`UPDATE contact_messages SET status = $2 WHERE id = $1`, [req.params.id, status]);
+  await auth.audit({ adminId: req.admin.id, action: 'contact_status', ip: ipOf(req), detail: { id: req.params.id, status } });
+  res.json({ ok: true });
+}));
+
+/* The admin emails: what went, what failed and why (user, 2026-09-18). */
+router.get('/notifications', safe(async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT *, count(*) OVER () AS total_rows FROM admin_notifications ORDER BY id DESC LIMIT $1 OFFSET $2`,
+    [Math.min(200, Number(req.query.limit) || 25), Number(req.query.offset) || 0]);
+  res.json({ total: rows[0] ? Number(rows[0].total_rows) : 0,
+             mail_configured: require('../mail/mailer').configured(),
+             recipients: await require('../mail/mailer').adminRecipients(),
+             rows: rows.map(({ total_rows, ...r }) => ({ ...r, id: String(r.id) })) });
+}));
+
 /* ------------------------------------------------------ people and record */
 
 router.get('/admins', needs('admins'), safe(async (_req, res) =>

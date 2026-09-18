@@ -186,12 +186,18 @@ app.listen(config.port, () => {
   console.log(`  api keys configured: ${config.apiKeys.length}`);
   // The watch job only runs where WhatsApp is configured: a gateway-only
   // deployment has no one to notify.
-  if (config.whatsapp.phoneNumberId && config.whatsapp.replyEnabled) {
+  // The watch job sends alerts by WhatsApp template, so it needs WhatsApp set
+  // up — but not the chat bot's replies: the evening alerts go out even while
+  // the product is web-first.
+  if (config.whatsapp.phoneNumberId) {
     watchJob.start(Number(process.env.WATCH_TICK_SECONDS) || 60);
-    // A webhook is a delivery attempt, not a guarantee. This is what stops a
-    // captured payment from silently delivering nothing.
-    reconcileJob.start(Number(process.env.RECONCILE_TICK_SECONDS) || 60);
   }
+  // A webhook is a delivery attempt, not a guarantee. This is what stops a
+  // captured payment from silently delivering nothing — on the website too, so
+  // it runs whether or not WhatsApp is on.
+  reconcileJob.start(Number(process.env.RECONCILE_TICK_SECONDS) || 60);
+  // Emails to the admin: sign-ins, payments, contact messages, the day's summary.
+  require('./jobs/notify').start(Number(process.env.NOTIFY_TICK_SECONDS) || 30);
   if (config.whatsapp.phoneNumberId) {
     console.log(`  whatsapp: +${config.whatsapp.ownNumber} id ${config.whatsapp.phoneNumberId}`
       + `  signature ${config.whatsapp.appSecret ? 'enforced' : 'OFF'}`
