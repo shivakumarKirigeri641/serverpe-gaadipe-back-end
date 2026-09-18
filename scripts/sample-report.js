@@ -92,6 +92,10 @@ const DATA = {
   },
 };
 
+// The Hindi sample (scripts/sample-report-hi.js) is drawn from the same invented data.
+module.exports = { DATA };
+if (require.main !== module) return;
+
 (async () => {
   try {
     // The real business block, so the sample carries the correct GSTIN and
