@@ -129,10 +129,13 @@ router.put('/me', safe(async (req, res) => {
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)) {
     return res.status(400).json({ error: 'bad_email', message: 'That email address does not look right.' });
   }
+  // The language alerts are sent in. Only the two Meta has templates for.
+  const language = ['en', 'hi'].includes(req.body?.language) ? req.body.language : null;
   const { rows } = await db.query(
     `UPDATE users SET display_name = coalesce($2, display_name),
-            email = coalesce($3, email), modified_at = now()
-      WHERE id = $1 RETURNING *`, [req.user.id, name, email]);
+            email = coalesce($3, email),
+            preferred_language = coalesce($4, preferred_language), modified_at = now()
+      WHERE id = $1 RETURNING *`, [req.user.id, name, email, language]);
   res.json({ ok: true, user: auth.publicUser(rows[0]) });
 }));
 

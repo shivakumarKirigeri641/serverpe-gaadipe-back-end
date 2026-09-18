@@ -196,6 +196,7 @@ const publicUser = (u) => ({
   mobile: u.mobile,
   name: u.display_name || u.wa_profile_name || null,
   email: u.email || null,
+  language: u.preferred_language || 'en',
   joined_at: u.created_at,
 });
 

@@ -55,7 +55,7 @@ async function due(limit = 50) {
   const { rows } = await db.query(
     `SELECT w.id, w.user_id, w.vehicle_id, w.expires_at, w.fail_count,
             w.challan_interval_hours,
-            v.reg_no, u.mobile, u.wa_profile_name, u.is_paused
+            v.reg_no, u.mobile, u.wa_profile_name, u.is_paused, u.preferred_language
        FROM watches w
        JOIN vehicles v ON v.id = w.vehicle_id
        JOIN users    u ON u.id = w.user_id
@@ -226,9 +226,36 @@ async function notify(w, items, summary) {
     return;
   }
 
-  // gp_vehicle_alert_v2: 1 name · 2 vehicle number · 3 what · 4 details.
-  const template = await settings.get('template_vehicle_alert', 'gp_vehicle_alert_v2');
-  await send.template(w.mobile, template, [name, w.reg_no, what, summary]);
+  /*
+   * THE CUSTOMER'S LANGUAGE FIRST, THEN A NET UNDER IT.
+   *
+   * Meta rejects a template that is pending approval, paused, or was never
+   * submitted in that language — and a rejected alert is an alert the customer
+   * never gets. So each template is tried in turn until one is accepted, and
+   * the last is one already approved. Its parameters differ (3 carries the
+   * details, 4 the date of the check), which is why each attempt carries its
+   * own list rather than sharing one.
+   */
+  const checkedOn = fmtDate(new Date());
+  const attempts = [];
+  if (w.preferred_language === 'hi') {
+    attempts.push({ name: await settings.get('template_vehicle_alert_hi', 'gp_vehicle_alert_hi_v1'),
+                    language: 'hi', params: [name, w.reg_no, what, summary] });
+  }
+  attempts.push({ name: await settings.get('template_vehicle_alert_en', 'gp_vehicle_alert_en_v1'),
+                  language: 'en', params: [name, w.reg_no, what, summary] });
+  attempts.push({ name: await settings.get('template_vehicle_alert_fallback', 'gp_vehicle_alert_v2'),
+                  language: 'en', params: [name, w.reg_no, summary, checkedOn] });
+
+  for (const t of attempts) {
+    const r = await send.template(w.mobile, t.name, t.params, { language: t.language });
+    if (r.ok) return;
+    // 1320xx is Meta saying the TEMPLATE is the problem (missing, unapproved,
+    // paused, wrong parameters). Anything else — a bad number, an outage — would
+    // fail the same way with the next template, so stop there.
+    if (!/13200[0-9]|13201[0-9]/.test(String(r.error || ''))) return;
+    console.warn('[watch] template %s (%s) refused — trying the next: %s', t.name, t.language, r.error);
+  }
 }
 
 /**
