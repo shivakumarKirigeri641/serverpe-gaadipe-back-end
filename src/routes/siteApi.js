@@ -159,7 +159,7 @@ router.get('/vehicles', safe(async (req, res) => {
   const { rows } = await db.query(
     `SELECT v.reg_no, v.maker, v.model, v.fuel, v.vehicle_class, v.rc_status,
             v.insurance_upto, v.pucc_upto, v.fitness_upto, v.tax_upto, v.permit_upto,
-            uv.check_count, uv.last_checked_at,
+            v.reg_upto, uv.check_count, uv.last_checked_at,
             EXISTS (SELECT 1 FROM watches w
                      WHERE w.user_id = uv.user_id AND w.vehicle_id = v.id AND w.is_active) AS watched,
             (SELECT max(w.expires_at) FROM watches w
@@ -181,7 +181,7 @@ router.get('/vehicles', safe(async (req, res) => {
    * the list says which documents have lapsed, by name, and nothing more.
    */
   const report = require('../whatsapp/report');
-  const DATES = ['insurance_upto', 'pucc_upto', 'fitness_upto', 'tax_upto', 'permit_upto'];
+  const DATES = ['insurance_upto', 'pucc_upto', 'fitness_upto', 'tax_upto', 'permit_upto', 'reg_upto'];
   res.json({
     rows: rows.map((r) => {
       const paid = Boolean(r.report_id);
@@ -335,16 +335,23 @@ router.post('/buy', safe(async (req, res) => {
         AND created_at > now() - interval '1 hour'
       ORDER BY id DESC LIMIT 1`, [req.user.id, plan.id, vehicle.id]);
 
-  if (!row) {
-    await db.query(
-      `INSERT INTO event_log (user_id, vehicle_id, kind, detail)
-            VALUES ($1, $2, 'purchase_consent', $3)`,
-      [req.user.id, vehicle.id, JSON.stringify({
-        mobile: req.user.mobile, reg_no: parsed.regNo, amount_paise: plan.price_paise,
-        plan: plan.code, channel: 'web', documents: ['terms', 'refund', 'privacy'],
-        declaration: DECLARATION, declared: true,
-        ip: req.ip, user_agent: req.get('user-agent') || null, at: new Date().toISOString() })]);
+  /*
+   * RECORDED EVERY TIME, not only when a new order is opened. A customer who
+   * opens the dialog twice in an hour reuses the unpaid order, and the first
+   * version skipped the record on that path — so a payment could complete with
+   * no declaration on file for it. The declaration belongs to the act of
+   * paying, so every act gets its own row, tied to the payment it covers.
+   */
+  const consent = async (paymentRowId) => db.query(
+    `INSERT INTO event_log (user_id, vehicle_id, kind, detail)
+          VALUES ($1, $2, 'purchase_consent', $3)`,
+    [req.user.id, vehicle.id, JSON.stringify({
+      mobile: req.user.mobile, reg_no: parsed.regNo, amount_paise: plan.price_paise,
+      plan: plan.code, channel: 'web', documents: ['terms', 'refund', 'privacy'],
+      declaration: DECLARATION, declared: true, payment_row: String(paymentRowId),
+      ip: req.ip, user_agent: req.get('user-agent') || null, at: new Date().toISOString() })]);
 
+  if (!row) {
     const pending = await billing.createPending({
       userId: req.user.id, planId: plan.id, amountPaise: plan.price_paise, vehicleId: vehicle.id,
     });
@@ -371,6 +378,8 @@ router.post('/buy', safe(async (req, res) => {
         WHERE id = $1 RETURNING *`,
       [pending.id, order.id, token, JSON.stringify({ order_id: order.id, channel: 'web' })])).rows[0];
   }
+
+  await consent(row.id);
 
   res.json({ ok: true, pay_url: `${base}/pay/${row.checkout_token}`,
              amount_paise: row.amount_paise });

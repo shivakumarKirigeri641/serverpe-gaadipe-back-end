@@ -73,8 +73,8 @@ async function upsertVehicle(regNo, rc = {}) {
     `INSERT INTO vehicles
        (reg_no, maker, model, fuel, vehicle_class, reg_date,
         insurance_upto, pucc_upto, fitness_upto, tax_upto, permit_upto,
-        owner_serial, financer, blacklist_status, rc_status)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        owner_serial, financer, blacklist_status, rc_status, reg_upto)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
      ON CONFLICT (reg_no) DO UPDATE SET
         maker = COALESCE(EXCLUDED.maker, vehicles.maker),
         model = COALESCE(EXCLUDED.model, vehicles.model),
@@ -86,6 +86,7 @@ async function upsertVehicle(regNo, rc = {}) {
         fitness_upto   = EXCLUDED.fitness_upto,
         tax_upto       = EXCLUDED.tax_upto,
         permit_upto    = EXCLUDED.permit_upto,
+        reg_upto       = EXCLUDED.reg_upto,
         owner_serial   = COALESCE(EXCLUDED.owner_serial, vehicles.owner_serial),
         financer       = COALESCE(EXCLUDED.financer, vehicles.financer),
         blacklist_status = COALESCE(EXCLUDED.blacklist_status, vehicles.blacklist_status),
@@ -95,7 +96,7 @@ async function upsertVehicle(regNo, rc = {}) {
     [regNo, rc.maker || null, rc.model || null, rc.fuel || null, rc.vehicle_class || null,
      date(rc.reg_date), date(rc.insurance_upto), date(rc.pucc_upto), date(rc.fitness_upto),
      date(rc.tax_upto), date(rc.permit_upto), rc.owner_serial || null, rc.financer || null,
-     rc.blacklist_status || null, rc.status || null]);
+     rc.blacklist_status || null, rc.status || null, date(rc.reg_upto)]);
   return rows[0];
 }
 
