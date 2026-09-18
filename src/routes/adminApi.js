@@ -57,6 +57,14 @@ router.post('/session/otp', safe(async (req, res) => {
   res.json(out);
 }));
 
+router.post('/session/passcode', safe(async (req, res) => {
+  const out = await auth.signInWithPasscode({
+    passcode: req.body?.passcode, ip: ipOf(req), userAgent: req.get('user-agent'),
+  });
+  if (!out.ok) return res.status(out.error === 'too_many' ? 429 : 401).json(out);
+  res.json(out);
+}));
+
 router.post('/session/verify', safe(async (req, res) => {
   const out = await auth.verifyCode({
     mobile: req.body?.mobile, code: req.body?.code,

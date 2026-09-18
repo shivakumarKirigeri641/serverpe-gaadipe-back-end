@@ -148,9 +148,59 @@ async function verifyCode({ mobile, code, ip, userAgent }) {
   return { ok: true, token, user: publicUser(user) };
 }
 
+/*
+ * SIGN IN WITH THE PASSCODE (user, 2026-09-18): one field, no mobile step. The
+ * passcode opens the panel as its owner. It is checked in constant time, wrong
+ * tries are counted per IP (five in fifteen minutes and that IP waits), and
+ * every attempt, right or wrong, is in the audit trail with the IP it came from.
+ * config.admin.passcode is 6416 while building; production needs ADMIN_PASSCODE.
+ */
+async function signInWithPasscode({ passcode, ip, userAgent }) {
+  const expected = config.admin.passcode;
+  if (!expected) {
+    return { ok: false, error: 'disabled', message: 'Passcode sign-in is not set up on this server.' };
+  }
+
+  const tries = await db.one(
+    `SELECT count(*)::int AS n FROM admin_audit
+      WHERE action = 'passcode_wrong' AND ip IS NOT DISTINCT FROM $1
+        AND created_at > now() - interval '15 minutes'`, [ip || null]);
+  if (tries.n >= 5) {
+    return { ok: false, error: 'too_many', message: 'Too many wrong passcodes. Please wait 15 minutes.' };
+  }
+
+  const a = Buffer.from(sha256(String(passcode || '').trim()));
+  const b = Buffer.from(sha256(expected));
+  const owner = await db.one(
+    `SELECT * FROM admin_users WHERE is_active AND role = 'owner' ORDER BY id LIMIT 1`);
+
+  if (!crypto.timingSafeEqual(a, b)) {
+    await audit({ adminId: owner?.id || null, action: 'passcode_wrong', ip, detail: { user_agent: userAgent || null } });
+    const left = Math.max(0, 4 - tries.n);
+    return { ok: false, error: 'bad_passcode',
+      message: left ? `That passcode is not right. ${left} attempt${left === 1 ? '' : 's'} left.`
+                    : 'Too many wrong passcodes. Please wait 15 minutes.' };
+  }
+  if (!owner) {
+    return { ok: false, error: 'no_owner', message: 'No active owner account exists. Add one with scripts/admin.js.' };
+  }
+  return openSession(owner, { ip, userAgent, how: 'passcode' });
+}
+
+async function openSession(user, { ip, userAgent, how }) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  await db.query(
+    `INSERT INTO admin_sessions (admin_id, token_hash, ip, user_agent) VALUES ($1,$2,$3,$4)`,
+    [user.id, sha256(token), ip || null, userAgent || null]);
+  await db.query(
+    `UPDATE admin_users SET last_login_at = now(), modified_at = now() WHERE id = $1`, [user.id]);
+  await audit({ adminId: user.id, action: 'sign_in', ip, detail: { user_agent: userAgent || null, how } });
+  return { ok: true, token, user: publicUser(user) };
+}
+
 /* --------------------------------------------------------------- sessions */
 
-const publicUser = (u) => ({ id: String(u.id), name: u.name, mobile: u.mobile, role: u.role });
+const publicUser =(u) => ({ id: String(u.id), name: u.name, mobile: u.mobile, role: u.role });
 
 /**
  * Resolve a token. Returns null for anything not currently valid, so the caller
@@ -233,6 +283,7 @@ async function setAdminActive(id, isActive) {
 }
 
 module.exports = {
+  signInWithPasscode,
   requestCode, verifyCode, sessionFor, signOut, audit,
   listAdmins, addAdmin, setAdminActive,
   can, ROLES, localMobile,

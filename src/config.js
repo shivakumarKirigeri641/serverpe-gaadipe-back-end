@@ -122,6 +122,10 @@ const config = {
    * empty in production and validate() refuses to boot if one is forced there.
    */
   admin: {
+    // The panel passcode: 6416 while building; production signs in by passcode
+    // only if ADMIN_PASSCODE is set, never by a default.
+    passcode: String(process.env.ADMIN_PASSCODE
+      || (String(process.env.NODE_ENV || '').toLowerCase() === 'production' ? '' : '6416')),
     devOtp: String(process.env.NODE_ENV || '').toLowerCase() === 'production'
       ? ''
       : String(process.env.ADMIN_DEV_OTP || '1234'),
