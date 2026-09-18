@@ -198,12 +198,9 @@ function parse(input) {
   return { ok: true, regNo, pretty: pretty(regNo), format: shape.format, repaired, error: null };
 }
 
-/** KA02EX1480 -> "KA 02 EX 1480" for display. Best effort. */
+/** For display — always without spaces (KA02EX1480), everywhere. */
 function pretty(regNo) {
-  const n = normalize(regNo);
-  const shape = shapeOf(n);
-  if (!shape) return n;
-  return shape.parts.filter(Boolean).join(' ');
+  return normalize(regNo);
 }
 
 /**

@@ -30,7 +30,7 @@ const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10
 
 const DATA = {
   vehicle_number: 'KA01SM1234',
-  vehicle_number_pretty: 'KA 01 SM 1234',
+  vehicle_number_pretty: 'KA01SM1234',
   fetched_at: new Date().toISOString(),
   source: 'VAHAN/04',
   rc: {

@@ -19,10 +19,14 @@ const settings = require('../util/settings');
 /* Any timestamp grouped or filtered by day is converted once, this way. */
 const IST = `AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'`;
 
+/* What is billed: business-initiated WhatsApp templates, and every sign-in code sent. */
+const WA_BILLED = `FROM whatsapp_messages m WHERE m.direction = 'out' AND m.message_type = 'template'`;
+const SMS_BILLED = `FROM site_otps o WHERE true`;
+
 const GRAIN = { day: 'day', week: 'week', month: 'month' };
 
 /** What the gateway and the taxman take out of a gross amount. */
-async function splitOf(grossPaise) {
+async function splitOf(grossPaise, { whatsapp = 0, sms = 0 } = {}) {
   const feePct = await settings.num('razorpay_fee_percent', 2);
   const feeGstPct = await settings.num('razorpay_fee_gst_percent', 18);
 
@@ -31,6 +35,10 @@ async function splitOf(grossPaise) {
   const gst = gross - taxable;
   const fee = Math.round(gross * (feePct / 100));
   const feeGst = Math.round(fee * (feeGstPct / 100));
+  const waRate = await settings.num('whatsapp_message_cost_paise', 11);
+  const smsRate = await settings.num('sms_otp_cost_paise', 25);
+  const waCost = Math.round(Number(whatsapp || 0) * waRate);
+  const smsCost = Math.round(Number(sms || 0) * smsRate);
 
   return {
     gross_paise: gross,
@@ -38,8 +46,14 @@ async function splitOf(grossPaise) {
     gst_paise: gst,
     gateway_fee_paise: fee,
     gateway_fee_gst_paise: feeGst,
-    // What is actually left once GST is remitted and the gateway is paid.
-    take_home_paise: gross - gst - fee - feeGst,
+    whatsapp_messages: Number(whatsapp || 0),
+    whatsapp_cost_paise: waCost,
+    whatsapp_rate_paise: waRate,
+    sms_otps: Number(sms || 0),
+    sms_cost_paise: smsCost,
+    sms_rate_paise: smsRate,
+    // What is left once GST is remitted, the gateway paid and the messages sent.
+    take_home_paise: gross - gst - fee - feeGst - waCost - smsCost,
     fee_percent: feePct,
   };
 }
@@ -61,6 +75,10 @@ async function dashboard() {
        (SELECT count(*) FROM users u, bounds b
          WHERE u.created_at ${IST} >= b.yesterday
            AND u.created_at ${IST} < b.today)                              AS users_yesterday,
+       (SELECT count(*) ${WA_BILLED})                                     AS wa_total,
+       (SELECT count(*) ${WA_BILLED} AND m.created_at ${IST} >= (SELECT today FROM bounds)) AS wa_today,
+       (SELECT count(*) ${SMS_BILLED})                                    AS sms_total,
+       (SELECT count(*) ${SMS_BILLED} AND o.created_at ${IST} >= (SELECT today FROM bounds)) AS sms_today,
        (SELECT count(*) FROM vehicles)                                     AS vehicles_total,
        (SELECT count(*) FROM event_log e, bounds b
          WHERE e.kind = 'vehicle_check' AND e.created_at ${IST} >= b.today) AS checks_today,
@@ -101,8 +119,8 @@ async function dashboard() {
        (SELECT count(*) FROM blocks WHERE released_at IS NULL)             AS blocks_active,
        (SELECT count(*) FROM feedback)                                     AS feedback_total`);
 
-  const money = await splitOf(row.gross_total_paise);
-  const todayMoney = await splitOf(row.gross_today_paise);
+  const money = await splitOf(row.gross_total_paise, { whatsapp: row.wa_total, sms: row.sms_total });
+  const todayMoney = await splitOf(row.gross_today_paise, { whatsapp: row.wa_today, sms: row.sms_today });
 
   const n = (v) => Number(v || 0);
   return {
@@ -171,12 +189,16 @@ async function series({ grain = 'day', days = 30 } = {}) {
        (SELECT coalesce(sum(a.cost_paise), 0) FROM api_calls a
          WHERE date_trunc('${g}', a.created_at ${IST}) = b.bucket)          AS ulip_cost_paise,
        (SELECT count(*) FROM whatsapp_messages m
-         WHERE date_trunc('${g}', m.created_at ${IST}) = b.bucket)          AS messages
+         WHERE date_trunc('${g}', m.created_at ${IST}) = b.bucket)          AS messages,
+       (SELECT count(*) ${WA_BILLED}
+           AND date_trunc('${g}', m.created_at ${IST}) = b.bucket)        AS wa_billed,
+       (SELECT count(*) ${SMS_BILLED}
+           AND date_trunc('${g}', o.created_at ${IST}) = b.bucket)        AS sms_sent
        FROM buckets b ORDER BY b.bucket`, [String(span)]);
 
   const out = [];
   for (const r of rows) {
-    const split = await splitOf(r.gross_paise);
+    const split = await splitOf(r.gross_paise, { whatsapp: r.wa_billed, sms: r.sms_sent });
     out.push({
       bucket: new Date(r.bucket).toISOString().slice(0, 10),
       new_users: Number(r.new_users), checks: Number(r.checks),
@@ -240,7 +262,14 @@ async function finance({ from = null, to = null } = {}) {
       WHERE ($1::date IS NULL OR created_at ${IST} >= $1::date)
         AND ($2::date IS NULL OR created_at ${IST} < ($2::date + 1))`, [from, to]);
 
-  const split = await splitOf(row.gross_paise);
+  const msgs = await db.one(
+    `SELECT (SELECT count(*) ${WA_BILLED}
+               AND ($1::date IS NULL OR m.created_at ${IST} >= $1::date)
+               AND ($2::date IS NULL OR m.created_at ${IST} < ($2::date + 1))) AS wa,
+            (SELECT count(*) ${SMS_BILLED}
+               AND ($1::date IS NULL OR o.created_at ${IST} >= $1::date)
+               AND ($2::date IS NULL OR o.created_at ${IST} < ($2::date + 1))) AS sms`, [from, to]);
+  const split = await splitOf(row.gross_paise, { whatsapp: msgs.wa, sms: msgs.sms });
   const cost = Number(ulip.cost_paise || 0);
 
   return {
