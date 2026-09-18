@@ -18,6 +18,7 @@
  */
 
 const db = require('../db');
+const device = require('../site/device');
 
 /* What the list can be sorted by. Names, not raw SQL, so a query parameter can
    never reach the ORDER BY clause. */
@@ -126,7 +127,7 @@ async function detail(userId) {
        FROM users u WHERE u.id = $1`, [userId]);
   if (!user) return null;
 
-  const [vehicles, payments, reports, invoices, messages, consent, devices, calls, alerts, feedback] =
+  const [vehicles, payments, reports, invoices, messages, consent, devices, calls, alerts, feedback, signIns, sessions] =
     await Promise.all([
       db.query(
         `SELECT v.id, v.reg_no, v.maker, v.model, v.fuel, v.vehicle_class,
@@ -185,6 +186,13 @@ async function detail(userId) {
       db.query(
         `SELECT id, reg_no, body, created_at FROM feedback WHERE user_id = $1
           ORDER BY id DESC`, [userId]),
+      // Every sign-in step for this person, by account or by the number typed.
+      db.query(
+        `SELECT * FROM site_sign_ins WHERE user_id = $1 OR mobile = $2
+          ORDER BY id DESC LIMIT 500`, [userId, user.mobile]),
+      db.query(
+        `SELECT id, ip, last_ip, user_agent, device_id, created_at, last_used_at, ended_at, ended_reason
+           FROM site_sessions WHERE user_id = $1 ORDER BY id DESC LIMIT 200`, [userId]),
     ]);
 
   const totals = {
@@ -209,6 +217,8 @@ async function detail(userId) {
     calls: calls.rows,
     alerts: alerts.rows,
     feedback: feedback.rows.map(f => ({ ...f, id: String(f.id) })),
+    sign_ins: signIns.rows.map(r => ({ ...r, id: String(r.id), described: device.describe(r) })),
+    sessions: sessions.rows.map(r => ({ ...r, id: String(r.id), described: device.describe(device.parseUA(r.user_agent)) })),
   };
 }
 

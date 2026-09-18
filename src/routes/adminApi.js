@@ -108,8 +108,44 @@ router.get('/series', safe(async (req, res) => res.json(
 router.get('/funnel', safe(async (req, res) => res.json(
   await stats.funnel({ days: Number(req.query.days) || 30 }))));
 
+/*
+ * Every sign-in step on the website, newest first (user, 2026-09-18). Search
+ * matches a number, IP, device id, model or browser; one device id or IP opens
+ * every account it has touched.
+ */
+router.get('/sign-ins', safe(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const term = q ? `%${q.replace(/[%_]/g, '')}%` : '';
+  const { rows } = await db.query(
+    `SELECT s.*, u.display_name, u.wa_profile_name, count(*) OVER () AS total_rows
+       FROM site_sign_ins s LEFT JOIN users u ON u.id = s.user_id
+      WHERE ($1 = '' OR s.event = $1)
+        AND ($2 = '' OR s.mobile ILIKE $2 OR s.ip ILIKE $2 OR s.device_id ILIKE $2
+             OR s.device_model ILIKE $2 OR s.browser ILIKE $2 OR s.os ILIKE $2 OR s.city ILIKE $2)
+        AND ($3 = '' OR s.device_id = $3)
+        AND ($4 = '' OR s.ip = $4)
+      ORDER BY s.id DESC LIMIT $5 OFFSET $6`,
+    [String(req.query.event || ''), term, String(req.query.device_id || ''), String(req.query.ip || ''),
+     Math.min(200, Number(req.query.limit) || 25), Number(req.query.offset) || 0]);
+  const summary = await db.one(
+    `SELECT count(*) FILTER (WHERE event = 'signed_in' AND created_at > now() - interval '1 day')   AS sign_ins_today,
+            count(*) FILTER (WHERE event IN ('sign_in_failed', 'code_refused')
+                               AND created_at > now() - interval '1 day')                         AS failures_today,
+            count(DISTINCT device_id)                                                             AS devices,
+            count(DISTINCT ip)                                                                    AS ips,
+            (SELECT count(*) FROM site_sessions WHERE ended_at IS NULL)                           AS open_sessions
+       FROM site_sign_ins`);
+  res.json({
+    total: rows[0] ? Number(rows[0].total_rows) : 0,
+    summary: Object.fromEntries(Object.entries(summary).map(([k, v]) => [k, Number(v)])),
+    rows: rows.map(({ total_rows, ...r }) => ({ ...r, id: String(r.id), user_id: r.user_id ? String(r.user_id) : null,
+      name: r.display_name || r.wa_profile_name || null, described: device.describe(r) })),
+  });
+}));
+
 /* Period against period, the fleet by class and document state, and when people check. */
 const insights = require('../admin/insights');
+const device = require('../site/device');
 router.get('/insights/compare', safe(async (_req, res) => res.json(await insights.compare())));
 router.get('/insights/fleet', safe(async (_req, res) => res.json(await insights.fleet())));
 router.get('/insights/heatmap', safe(async (req, res) => res.json(

@@ -32,6 +32,7 @@ const db = require('../db');
 const auth = require('../site/auth');
 const view = require('../site/vehicleView');
 const plate = require('../util/plate');
+const device = require('../site/device');
 const quota = require('../util/quota');
 const blocks = require('../admin/blocks');
 const gateway = require('../vehicle/gateway');
@@ -72,15 +73,14 @@ router.get('/pricing', safe(async (_req, res) => {
 }));
 
 router.post('/session/otp', safe(async (req, res) => {
-  const out = await auth.requestCode({ mobile: req.body?.mobile, ip: req.ip });
+  const out = await auth.requestCode({ mobile: req.body?.mobile, ctx: device.contextOf(req) });
   if (!out.ok) return res.status(out.error === 'wait' ? 429 : 400).json(out);
   res.json(out);
 }));
 
 router.post('/session/verify', safe(async (req, res) => {
   const out = await auth.verifyCode({
-    mobile: req.body?.mobile, code: req.body?.code,
-    ip: req.ip, userAgent: req.get('user-agent'),
+    mobile: req.body?.mobile, code: req.body?.code, ctx: device.contextOf(req),
   });
   if (!out.ok) return res.status(401).json(out);
   res.json(out);
@@ -89,7 +89,7 @@ router.post('/session/verify', safe(async (req, res) => {
 /* ------------------------------------------------------------- signed in */
 
 router.use(safe(async (req, res, next) => {
-  const session = await auth.sessionFor(tokenOf(req));
+  const session = await auth.sessionFor(tokenOf(req), { ip: req.ip, user_agent: req.get('user-agent'), device_id: req.get('x-gp-device') });
   if (!session) {
     return res.status(401).json({ error: 'signed_out', message: 'Please sign in again.' });
   }
@@ -101,7 +101,7 @@ router.get('/session', safe(async (req, res) =>
   res.json({ ok: true, user: auth.publicUser(req.user) })));
 
 router.delete('/session', safe(async (req, res) => {
-  await auth.signOut(tokenOf(req));
+  await auth.signOut(tokenOf(req), device.contextOf(req));
   res.json({ ok: true });
 }));
 

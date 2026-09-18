@@ -45,7 +45,42 @@ const SAME_ANSWER = {
 const allowedForTesting = (m) => !config.whatsapp.allowedRecipients.length
   || config.whatsapp.allowedRecipients.includes(m);
 
-async function requestCode({ mobile, ip }) {
+/*
+ * EVERY STEP IS WRITTEN DOWN (user, 2026-09-18): each code asked for, each
+ * refusal and why, each wrong code, each sign-in and sign-out, with the device
+ * and network behind it. Rows are only ever added, so the history cannot be
+ * tidied after the fact. A failure to record never blocks a sign-in.
+ */
+const COLS = ['device_id', 'ip', 'ip_chain', 'country', 'region', 'city', 'user_agent', 'browser',
+  'browser_version', 'os', 'os_version', 'device_type', 'device_vendor', 'device_model', 'screen',
+  'viewport', 'timezone', 'languages', 'platform', 'touch_points', 'cpu_cores', 'memory_gb',
+  'connection', 'referrer', 'page', 'client'];
+
+async function track(event, { mobile = null, userId = null, sessionId = null, outcome = null, ctx = {} } = {}) {
+  try {
+    const cols = ['event', 'mobile', 'user_id', 'session_id', 'outcome', ...COLS];
+    const vals = [event, mobile, userId, sessionId, outcome, ...COLS.map((k) => ctx[k] ?? null)];
+    const { rows } = await db.query(
+      `INSERT INTO site_sign_ins (${cols.join(', ')})
+            VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')}) RETURNING id`, vals);
+    return rows[0]?.id || null;
+  } catch (e) {
+    console.error('[site] sign-in tracking:', e.message);
+    return null;
+  }
+}
+
+async function requestCode({ mobile, ip, ctx = {} }) {
+  const out = await requestCodeInner({ mobile, ip: ip || ctx.ip });
+  const m = localMobile(mobile);
+  await track(out.ok ? 'code_requested' : 'code_refused', {
+    mobile: m || null, ctx, outcome: out.ok ? (out.tracked || null) : out.error,
+  });
+  delete out.tracked;
+  return out;
+}
+
+async function requestCodeInner({ mobile, ip }) {
   const m = localMobile(mobile);
   if (m.length !== 10) {
     return { ok: false, error: 'bad_mobile', message: 'Please enter a ten-digit mobile number.' };
@@ -55,7 +90,7 @@ async function requestCode({ mobile, ip }) {
     // Answered exactly like any other number, so the guard does not tell a
     // stranger which numbers are special.
     console.warn('[site] sign-in requested by %s — not in WHATSAPP_ALLOWED_RECEPIENTS', m);
-    return SAME_ANSWER;
+    return { ...SAME_ANSWER, tracked: 'not_allowed' };
   }
 
   // Rate limit before anything else: this is the only thing standing between a
@@ -81,7 +116,7 @@ async function requestCode({ mobile, ip }) {
   // A blocked number is answered exactly like any other, and no code is made.
   if (await blocks.isBlocked('mobile', m)) {
     console.warn('[site] sign-in requested by blocked number %s', m);
-    return SAME_ANSWER;
+    return { ...SAME_ANSWER, tracked: 'blocked' };
   }
 
   const minutes = await settings.num('site_otp_minutes', 10);
@@ -111,7 +146,15 @@ async function requestCode({ mobile, ip }) {
  * A customer row is created here if there is none: somebody may reach the site
  * before they ever message WhatsApp, and being new is not an error.
  */
-async function verifyCode({ mobile, code, ip, userAgent }) {
+async function verifyCode({ mobile, code, ip, userAgent, ctx = {} }) {
+  const out = await verifyCodeInner({ mobile, code, ip: ip || ctx.ip, userAgent: userAgent || ctx.user_agent, ctx });
+  if (!out.ok) {
+    await track('sign_in_failed', { mobile: localMobile(mobile) || null, ctx, outcome: out.error });
+  }
+  return out;
+}
+
+async function verifyCodeInner({ mobile, code, ip, userAgent, ctx }) {
   const m = localMobile(mobile);
 
   if (!allowedForTesting(m)) {
@@ -125,13 +168,13 @@ async function verifyCode({ mobile, code, ip, userAgent }) {
       ORDER BY id DESC LIMIT 1`, [m]);
 
   if (!row) {
-    return { ok: false, error: 'bad_code',
+    return { ok: false, error: 'code_expired',
       message: 'That code has expired. Please ask for a new one.' };
   }
 
   const maxAttempts = await settings.num('site_otp_attempts', 5);
   if (row.attempts >= maxAttempts) {
-    return { ok: false, error: 'too_many', message: 'Too many wrong codes. Please ask for a new one.' };
+    return { ok: false, error: 'too_many_attempts', message: 'Too many wrong codes. Please ask for a new one.' };
   }
 
   const given = sha256(String(code || '').replace(/\D/g, ''));
@@ -142,7 +185,7 @@ async function verifyCode({ mobile, code, ip, userAgent }) {
   if (!good) {
     await db.query(`UPDATE site_otps SET attempts = attempts + 1 WHERE id = $1`, [row.id]);
     const left = Math.max(0, maxAttempts - (row.attempts + 1));
-    return { ok: false, error: 'bad_code',
+    return { ok: false, error: 'wrong_code',
       message: left ? `That code is not right. ${left} attempt${left === 1 ? '' : 's'} left.`
                     : 'Too many wrong codes. Please ask for a new one.' };
   }
@@ -165,9 +208,13 @@ async function verifyCode({ mobile, code, ip, userAgent }) {
   }
 
   const token = crypto.randomBytes(32).toString('base64url');
-  await db.query(
-    `INSERT INTO site_sessions (user_id, token_hash, ip, user_agent) VALUES ($1,$2,$3,$4)`,
-    [user.id, sha256(token), ip || null, userAgent || null]);
+  const { rows: [session] } = await db.query(
+    `INSERT INTO site_sessions (user_id, token_hash, ip, user_agent, device_id, last_ip)
+          VALUES ($1,$2,$3,$4,$5,$3) RETURNING id`,
+    [user.id, sha256(token), ip || null, userAgent || null, ctx.device_id || null]);
+  const signInId = await track('signed_in', { mobile: m, userId: user.id, sessionId: session.id, ctx,
+    outcome: user.deactivated_at ? 'reactivated' : (user.created_at && Date.now() - new Date(user.created_at) < 60000 ? 'new_customer' : null) });
+  if (signInId) await db.query(`UPDATE site_sessions SET sign_in_id = $2 WHERE id = $1`, [session.id, signInId]);
 
   await db.query(
     `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'site_sign_in', $2)`,
@@ -201,7 +248,7 @@ const publicUser = (u) => ({
 });
 
 /** Resolve a token. Sessions are long — this is a customer's own phone. */
-async function sessionFor(token) {
+async function sessionFor(token, ctx = {}) {
   if (!token) return null;
   const days = await settings.num('site_session_days', 30);
   const row = await db.one(
@@ -211,19 +258,22 @@ async function sessionFor(token) {
 
   if (!row || row.deactivated_at) return null;
   if (Date.now() - new Date(row.last_used_at).getTime() > days * 24 * 60 * 60 * 1000) {
-    await db.query(`UPDATE site_sessions SET ended_at = now() WHERE id = $1`, [row.id]);
+    await db.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'expired' WHERE id = $1`, [row.id]);
+    await track('session_expired', { mobile: row.mobile, userId: row.user_id || null, sessionId: row.id, ctx });
     return null;
   }
   if (await blocks.isBlocked('mobile', row.mobile)) return null;
 
-  await db.query(`UPDATE site_sessions SET last_used_at = now() WHERE id = $1`, [row.id]);
+  await db.query(`UPDATE site_sessions SET last_used_at = now(), last_ip = coalesce($2, last_ip) WHERE id = $1`,
+    [row.id, ctx.ip || null]);
   return { sessionId: row.id, id: String(row.id), userId: String(row.user_id || row.id), user: row };
 }
 
-async function signOut(token) {
-  const s = await sessionFor(token);
+async function signOut(token, ctx = {}) {
+  const s = await sessionFor(token, ctx);
   if (!s) return;
-  await db.query(`UPDATE site_sessions SET ended_at = now() WHERE id = $1`, [s.sessionId]);
+  await db.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'signed_out' WHERE id = $1`, [s.sessionId]);
+  await track('signed_out', { mobile: s.user.mobile, userId: s.user.id, sessionId: s.sessionId, ctx });
 }
 
 /**
