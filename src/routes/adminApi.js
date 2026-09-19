@@ -709,6 +709,24 @@ router.post('/maintenance/clean', needs('admins'), safe(async (req, res) => {
   res.json(out);
 }));
 
+/**
+ * The whole database as a pg_dump file. Owner only, DOWNLOAD typed, one every
+ * ten minutes, recorded in the audit trail (admin/backup.js). A file, so it
+ * travels outside the encrypted envelope like the PDFs (app.js).
+ */
+router.get('/maintenance/backup', needs('admins'), safe(async (req, res) => {
+  if (req.query.confirm !== 'DOWNLOAD') {
+    return res.status(400).json({ error: 'not_confirmed', message: 'Type DOWNLOAD to confirm.' });
+  }
+  const backup = require('../admin/backup');
+  const wait = backup.waitMinutes(req.admin.id);
+  if (wait) {
+    return res.status(429).json({ error: 'too_soon',
+      message: `A backup was downloaded a moment ago. Try again in ${wait} minute${wait === 1 ? '' : 's'}.` });
+  }
+  await backup.stream(res, { adminId: req.admin.id, ip: ipOf(req) });
+}));
+
 /* ----------------------------------------------------------------- health */
 
 /** Is anything quietly broken? The panel shows this as a strip of lights. */
