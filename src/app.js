@@ -75,7 +75,7 @@ const cors = (allowedOrigins) => (req, res, next) => {
    routes. PDF downloads stay plain — they are files, not JSON. */
 const { gate, loopGuard } = require('./security/guard');
 const { tunnel } = require('./security/tunnel');
-const fileRoute = (req) => /^\/(reports|invoices)\/[^/]+\/file$/.test(req.path);
+const fileRoute = (req) => /^\/((reports|invoices)\/[^/]+\/file|maintenance\/backup)$/.test(req.path);
 
 app.use('/admin/api', cors(config.admin.origins), gate('admin'), tunnel('admin', { exempt: fileRoute }),
   loopGuard('admin'), adminRoutes);

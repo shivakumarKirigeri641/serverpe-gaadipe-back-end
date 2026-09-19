@@ -4,4 +4,8 @@ node_modules/
 .env_prod
 *.log
 .env.bak-211324
-src/uploadsgaadipe_full.sql
+src/uploads
+gaadipe_full.sql
+# server-docs.js: the server database copy and the documents rebuilt from it
+# (customer data, never committed)
+server-docs/

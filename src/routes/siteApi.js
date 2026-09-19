@@ -548,13 +548,15 @@ const sendPdf = ({ table, column, mustBeValid }) => safe(async (req, res) => {
     `SELECT ${column} AS number, pdf_path${mustBeValid ? ', valid_until' : ''}
        FROM ${table} WHERE id = $1 AND user_id = $2`, [req.params.id, req.user.id]);
 
-  if (!row || !row.pdf_path || !fs.existsSync(row.pdf_path)) {
+  if (!row) {
     return res.status(404).json({ error: 'not_found', message: 'That document is not available.' });
   }
   if (mustBeValid && (!row.valid_until || new Date(row.valid_until) <= new Date())) {
     return res.status(410).json({ error: 'expired',
       message: 'The download period for this report has ended. Check the vehicle again for a fresh one.' });
   }
+  /* The customer's own document, rebuilt from its row if the file has gone (pay/rebuild.js). */
+  row.pdf_path = await require('../pay/rebuild').ensureFile(table, req.params.id);
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition',

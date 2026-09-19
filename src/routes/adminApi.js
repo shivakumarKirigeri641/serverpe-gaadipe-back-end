@@ -431,9 +431,10 @@ router.get('/invoices', needs('money'), safe(async (req, res) => {
 const sendPdf = (table, column) => safe(async (req, res) => {
   const row = await db.one(
     `SELECT ${column} AS number, pdf_path FROM ${table} WHERE id = $1`, [req.params.id]);
-  if (!row || !row.pdf_path || !fs.existsSync(row.pdf_path)) {
-    return res.status(404).json({ error: 'not_found', message: 'That file is not on the server.' });
-  }
+  if (!row) return res.status(404).json({ error: 'not_found', message: 'No such document.' });
+  /* A missing file is rebuilt from its row, so View and Download always work
+     (pay/rebuild.js). */
+  row.pdf_path = await require('../pay/rebuild').ensureFile(table, req.params.id);
   await auth.audit({ adminId: req.admin.id, action: `download_${table}`, ip: ipOf(req),
                      detail: { number: row.number } });
   res.setHeader('Content-Type', 'application/pdf');
@@ -706,6 +707,24 @@ router.post('/maintenance/clean', needs('admins'), safe(async (req, res) => {
   const out = await maintenance.clean({ adminId: req.admin.id, ip: ipOf(req) });
   if (!out.ok) return res.status(403).json({ error: 'not_allowed', message: out.message });
   res.json(out);
+}));
+
+/**
+ * The whole database as a pg_dump file. Owner only, DOWNLOAD typed, one every
+ * ten minutes, recorded in the audit trail (admin/backup.js). A file, so it
+ * travels outside the encrypted envelope like the PDFs (app.js).
+ */
+router.get('/maintenance/backup', needs('admins'), safe(async (req, res) => {
+  if (req.query.confirm !== 'DOWNLOAD') {
+    return res.status(400).json({ error: 'not_confirmed', message: 'Type DOWNLOAD to confirm.' });
+  }
+  const backup = require('../admin/backup');
+  const wait = backup.waitMinutes(req.admin.id);
+  if (wait) {
+    return res.status(429).json({ error: 'too_soon',
+      message: `A backup was downloaded a moment ago. Try again in ${wait} minute${wait === 1 ? '' : 's'}.` });
+  }
+  await backup.stream(res, { adminId: req.admin.id, ip: ipOf(req) });
 }));
 
 /* ----------------------------------------------------------------- health */
