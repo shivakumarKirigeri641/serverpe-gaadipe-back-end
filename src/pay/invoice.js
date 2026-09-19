@@ -80,20 +80,103 @@ async function nextNumber(c) {
  * Create the invoice row and render the PDF.
  * Idempotent: a payment already invoiced returns the existing one.
  */
+/** The payment an invoice was for, with what it bought. */
+const PAY_SQL = `SELECT p.*, u.mobile, u.wa_profile_name, u.display_name, u.state_code, u.email,
+        v.reg_no, s.ends_on, s.starts_on, pl.kind AS plan_kind
+   FROM payments p
+   JOIN users u ON u.id = p.user_id
+   LEFT JOIN plans pl ON pl.id = p.plan_id
+   LEFT JOIN subscriptions s ON s.id = p.subscription_id
+   LEFT JOIN vehicles v ON v.id = s.vehicle_id
+  WHERE p.id = $1`;
+
+/**
+ * Everything the PDF shows, from the STORED invoice row and its payment.
+ *
+ * The renderer reads every amount from `invoice`, in RUPEES — passing them in
+ * a separate `gst` object once printed a correct-looking invoice with every
+ * figure zero, the worst kind of bug in a statutory document. The amounts come
+ * from the row as issued (base, CGST, SGST, IGST, total, place of supply), never
+ * recomputed; the payment supplies the vehicle, the dates and the payment ids.
+ */
+function pdfInput(row, pay, business) {
+  pay = pay || {};
+  const home = String(business.home_state_code || '29');
+  const buyerState = String(row.place_of_supply || home);
+  const interstate = buyerState !== home;
+  const cgst = Number(row.cgst_paise || 0);
+  const sgst = Number(row.sgst_paise || 0);
+  const igst = Number(row.igst_paise || 0);
+  const base = Number(row.base_paise || 0);
+  const gross = Number(row.total_paise || 0);
+
+  return {
+    consent: row.consent || null,
+    invoice: {
+      invoice_number: row.invoice_number,
+      invoice_date: row.invoice_date,
+      customer_name: row.buyer_name,
+      customer_mobile: pay.mobile || null,
+      customer_email: pay.email || null,
+      place_of_supply: STATES[buyerState] || 'Karnataka',
+      place_of_supply_code: buyerState,
+      is_interstate: interstate,
+      sac_code: '998319',
+
+      taxable_amount: base / 100,
+      cgst_amount: cgst / 100,
+      sgst_amount: sgst / 100,
+      igst_amount: igst / 100,
+      total_tax: (cgst + sgst + igst) / 100,
+      gross_amount: gross / 100,
+    },
+    business,
+    gst: { cgst_percent: 9, sgst_percent: 9, igst_percent: 18, sac_code: '998319' },
+    lineItem: {
+      reg_no: pay.reg_no || null,
+      // What the money bought, stated as dates rather than "28 days": the
+      // question a customer opens an invoice to answer is "until when?"
+      description: pay.plan_kind === 'report' ? [
+        pay.reg_no ? `GaadiPe Full Vehicle Report — ${pay.reg_no}` : 'GaadiPe Full Vehicle Report',
+        pay.starts_on && pay.ends_on
+          ? `Alerts from ${fmtDate(pay.starts_on)} to ${fmtDate(pay.ends_on)}`
+          : '28 days of alerts',
+        'One-time purchase, no renewal',
+      ].filter(Boolean).join('\n') : [
+        pay.reg_no ? `GaadiPe Watch — ${pay.reg_no}` : 'GaadiPe Watch',
+        pay.starts_on && pay.ends_on
+          ? `Monitoring from ${fmtDate(pay.starts_on)} to ${fmtDate(pay.ends_on)}`
+          : '28 days monitoring',
+        pay.ends_on ? `Renewal due on ${fmtDate(pay.ends_on)}` : null,
+      ].filter(Boolean).join('\n'),
+      amount: gross / 100,
+      // Shown on the invoice so a customer querying a charge on their statement
+      // can match it without asking us.
+      payment_id: pay.payment_id,
+      order_id: pay.order_id,
+      method: 'ONLINE',
+      paid_at: pay.paid_at,
+    },
+  };
+}
+
+/**
+ * A stored invoice rendered exactly as issued. `one(sql, params)` returns one
+ * row: the app's db.one, or a script's own client on another database.
+ */
+async function renderStored(row, { one = db.one, business } = {}) {
+  const pay = row.payment_id ? await one(PAY_SQL, [row.payment_id]) : null;
+  const biz = business
+    || await one('SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1', []) || {};
+  return buildInvoice(pdfInput(row, pay, biz));
+}
+
 async function forPayment(paymentId) {
   const existing = await db.one(
     `SELECT * FROM invoices WHERE payment_id = $1`, [paymentId]);
   if (existing) return { invoice: existing, created: false };
 
-  const pay = await db.one(
-    `SELECT p.*, u.mobile, u.wa_profile_name, u.display_name, u.state_code, u.email,
-            v.reg_no, s.ends_on, s.starts_on, pl.kind AS plan_kind
-       FROM payments p
-       JOIN users u ON u.id = p.user_id
-       LEFT JOIN plans pl ON pl.id = p.plan_id
-       LEFT JOIN subscriptions s ON s.id = p.subscription_id
-       LEFT JOIN vehicles v ON v.id = s.vehicle_id
-      WHERE p.id = $1`, [paymentId]);
+  const pay = await db.one(PAY_SQL, [paymentId]);
   if (!pay) throw new Error(`no payment ${paymentId}`);
 
   const business = await db.one(
@@ -138,57 +221,10 @@ async function forPayment(paymentId) {
     return rows[0];
   });
 
-  // The renderer reads every amount from `invoice`, in RUPEES. Passing them in
-  // a separate `gst` object printed a correct invoice with every figure zero —
-  // the worst kind of bug in a statutory document, because it looks finished.
-  const pdf = await buildInvoice({
-    consent,
-    invoice: {
-      invoice_number: row.invoice_number,
-      invoice_date: row.invoice_date,
-      customer_name: row.buyer_name,
-      customer_mobile: pay.mobile,
-      customer_email: pay.email || null,
-      place_of_supply: STATES[buyerState] || 'Karnataka',
-      place_of_supply_code: buyerState,
-      is_interstate: interstate,
-      sac_code: '998319',
-
-      taxable_amount: base / 100,
-      cgst_amount: cgst / 100,
-      sgst_amount: sgst / 100,
-      igst_amount: igst / 100,
-      total_tax: tax / 100,
-      gross_amount: gross / 100,
-    },
-    business,
-    gst: { cgst_percent: 9, sgst_percent: 9, igst_percent: 18, sac_code: '998319' },
-    lineItem: {
-      reg_no: pay.reg_no || null,
-      // What the money bought, stated as dates rather than "28 days": the
-      // question a customer opens an invoice to answer is "until when?"
-      description: pay.plan_kind === 'report' ? [
-        pay.reg_no ? `GaadiPe Full Vehicle Report — ${pay.reg_no}` : 'GaadiPe Full Vehicle Report',
-        pay.starts_on && pay.ends_on
-          ? `Alerts from ${fmtDate(pay.starts_on)} to ${fmtDate(pay.ends_on)}`
-          : '28 days of alerts',
-        'One-time purchase, no renewal',
-      ].filter(Boolean).join('\n') : [
-        pay.reg_no ? `GaadiPe Watch — ${pay.reg_no}` : 'GaadiPe Watch',
-        pay.starts_on && pay.ends_on
-          ? `Monitoring from ${fmtDate(pay.starts_on)} to ${fmtDate(pay.ends_on)}`
-          : '28 days monitoring',
-        pay.ends_on ? `Renewal due on ${fmtDate(pay.ends_on)}` : null,
-      ].filter(Boolean).join('\n'),
-      amount: gross / 100,
-      // Shown on the invoice so a customer querying a charge on their statement
-      // can match it without asking us.
-      payment_id: pay.payment_id,
-      order_id: pay.order_id,
-      method: 'ONLINE',
-      paid_at: pay.paid_at,
-    },
-  });
+  // Rendered from the stored row, by the same function that rebuilds it later
+  // (renderStored), so the invoice issued today and one rebuilt next year
+  // cannot differ.
+  const pdf = await buildInvoice(pdfInput(row, pay, business));
 
   fs.mkdirSync(DIR, { recursive: true });
   const file = path.join(DIR, `${row.invoice_number}.pdf`);
@@ -199,4 +235,4 @@ async function forPayment(paymentId) {
   return { invoice: { ...row, pdf_path: file }, created: true, pdf, pay };
 }
 
-module.exports = { forPayment, nextNumber, STATES };
+module.exports = { forPayment, nextNumber, renderStored, pdfInput, STATES };
