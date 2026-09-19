@@ -61,13 +61,12 @@ const outDir = flag('out', path.join(__dirname, '..', 'src', 'uploads', 'invoice
   const business = (await c.query(
     `SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`)).rows[0] || {};
 
-  const gross = Number(inv.gross_amount ?? inv.total_paise / 100 ?? 0);
-
-  console.log(`  ${inv.customer_name}  ${inv.customer_mobile}`);
-  console.log(`  gross ₹${gross.toFixed(2)}  tax ₹${Number(inv.total_tax || 0).toFixed(2)}  ${new Date(inv.invoice_date).toDateString()}`);
+  const tax = Number(inv.cgst_paise || 0) + Number(inv.sgst_paise || 0) + Number(inv.igst_paise || 0);
+  console.log(`  ${inv.buyer_name}`);
+  console.log(`  total ₹${(Number(inv.total_paise || 0) / 100).toFixed(2)}  GST ₹${(tax / 100).toFixed(2)}  ${new Date(inv.invoice_date).toDateString()}`);
 
   // The same rendering the admin panel and the website use (src/pay/rebuild.js).
-  const pdf = await renderInvoice(inv, business);
+  const pdf = await renderInvoice(inv, business, async (sql, params) => (await c.query(sql, params)).rows[0]);
 
   fs.mkdirSync(outDir, { recursive: true });
   const file = path.join(outDir, `${number}.pdf`);

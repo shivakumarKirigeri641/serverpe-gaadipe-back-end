@@ -19,7 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const db = require('../db');
-const { buildInvoice } = require('../pdf/invoice');
+const { renderStored } = require('./invoice');
 const { buildVehicleReport } = require('../pdf/vehicleReport');
 
 const DIRS = {
@@ -27,27 +27,14 @@ const DIRS = {
   vehicle_reports: path.join(__dirname, '..', 'uploads', 'reports'),
 };
 
-/** An invoice PDF from its row and the seller's details. */
-function renderInvoice(inv, business = {}) {
-  const gross = Number(inv.gross_amount ?? inv.total_paise / 100 ?? 0);
-  const taxable = Number(inv.taxable_amount ?? 0) || null;
-  return buildInvoice({
-    invoice: inv,
-    business,
-    gst: {
-      taxable_amount: taxable,
-      cgst_amount: Number(inv.cgst_amount || 0),
-      sgst_amount: Number(inv.sgst_amount || 0),
-      igst_amount: Number(inv.igst_amount || 0),
-      total_tax: Number(inv.total_tax || 0),
-      is_interstate: !!inv.is_interstate,
-      sac_code: inv.sac_code,
-    },
-    lineItem: {
-      description: inv.description || 'GaadiPe vehicle report and monitoring',
-      amount: gross,
-    },
-  });
+/**
+ * An invoice PDF from its stored row, exactly as issued: the same function the
+ * issue itself renders with (pay/invoice.js renderStored), reading the amounts
+ * stored on the row and the vehicle, dates and payment ids from its payment.
+ * `one` runs a one-row query — the app's database unless a script passes its own.
+ */
+function renderInvoice(inv, business, one) {
+  return renderStored(inv, { business, ...(one ? { one } : {}) });
 }
 
 /** A vehicle report PDF from its row: the snapshot, the requester and the consent. */
