@@ -22,7 +22,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
-const { buildVehicleReport } = require('../src/pdf/vehicleReport');
+const { renderReport } = require('../src/pay/rebuild');
 
 const args = process.argv.slice(2);
 const number = args.find(a => !a.startsWith('--'));
@@ -63,16 +63,8 @@ const outDir = flag('out', path.join(__dirname, '..', 'src', 'uploads', 'reports
   console.log(`  ${report.reg_no}  for ${report.requester_name || '-'} ${report.requested_by || ''}`);
   console.log(`  issued ${new Date(report.created_at).toString()}  via ${report.channel}`);
 
-  const pdf = await buildVehicleReport({
-    report,
-    business,
-    data: report.snapshot,
-    consent: report.consent || null,
-    requester: {
-      name: report.requester_name, mobile: report.requested_by,
-      ip: report.ip, device: report.device, channel: report.channel || 'whatsapp',
-    },
-  });
+  // The same rendering the admin panel and the website use (src/pay/rebuild.js).
+  const pdf = await renderReport(report, business);
 
   fs.mkdirSync(outDir, { recursive: true });
   const file = path.join(outDir, `${number}.pdf`);

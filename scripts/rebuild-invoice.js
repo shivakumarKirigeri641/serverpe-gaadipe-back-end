@@ -21,7 +21,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
-const { buildInvoice } = require('../src/pdf/invoice');
+const { renderInvoice } = require('../src/pay/rebuild');
 
 const args = process.argv.slice(2);
 const number = args.find(a => !a.startsWith('--'));
@@ -62,28 +62,12 @@ const outDir = flag('out', path.join(__dirname, '..', 'src', 'uploads', 'invoice
     `SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`)).rows[0] || {};
 
   const gross = Number(inv.gross_amount ?? inv.total_paise / 100 ?? 0);
-  const taxable = Number(inv.taxable_amount ?? 0) || null;
 
   console.log(`  ${inv.customer_name}  ${inv.customer_mobile}`);
   console.log(`  gross ₹${gross.toFixed(2)}  tax ₹${Number(inv.total_tax || 0).toFixed(2)}  ${new Date(inv.invoice_date).toDateString()}`);
 
-  const pdf = await buildInvoice({
-    invoice: inv,
-    business,
-    gst: {
-      taxable_amount: taxable,
-      cgst_amount: Number(inv.cgst_amount || 0),
-      sgst_amount: Number(inv.sgst_amount || 0),
-      igst_amount: Number(inv.igst_amount || 0),
-      total_tax: Number(inv.total_tax || 0),
-      is_interstate: !!inv.is_interstate,
-      sac_code: inv.sac_code,
-    },
-    lineItem: {
-      description: inv.description || 'GaadiPe vehicle report and monitoring',
-      amount: gross,
-    },
-  });
+  // The same rendering the admin panel and the website use (src/pay/rebuild.js).
+  const pdf = await renderInvoice(inv, business);
 
   fs.mkdirSync(outDir, { recursive: true });
   const file = path.join(outDir, `${number}.pdf`);

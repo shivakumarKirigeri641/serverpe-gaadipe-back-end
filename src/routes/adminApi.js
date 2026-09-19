@@ -431,9 +431,10 @@ router.get('/invoices', needs('money'), safe(async (req, res) => {
 const sendPdf = (table, column) => safe(async (req, res) => {
   const row = await db.one(
     `SELECT ${column} AS number, pdf_path FROM ${table} WHERE id = $1`, [req.params.id]);
-  if (!row || !row.pdf_path || !fs.existsSync(row.pdf_path)) {
-    return res.status(404).json({ error: 'not_found', message: 'That file is not on the server.' });
-  }
+  if (!row) return res.status(404).json({ error: 'not_found', message: 'No such document.' });
+  /* A missing file is rebuilt from its row, so View and Download always work
+     (pay/rebuild.js). */
+  row.pdf_path = await require('../pay/rebuild').ensureFile(table, req.params.id);
   await auth.audit({ adminId: req.admin.id, action: `download_${table}`, ip: ipOf(req),
                      detail: { number: row.number } });
   res.setHeader('Content-Type', 'application/pdf');
