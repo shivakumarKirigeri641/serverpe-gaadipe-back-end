@@ -1,19 +1,15 @@
 /**
  * src/quizpe/readonly.js — GaadiPe's window into QuizPe, READ-ONLY (user, 2026-09-21).
  *
- * Used for one thing: to see whether a parent a GaadiPe customer referred has
- * joined QuizPe and bought a premium plan. QuizPe's code is not touched and
- * nothing here can change QuizPe:
+ * Used for one thing: the referral link. Two views in QuizPe's database, made by
+ * scripts/quizpe-readonly.sql, are all this login can read:
  *
- *   * its own login (QUIZPE_RO_*), which the server grants SELECT on a few
- *     columns only — see scripts/quizpe-readonly.sql
- *   * every session is read-only as well (default_transaction_read_only), so
- *     even a mis-granted login could not write
- *   * short statement timeout and a pool of two, so a slow query never loads
- *     QuizPe's database
+ *   gaadipe_ref_messages       who sent a "GP-<code>" message to QuizPe, and when
+ *   gaadipe_premium_payments   captured premium payments of those numbers only
  *
- * Not configured (no QUIZPE_RO_DATABASE) means the referral check simply does
- * not run; nothing else depends on it.
+ * Every session is read-only as well, with a short statement timeout and a pool
+ * of two, so this can neither change nor load QuizPe. QuizPe's code is untouched.
+ * Not configured (no QUIZPE_RO_DATABASE) means the referral check waits.
  */
 
 const { Pool } = require('pg');
@@ -42,30 +38,24 @@ function get() {
   return pool;
 }
 
-/**
- * For these ten-digit mobiles: each QuizPe parent (when they joined) and each
- * captured premium payment of at least `minRupees`, with when it was paid.
- * A trial has a subscription but no invoice or payment, so it never appears as
- * a payment.
- */
-async function lookup(mobiles, minRupees = 99) {
+/** Messages carrying a GaadiPe code since `since`: [{ mobile, code, created_at }], oldest first. */
+async function refMessages(since) {
   const p = get();
-  if (!p || !mobiles.length) return { parents: [], payments: [] };
-  const DIGITS = `right(regexp_replace(p.parent_mobile_number, '[^0-9]', '', 'g'), 10)`;
-  const parents = await p.query(
-    `SELECT p.id, ${DIGITS} AS mobile, p.created_at
-       FROM parents p
-      WHERE ${DIGITS} = ANY($1::text[])`, [mobiles]);
-  const payments = await p.query(
-    `SELECT p.id AS parent_id, ${DIGITS} AS mobile, pay.payment_id, pay.amount, i.created_at AS paid_at
-       FROM parents p
-       JOIN parents_quizpe_subscriptions s ON s.parent_id = p.id
-       JOIN invoices i ON i.subscription_id = s.id
-       JOIN payments pay ON pay.id = i.payment_id
-      WHERE ${DIGITS} = ANY($1::text[])
-        AND pay.captured = true AND pay.amount >= $2
-      ORDER BY i.created_at`, [mobiles, minRupees]);
-  return { parents: parents.rows, payments: payments.rows };
+  if (!p) return [];
+  const { rows } = await p.query(
+    `SELECT mobile, code, created_at FROM gaadipe_ref_messages
+      WHERE created_at >= $1 ORDER BY created_at LIMIT 5000`, [since]);
+  return rows;
 }
 
-module.exports = { configured, lookup };
+/** Captured premium payments of these numbers: [{ mobile, payment_id, amount, paid_at, plan_start_date, plan_end_date }]. */
+async function premiumPayments(mobiles) {
+  const p = get();
+  if (!p || !mobiles.length) return [];
+  const { rows } = await p.query(
+    `SELECT mobile, payment_id, amount, paid_at, plan_start_date, plan_end_date
+       FROM gaadipe_premium_payments WHERE mobile = ANY($1::text[]) ORDER BY paid_at`, [mobiles]);
+  return rows;
+}
+
+module.exports = { configured, refMessages, premiumPayments };

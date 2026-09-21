@@ -156,6 +156,18 @@ router.post('/session/verify', safe(async (req, res) => {
   res.json(out);
 }));
 
+/*
+ * A referral link was tapped: gaadipe.in/q/<code> asks here where to go
+ * (user, 2026-09-21). Public — the person tapping is usually not a GaadiPe
+ * customer — but a signed-in owner opening their OWN link is told so instead.
+ */
+router.get('/q/:code', safe(async (req, res) => {
+  const token = tokenOf(req);
+  const viewer = token ? await auth.sessionFor(token, { ip: req.ip }).catch(() => null) : null;
+  res.json(await referrals.resolve(req.params.code, {
+    viewer: viewer?.user || null, ip: req.ip, userAgent: req.get('user-agent') }));
+}));
+
 /* ------------------------------------------------------------- signed in */
 
 router.use(safe(async (req, res, next) => {
@@ -222,22 +234,23 @@ router.put('/me', safe(async (req, res) => {
 
 /* ─────────────────────────────── QuizPe referrals (user, 2026-09-21) ── */
 
-/* My referrals and my free reports. */
+/* My link, what it brought, and my free reports. */
 router.get('/referrals', safe(async (req, res) => {
-  const out = await referrals.listFor(req.user.id);
+  const out = await referrals.summaryFor(req.user);
   res.json({ ...out, enabled: String(await settings.get('referral_enabled', 'true')).toLowerCase() !== 'false',
-             unlock: await unlockMode(), consent_text: referrals.CONSENT_TEXT,
+             unlock: await unlockMode(),
              monthly_cap: await settings.num('referral_monthly_cap', 10),
              window_days: await settings.num('referral_window_days', 30) });
 }));
 
-/* Refer a parent. GaadiPe stores the number to match it on QuizPe; it never messages them. */
-router.post('/referrals', safe(async (req, res) => {
-  const out = await referrals.create(req.user, {
-    name: req.body?.name, mobile: req.body?.mobile, consent: req.body?.consent === true }, req);
-  if (!out.ok) return res.status(out.error === 'slow_down' ? 429 : 400).json(out);
-  await activity.record(req, { action: 'referral_created' });
-  res.json(out);
+/* Join the programme: agree that QuizPe may message me (its condition), and get my link. */
+router.post('/referrals/join', safe(async (req, res) => {
+  const out = await referrals.join(req.user, { consent: req.body?.consent === true,
+    name: req.body?.name, email: req.body?.email, ip: req.ip, userAgent: req.get('user-agent') });
+  if (!out.ok) return res.status(400).json(out);
+  await activity.record(req, { action: 'referral_joined' });
+  const fresh = await db.one(`SELECT * FROM users WHERE id = $1`, [req.user.id]);
+  res.json({ ...(await referrals.summaryFor(fresh)), user: auth.publicUser(fresh) });
 }));
 
 /* Spend a free report on a vehicle — the same declaration as a purchase is required. */
@@ -265,8 +278,8 @@ router.post('/credits/use', safe(async (req, res) => {
  * not a condition of anything, withdrawable here any time. The exact words and
  * the time are recorded.
  */
-const QUIZPE_CONSENT = 'I agree that QuizPe, a product of ServerPe App Solutions, may send me messages '
-  + 'about QuizPe on my mobile number. I can withdraw this at any time from my GaadiPe profile.';
+// One wording, shared with the referral programme (withdrawing it stops the link).
+const QUIZPE_CONSENT = referrals.PROGRAMME_CONSENT;
 router.put('/me/consents', safe(async (req, res) => {
   const agree = req.body?.quizpe === true;
   const { rows } = await db.query(

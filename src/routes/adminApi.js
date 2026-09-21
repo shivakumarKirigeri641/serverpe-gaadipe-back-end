@@ -779,7 +779,7 @@ router.get('/referrals', safe(async (req, res) => {
   const status = ['pending', 'rewarded', 'expired', 'not_eligible', 'revoked'].includes(req.query.status) ? req.query.status : null;
   const { rows } = await db.query(
     `SELECT r.id, r.parent_name, r.mobile_masked, r.status, r.status_reason, r.quizpe_payment, r.quizpe_amount,
-            r.rewarded_at, r.expires_at, r.created_at, r.last_checked_at,
+            r.rewarded_at, r.expires_at, r.created_at, r.last_checked_at, r.code, r.tapped_at,
             u.id AS referrer_id, u.mobile AS referrer_mobile, coalesce(u.display_name, u.wa_profile_name) AS referrer_name,
             c.id AS credit_id, c.used_at, c.used_reg_no, c.revoked_at, c.expires_at AS credit_expires_at
        FROM quizpe_referrals r
@@ -800,6 +800,35 @@ router.get('/referrals', safe(async (req, res) => {
   res.json({ rows: rows.map((r) => ({ ...r, id: String(r.id), referrer_id: String(r.referrer_id),
                                        credit_id: r.credit_id ? String(r.credit_id) : null })),
              totals, quizpe_connected: require('../quizpe/readonly').configured() });
+}));
+
+/* Every referral link: whose, how often opened, what it brought. */
+router.get('/referral-links', safe(async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT l.user_id, l.code, l.is_active, l.disabled_reason, l.created_at, l.reset_at,
+            u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name, u.quizpe_consent_at,
+            (SELECT count(*) FROM referral_clicks c WHERE c.link_id = l.id AND c.outcome = 'opened')::int AS opened,
+            (SELECT count(*) FROM quizpe_referrals r WHERE r.link_id = l.id)::int AS taps,
+            (SELECT count(*) FROM quizpe_referrals r WHERE r.link_id = l.id AND r.status = 'rewarded')::int AS rewarded
+       FROM referral_links l JOIN users u ON u.id = l.user_id
+      ORDER BY rewarded DESC, taps DESC, l.id DESC LIMIT 300`);
+  res.json({ rows: rows.map((r) => ({ ...r, user_id: String(r.user_id) })) });
+}));
+
+/* Reset a link (the old one stops working) or switch it off / on. Audited. */
+router.post('/referral-links/:userId/:action', needs('settings'), safe(async (req, res) => {
+  const referrals = require('../referrals/quizpe');
+  const userId = String(req.params.userId).replace(/\D/g, '');
+  const reason = String(req.body?.reason || '').trim().slice(0, 300) || null;
+  let row;
+  if (req.params.action === 'reset') row = await referrals.resetLink(userId);
+  else if (req.params.action === 'disable') row = await referrals.setLinkActive(userId, false, reason || 'disabled by admin');
+  else if (req.params.action === 'enable') row = await referrals.setLinkActive(userId, true);
+  else return res.status(400).json({ error: 'action', message: 'Unknown action.' });
+  if (!row) return res.status(404).json({ error: 'not_found', message: 'That customer has no referral link.' });
+  await auth.audit({ adminId: req.admin.id, action: `referral_link_${req.params.action}`, ip: ipOf(req),
+    detail: { user_id: userId, code: row.code, reason } });
+  res.json({ ok: true, code: row.code, is_active: row.is_active });
 }));
 
 /* Take back an unused free report (abuse). */
