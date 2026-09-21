@@ -858,6 +858,66 @@ router.get('/quizpe-consents', safe(async (req, res) => {
   res.json({ rows: rows.map((r) => ({ ...r, id: String(r.id) })) });
 }));
 
+/* ─────────────────────────── emails to customers (admin, 2026-09-21) ── */
+
+const customerEmails = require('../admin/customerEmails');
+
+/* Every customer email (daily, digest, confirm, reward, announcement), plus reach. */
+router.get('/customer-emails', safe(async (req, res) => {
+  const kinds = ['confirm', 'daily', 'digest', 'reward', 'announcement'];
+  const statuses = ['pending', 'sent', 'failed', 'skipped'];
+  res.json({
+    ...(await customerEmails.log({
+      kind: kinds.includes(req.query.kind) ? req.query.kind : null,
+      status: statuses.includes(req.query.status) ? req.query.status : null,
+      q: req.query.q || '' })),
+    campaigns: await customerEmails.campaigns(),
+    audiences: customerEmails.AUDIENCES,
+  });
+}));
+
+router.post('/customer-emails/preview', needs('settings'), safe(async (req, res) => res.json(
+  await customerEmails.preview(req.body || {}))));
+
+router.post('/customer-emails/test', needs('settings'), safe(async (req, res) => {
+  const out = await customerEmails.testSend(req.body || {}, req.admin);
+  if (!out.ok) return res.status(502).json(out);
+  res.json(out);
+}));
+
+/* Send: typed confirmation, audited. Queued, then sent a few a minute. */
+router.post('/customer-emails/send', needs('settings'), safe(async (req, res) => {
+  if (req.body?.confirm !== 'SEND') return res.status(400).json({ error: 'confirm', message: 'Type SEND to confirm.' });
+  const out = await customerEmails.queue(req.body || {}, req.admin.id);
+  if (!out.ok) return res.status(400).json(out);
+  await auth.audit({ adminId: req.admin.id, action: 'customer_email_queued', ip: ipOf(req),
+    detail: { campaign_id: out.campaign.id, audience: req.body.audience, mobile: req.body.mobile || null,
+              subject: out.campaign.subject, recipients: out.campaign.recipients } });
+  res.json(out);
+}));
+
+router.post('/customer-emails/campaigns/:id/cancel', needs('settings'), safe(async (req, res) => {
+  const out = await customerEmails.cancel(req.params.id);
+  await auth.audit({ adminId: req.admin.id, action: 'customer_email_cancelled', ip: ipOf(req),
+    detail: { campaign_id: req.params.id, cancelled: out.cancelled } });
+  res.json(out);
+}));
+
+/* ────────────────────────────── free reports, one by one (2026-09-21) ── */
+
+const freeReports = require('../admin/freeReports');
+
+router.get('/free-reports', safe(async (req, res) => {
+  const states = ['available', 'used', 'expired', 'revoked'];
+  res.json(await freeReports.list({ state: states.includes(req.query.state) ? req.query.state : null, q: req.query.q || '' }));
+}));
+
+router.get('/free-reports/customer/:id', safe(async (req, res) => {
+  const out = await freeReports.customer(String(req.params.id).replace(/\D/g, '') || '0');
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'Customer not found.' });
+  res.json(out);
+}));
+
 /* ───────────────── report access, per customer and vehicle (owner, rare) ── */
 
 const reportAccessOn = async () =>
