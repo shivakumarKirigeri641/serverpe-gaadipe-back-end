@@ -257,15 +257,20 @@ const publicUser = (u) => ({
 async function sessionFor(token, ctx = {}) {
   if (!token) return null;
   const days = await settings.num('site_session_days', 30);
+  /* The session's own columns are NAMED, not s.id beside u.* — with both, the
+     customer's id overwrote the session's, and every update (activity, and
+     sign-out itself) landed on whichever session shared the customer's number.
+     The real session never closed, so the panel showed people online after
+     they had signed out (fixed 2026-09-21). */
   const row = await db.one(
-    `SELECT s.id, s.last_used_at, u.*
+    `SELECT s.id AS session_id, s.last_used_at AS session_last_used_at, u.*
        FROM site_sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = $1 AND s.ended_at IS NULL`, [sha256(token)]);
 
   if (!row || row.deactivated_at) return null;
-  if (Date.now() - new Date(row.last_used_at).getTime() > days * 24 * 60 * 60 * 1000) {
-    await db.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'expired' WHERE id = $1`, [row.id]);
-    await track('session_expired', { mobile: row.mobile, userId: row.user_id || null, sessionId: row.id, ctx });
+  if (Date.now() - new Date(row.session_last_used_at).getTime() > days * 24 * 60 * 60 * 1000) {
+    await db.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'expired' WHERE id = $1`, [row.session_id]);
+    await track('session_expired', { mobile: row.mobile, userId: row.id, sessionId: row.session_id, ctx });
     return null;
   }
   if (await blocks.isBlocked('mobile', row.mobile)) return null;
@@ -273,14 +278,18 @@ async function sessionFor(token, ctx = {}) {
   await db.query(
     `UPDATE site_sessions SET last_used_at = now(), last_ip = coalesce($2, last_ip),
             request_count = request_count + 1 WHERE id = $1`,
-    [row.id, ctx.ip || null]);
-  return { sessionId: row.id, id: String(row.id), userId: String(row.user_id || row.id), user: row };
+    [row.session_id, ctx.ip || null]);
+  return { sessionId: row.session_id, id: String(row.session_id), userId: String(row.id), user: row };
 }
 
 async function signOut(token, ctx = {}) {
   const s = await sessionFor(token, ctx);
   if (!s) return;
-  await db.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'signed_out' WHERE id = $1`, [s.sessionId]);
+  await db.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'signed_out',
+          current_action = 'signed_out', current_at = now() WHERE id = $1`, [s.sessionId]);
+  await db.query(
+    `INSERT INTO site_activity (session_id, user_id, kind, action, ip) VALUES ($1, $2, 'action', 'signed_out', $3)`,
+    [s.sessionId, s.user.id, ctx.ip || null]).catch(() => {});
   await track('signed_out', { mobile: s.user.mobile, userId: s.user.id, sessionId: s.sessionId, ctx });
 }
 

@@ -267,6 +267,15 @@ router.get('/live/activity', safe(async (req, res) => res.json({
   rows: await live.activity({ limit: Number(req.query.limit) || 50 }),
 })));
 
+/* Signed-in visitors on the site, and one visit's trail. Polled, so not audited. */
+router.get('/live/visitors', safe(async (req, res) => res.json({
+  rows: await live.visitors({ minutes: Number(req.query.minutes) || 30 }),
+})));
+
+router.get('/live/visitors/:id/trail', safe(async (req, res) => res.json({
+  rows: await live.trail(req.params.id, { limit: Number(req.query.limit) || 200 }),
+})));
+
 /* --------------------------------------------------------------- vehicles */
 
 router.get('/vehicles', safe(async (req, res) => {

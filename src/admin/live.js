@@ -134,4 +134,50 @@ async function activity({ limit = 50 } = {}) {
   return rows.map(r => ({ ...r, id: String(r.id) }));
 }
 
-module.exports = { conversations, thread, pulse, activity };
+
+/**
+ * WHO IS ON THE SITE (user, 2026-09-21): every signed-in visitor active in the
+ * last `minutes`, with where they are — the page, the vehicle, the last thing
+ * they did — read from the session row that site/activity.js keeps current.
+ * Sessions signed out inside the window are listed too, marked offline, so a
+ * visitor who just left does not simply vanish.
+ */
+async function visitors({ minutes = 30 } = {}) {
+  const { rows } = await db.query(
+    `SELECT s.id, s.user_id, s.created_at, s.last_used_at, s.ended_at, s.ended_reason,
+            s.request_count, coalesce(s.last_ip, s.ip) AS ip, s.user_agent,
+            s.current_page, s.current_reg_no, s.current_action, s.current_at,
+            u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name, u.state_code,
+            CASE WHEN s.ended_at IS NULL AND s.last_used_at > now() - interval '15 minutes' THEN 'online'
+                 WHEN s.ended_at IS NULL THEN 'idle'
+                 ELSE coalesce(s.ended_reason, 'ended') END AS state,
+            EXISTS (SELECT 1 FROM payments p WHERE p.user_id = u.id AND p.status = 'paid') AS has_paid,
+            (SELECT count(*) FROM site_activity a WHERE a.session_id = s.id AND a.kind = 'page')::int AS pages,
+            (SELECT count(DISTINCT a.reg_no) FROM site_activity a WHERE a.session_id = s.id AND a.reg_no IS NOT NULL)::int AS vehicles,
+            (SELECT array_agg(DISTINCT a.reg_no) FROM site_activity a
+              WHERE a.session_id = s.id AND a.reg_no IS NOT NULL) AS vehicle_list
+       FROM site_sessions s
+       JOIN users u ON u.id = s.user_id
+      WHERE greatest(s.last_used_at, coalesce(s.ended_at, s.last_used_at), coalesce(s.current_at, s.last_used_at))
+            > now() - ($1 || ' minutes')::interval
+      ORDER BY greatest(s.last_used_at, coalesce(s.ended_at, s.last_used_at), coalesce(s.current_at, s.last_used_at)) DESC
+      LIMIT 100`, [String(Math.min(24 * 60, Math.max(5, Number(minutes) || 30)))]);
+
+  const device = require('../site/device');
+  return rows.map((r) => {
+    const d = device.parseUA(r.user_agent);
+    return { ...r, id: String(r.id), user_id: String(r.user_id), user_agent: undefined,
+             device: [d.device_type, d.os, d.browser].filter(Boolean).join(' · ') || null };
+  });
+}
+
+/** One visit, step by step, newest first. */
+async function trail(sessionId, { limit = 200 } = {}) {
+  const { rows } = await db.query(
+    `SELECT id, kind, page, action, reg_no, detail, ip, created_at
+       FROM site_activity WHERE session_id = $1
+      ORDER BY id DESC LIMIT $2`, [String(sessionId).replace(/D/g, '') || '0', Math.min(1000, limit)]);
+  return rows.map((r) => ({ ...r, id: String(r.id) }));
+}
+
+module.exports = { conversations, thread, pulse, activity, visitors, trail };
