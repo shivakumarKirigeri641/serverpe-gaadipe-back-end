@@ -182,6 +182,12 @@ router.use(safe(async (req, res, next) => {
 
 /* Where the customer is on the site, reported by the page (site/activity.js). */
 router.post('/activity', safe(async (req, res) => {
+  // One event, or a batch of clicks the page collected (at most 50 a call).
+  if (Array.isArray(req.body?.events)) {
+    let n = 0;
+    for (const ev of req.body.events.slice(0, 50)) if (await activity.fromClient(req, ev || {})) n += 1;
+    return res.json({ ok: true, recorded: n });
+  }
   const ok = await activity.fromClient(req, req.body || {});
   res.json({ ok });
 }));

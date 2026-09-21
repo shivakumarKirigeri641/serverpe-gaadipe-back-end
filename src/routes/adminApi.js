@@ -275,6 +275,25 @@ router.get('/live/visitors', safe(async (req, res) => res.json({
   rows: await live.visitors({ minutes: Number(req.query.minutes) || 30 }),
 })));
 
+/* Every customer active in the last N days, and each one's own table of clicks, pages and actions. */
+router.get('/live/customers', safe(async (req, res) => res.json({
+  rows: await live.customers({ days: Number(req.query.days) || 7, q: req.query.q || '' }),
+})));
+
+router.get('/live/customers/:id/activity', safe(async (req, res) => {
+  const kinds = ['page', 'click', 'action'];
+  const out = await live.customerActivity(String(req.params.id).replace(/\D/g, '') || '0', {
+    kind: kinds.includes(req.query.kind) ? req.query.kind : null,
+    before: /^\d+$/.test(String(req.query.before || '')) ? req.query.before : null,
+    limit: Number(req.query.limit) || 200,
+  });
+  if (!refreshing(req)) {
+    await auth.audit({ adminId: req.admin.id, action: 'view_customer_activity', ip: ipOf(req),
+                       detail: { user_id: String(req.params.id) } });
+  }
+  res.json(out);
+}));
+
 router.get('/live/visitors/:id/trail', safe(async (req, res) => res.json({
   rows: await live.trail(req.params.id, { limit: Number(req.query.limit) || 200 }),
 })));
