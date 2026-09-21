@@ -120,7 +120,11 @@ async function requestCodeInner({ mobile, ip }) {
   }
 
   const minutes = await settings.num('site_otp_minutes', 10);
-  const fixed = config.site.devOtp;
+  // The owner (an active owner in admin_users) signs in with a fixed code and
+  // no SMS; everyone else gets a fresh random code by SMS.
+  const owner = config.site.ownerOtp && await db.one(
+    `SELECT 1 FROM admin_users WHERE right(mobile, 10) = $1 AND role = 'owner' AND is_active`, [m]);
+  const fixed = owner ? config.site.ownerOtp : config.site.devOtp;
   const code = fixed || String(crypto.randomInt(100000, 1000000));
 
   await db.query(
@@ -129,7 +133,7 @@ async function requestCodeInner({ mobile, ip }) {
     [m, sha256(code), String(minutes), ip || null]);
 
   if (fixed) {
-    console.warn('[site] DEV SIGN-IN: %s may sign in with the fixed code %s', m, fixed);
+    console.warn('[site] %s: %s signs in with the fixed code, no SMS sent', owner ? 'OWNER SIGN-IN' : 'DEV SIGN-IN', m);
   } else {
     const sent = await sms.send(m,
       `${code} is your GaadiPe login code. It is valid for ${minutes} minutes. `

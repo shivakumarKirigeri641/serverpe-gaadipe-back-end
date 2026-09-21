@@ -142,6 +142,10 @@ const config = {
    * flow can be built before an SMS account exists, and never in production.
    */
   site: {
+    // THE OWNER'S OWN SIGN-IN (user, 2026-09-21): the mobile of an active
+    // owner in admin_users signs in to the site with this fixed code and no SMS
+    // is sent — in production too. Nobody else is affected.
+    ownerOtp: String(process.env.SITE_OWNER_OTP || '641641').replace(/\D/g, ''),
     devOtp: String(process.env.NODE_ENV || '').toLowerCase() === 'production'
       ? ''
       : String(process.env.SITE_DEV_OTP || '1234'),
