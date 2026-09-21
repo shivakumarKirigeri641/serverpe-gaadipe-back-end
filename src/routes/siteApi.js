@@ -41,6 +41,7 @@ const reports = require('../pay/report');
 const billing = require('../pay/billing');
 const razorpay = require('../pay/razorpay');
 const settings = require('../util/settings');
+const activity = require('../site/activity');
 
 const router = express.Router();
 
@@ -135,7 +136,14 @@ router.use(safe(async (req, res, next) => {
     return res.status(401).json({ error: 'signed_out', message: 'Please sign in again.' });
   }
   req.user = session.user;
+  req.siteSession = session;
   next();
+}));
+
+/* Where the customer is on the site, reported by the page (site/activity.js). */
+router.post('/activity', safe(async (req, res) => {
+  const ok = await activity.fromClient(req, req.body || {});
+  res.json({ ok });
 }));
 
 router.get('/session', safe(async (req, res) =>
@@ -268,6 +276,7 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
   // The same offer as a fresh check: a vehicle opened from "My vehicles" is
   // exactly as buyable as one just typed in, and the page should say so.
   const plan = await billing.reportPlan();
+  await activity.record(req, { action: paid ? 'view_vehicle_paid' : 'view_vehicle', regNo: parsed.regNo });
   res.json({
     vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
@@ -324,6 +333,7 @@ router.post('/check', safe(async (req, res) => {
   }
 
   await store.record(req.user.id, data).catch(e => console.error('[site] store:', e.message));
+  await activity.record(req, { action: paid ? 'check_paid' : 'check', regNo: parsed.regNo });
 
   const plan = await billing.reportPlan();
   res.json({
@@ -499,6 +509,8 @@ router.post('/buy', safe(async (req, res) => {
   }
 
   await consent(row.id);
+  await activity.record(req, { action: 'pay_start', regNo: parsed.regNo,
+    detail: { payment_row: String(row.id), amount_paise: row.amount_paise } });
   // This purchase's buyer, as entered — the invoice reads it from here.
   await db.query(
     `UPDATE payments SET raw = COALESCE(raw,'{}'::jsonb) || $2::jsonb WHERE id = $1`,
@@ -557,6 +569,9 @@ const sendPdf = ({ table, column, mustBeValid }) => safe(async (req, res) => {
   }
   /* The customer's own document, rebuilt from its row if the file has gone (pay/rebuild.js). */
   row.pdf_path = await require('../pay/rebuild').ensureFile(table, req.params.id);
+  await activity.record(req, {
+    action: `${req.query.download === '1' ? 'download' : 'view'}_${table === 'invoices' ? 'invoice' : 'report'}`,
+    detail: { number: row.number } });
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition',
