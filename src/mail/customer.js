@@ -282,7 +282,29 @@ function rewardMail(user, { count = 1, expiresAt }) {
   return { subject: count > 1 ? `${count} free vehicle reports are ready — GaadiPe` : 'Your free vehicle report is ready — GaadiPe', ...out };
 }
 
+/**
+ * An announcement the admin wrote in the panel (user, 2026-09-21). The text is
+ * plain: blank lines make paragraphs, web addresses become links, {name} is
+ * the customer's first name. Nothing the admin types is treated as HTML.
+ */
+function announcementMail(user, { subject, body }) {
+  const first = String(user.display_name || '').split(' ')[0] || 'there';
+  const text = String(body || '').replace(/\{name\}/g, first);
+  const link = (s) => esc(s).replace(/https?:\/\/[^\s<]+/g, (u) => `<a href="${u}" style="color:#0f766e;">${u}</a>`);
+  const paras = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean)
+    .map((p) => `<p style="margin:0 0 12px 0;font-size:14px;line-height:1.65;color:#0b1f1c;">${link(p).replace(/\n/g, '<br>')}</p>`);
+  const out = T.layout({
+    tagline: 'From GaadiPe',
+    title: String(subject || '').replace(/\{name\}/g, first),
+    blocks: [paras.join('')],
+    footer: 'You are receiving this announcement because you have a GaadiPe account with a confirmed email address.',
+    footerHtml: user.email_token ? footerFor(user.email_token, '') : '',
+  });
+  out.text = `${String(subject || '').replace(/\{name\}/g, first)}\n\n${text}\n\nUnsubscribe: ${API()}/email/unsubscribe/${user.email_token}`;
+  return { subject: String(subject || '').replace(/\{name\}/g, first), ...out };
+}
+
 module.exports = {
   setEmail, validEmail, onlyTo, deliver, storedRecord,
-  confirmMail, dailyMail, digestMail, rewardMail, istDay, SITE, API,
+  confirmMail, dailyMail, digestMail, rewardMail, announcementMail, istDay, SITE, API,
 };

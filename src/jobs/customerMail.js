@@ -177,11 +177,51 @@ async function digest(day, limit) {
   return sent;
 }
 
+/* ───────────────────────────────────── announcements (admin, 2026-09-21) ── */
+
+/*
+ * Queued by the admin panel (admin/customerEmails.js). Sent any time of day, a
+ * few a minute. The address is checked again at sending: someone who
+ * unsubscribed or closed their account after it was queued is skipped.
+ */
+async function announcements(limit) {
+  const { rows } = await db.query(
+    // The email row's id is NAMED: u.* has an id of its own that would replace it.
+    `SELECT e.id AS email_id, e.campaign_id, e.to_email, c.subject, c.body, u.*
+       FROM customer_emails e
+       JOIN admin_email_campaigns c ON c.id = e.campaign_id AND c.status = 'queued'
+       JOIN users u ON u.id = e.user_id
+      WHERE e.kind = 'announcement' AND e.status IN ('pending', 'failed') AND e.attempts < ${MAX_ATTEMPTS}
+      ORDER BY e.id LIMIT $1`, [limit]);
+  let sent = 0;
+  for (const r of rows) {
+    const emailId = r.email_id;
+    await db.query(`UPDATE customer_emails SET attempts = attempts + 1 WHERE id = $1`, [emailId]);
+    if (!r.email || !r.email_verified_at || r.email_unsubscribed_at || r.deactivated_at
+        || String(r.email).toLowerCase() !== String(r.to_email).toLowerCase()) {
+      await settle(emailId, { ok: false, skipped: true, error: 'no longer subscribed' });
+      continue;
+    }
+    const out = await C.deliver(r.email, C.announcementMail(r, { subject: r.subject, body: r.body }), r.email_token);
+    await settle(emailId, out);
+    if (out.ok) sent += 1;
+  }
+  // A campaign with nothing left to send is finished.
+  await db.query(
+    `UPDATE admin_email_campaigns c SET status = 'sent', finished_at = now()
+      WHERE c.status = 'queued'
+        AND NOT EXISTS (SELECT 1 FROM customer_emails e WHERE e.campaign_id = c.id
+                          AND e.status IN ('pending', 'failed') AND e.attempts < ${MAX_ATTEMPTS})`);
+  return sent;
+}
+
 /* ──────────────────────────────────────────────────────────────── loop ── */
 
 async function runOnce({ force = false } = {}) {
   if (String(await settings.get('customer_email_enabled', 'true')).toLowerCase() === 'false') return { off: true };
   const confirmSent = await confirmations();
+  const announced = await announcements(Math.max(1, await settings.num('customer_email_per_tick', 10)));
+  if (announced) console.log('[customer-mail] announcements sent %d', announced);
   const from = await settings.num('customer_email_hour_ist', 19);
   const until = await settings.num('customer_email_until_hour_ist', 22);
   const hour = istNow().getUTCHours();
@@ -209,4 +249,4 @@ function start(everySeconds = 60) {
   console.log(`  customer email job: every ${everySeconds}s`);
 }
 
-module.exports = { start, runOnce, confirmations, daily, digest, dailyFor };
+module.exports = { start, runOnce, confirmations, announcements, daily, digest, dailyFor };
