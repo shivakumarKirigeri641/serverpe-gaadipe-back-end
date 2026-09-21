@@ -54,10 +54,13 @@ const buildInvoice = ({ invoice, business, gst = {}, lineItem = {}, lineItems = 
       firstName ? `Proprietor: ${firstName}` : null,
     ].filter(Boolean);
 
+    /* The buyer: name (the card's title), phone, email and place of supply
+       (user, 2026-09-21). */
+    const phone = String(invoice.customer_mobile || "").replace(/\D/g, "").slice(-10);
     const buyerLines = [
       invoice.customer_gstin ? `GSTIN: ${invoice.customer_gstin}` : null,
-      invoice.customer_mobile ? `Mobile: ${invoice.customer_mobile}` : null,
-      invoice.customer_email,
+      phone.length === 10 ? `Phone: +91 ${phone.slice(0, 5)} ${phone.slice(5)}` : null,
+      invoice.customer_email ? `Email: ${invoice.customer_email}` : null,
       invoice.place_of_supply
         ? `State / UT: ${invoice.place_of_supply}${invoice.place_of_supply_code ? ` (${invoice.place_of_supply_code})` : ""}`
         : null,

@@ -125,6 +125,10 @@ const page = (title, body) => `<!doctype html>
   a { color:var(--brand); }
   .foot { text-align:center; color:var(--body); font-size:11.5px; margin-top:18px; }
   .err { color:var(--bad); font-size:13.5px; margin-top:10px; text-align:center; }
+  .fld { display:block; margin:0 0 10px; }
+  .fld span { display:block; font-size:12px; font-weight:600; color:var(--body); margin-bottom:4px; }
+  .fld input, .fld select { width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:10px;
+           font:inherit; color:var(--ink); background:#fff; }
 </style>
 </head><body><div class="wrap">
 <div class="brand"><b>GaadiPe</b><span>Har gaadi ki kundli.</span></div>
@@ -156,7 +160,8 @@ const safe = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
 
 router.get('/pay/:token', safe(async (req, res) => {
   const pay = await db.one(
-    `SELECT p.*, u.mobile, u.wa_profile_name, v.reg_no, v.maker, v.model, pl.duration_days,
+    `SELECT p.*, u.mobile, u.wa_profile_name, u.display_name, u.state_code, u.email,
+            v.reg_no, v.maker, v.model, pl.duration_days,
             pl.kind AS plan_kind
        FROM payments p
        JOIN users u ON u.id = p.user_id
@@ -190,9 +195,27 @@ router.get('/pay/:token', safe(async (req, res) => {
       ${waButton('Back to WhatsApp')}</div>`));
   }
 
-  const gross = pay.amount_paise / 100;
-  const taxable = gross / 1.18;
-  const gst = gross - taxable;
+  /*
+   * BILLED TO (user, 2026-09-21): the name printed on the GST invoice, and the
+   * state or union territory — the place of supply, which decides CGST + SGST
+   * (the home state) or IGST (anywhere else). Both required before paying,
+   * pre-filled from what was entered on the site, and the tax lines follow the
+   * state as it is chosen. The split is the invoice's own arithmetic
+   * (pay/invoice.js), in paise, so the page and the invoice cannot disagree.
+   */
+  const { STATES } = require('../pay/invoice');
+  const biz = await db.one(`SELECT home_state_code FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
+  const home = String(biz.home_state_code || '29');
+  const buyerName = pay.raw?.buyer_name || pay.display_name || '';
+  const buyerState = String(pay.raw?.buyer_state_code || pay.state_code || '');
+  const grossPaise = pay.amount_paise;
+  const basePaise = Math.round(grossPaise / 1.18);
+  const taxPaise = grossPaise - basePaise;
+  const cgstPaise = Math.round(taxPaise / 2);
+  const gross = grossPaise / 100;
+  const taxable = basePaise / 100;
+  const stateOptions = Object.entries(STATES).sort((a, b) => a[1].localeCompare(b[1]))
+    .map(([code, name]) => `<option value="${code}"${code === buyerState ? ' selected' : ''}>${esc(name)}</option>`).join('');
   const vehicleName = [pay.maker, pay.model].filter(Boolean).join(' ')
     .toLowerCase().replace(/\b([a-z])/g, m => m.toUpperCase());
 
@@ -242,9 +265,22 @@ router.get('/pay/:token', safe(async (req, res) => {
   ${vehicleName ? `<div class="muted">${esc(vehicleName)}</div>` : ''}
   <div class="row" style="margin-top:12px"><span>Plan</span>
     <b>${esc(planLine)}</b></div>
-  <div class="row"><span>Amount</span><b>₹${taxable.toFixed(2)}</b></div>
-  <div class="row"><span>GST @ 18%</span><b>₹${gst.toFixed(2)}</b></div>
+  <div class="row"><span>Taxable value</span><b>₹${taxable.toFixed(2)}</b></div>
+  <div id="tax"></div>
   <div class="row total"><span>Total payable</span><b>₹${gross.toFixed(2)}</b></div>
+</div>
+
+<div class="card">
+  <h1>Billed to</h1>
+  <label class="fld"><span>Name on the invoice</span>
+    <input id="bname" maxlength="80" autocomplete="name" placeholder="Your full name" value="${esc(buyerName)}"></label>
+  <label class="fld"><span>State / union territory</span>
+    <select id="bstate"><option value="">Choose…</option>${stateOptions}</select></label>
+  <p class="muted" style="margin:6px 0 0">For your GST invoice. Your state is the place of supply — it decides
+  CGST + SGST or IGST. The price stays the same.</p>
+  <label class="fld" style="margin-top:10px"><span>Email — for your invoice and daily vehicle updates</span>
+    <input id="bemail" type="email" inputmode="email" maxlength="160" autocomplete="email" placeholder="you@example.com" value="${esc(pay.email || '')}"></label>
+  <p class="muted" style="margin:6px 0 0">Name, phone (${esc('+91 ' + String(pay.mobile).slice(-10))}) and email are printed on the invoice.</p>
 </div>
 
 <div class="card">
@@ -271,6 +307,23 @@ router.get('/pay/:token', safe(async (req, res) => {
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script>
   var btn = document.getElementById('pay'), err = document.getElementById('err');
+  var bname = document.getElementById('bname'), bstate = document.getElementById('bstate'),
+      bemail = document.getElementById('bemail');
+  var EMAIL_RE = /^[^@\\s]+@[^@\\s]+\\.[^@\\s]{2,}$/;
+  var HOME = ${JSON.stringify(home)}, TAX = ${taxPaise}, CGST = ${cgstPaise};
+  function rs(p) { return '₹' + (p / 100).toFixed(2); }
+  // The tax lines follow the state: CGST + SGST at home, IGST anywhere else.
+  function renderTax() {
+    var s = bstate.value, el = document.getElementById('tax');
+    el.innerHTML = !s
+      ? '<div class="row"><span>GST @ 18%</span><b>' + rs(TAX) + '</b></div>'
+      : s === HOME
+      ? '<div class="row"><span>CGST @ 9%</span><b>' + rs(CGST) + '</b></div>'
+        + '<div class="row"><span>SGST @ 9%</span><b>' + rs(TAX - CGST) + '</b></div>'
+      : '<div class="row"><span>IGST @ 18%</span><b>' + rs(TAX) + '</b></div>';
+    btn.disabled = bname.value.trim().length < 2 || !s || !EMAIL_RE.test(bemail.value.trim());
+  }
+  bname.oninput = renderTax; bstate.onchange = renderTax; bemail.oninput = renderTax; renderTax();
   // Paid: swap the order summary for the success card, and try to open the
   // chat straight away. The card's button covers browsers that block that.
   function done() {
@@ -281,8 +334,18 @@ router.get('/pay/:token', safe(async (req, res) => {
       ? `setTimeout(function () { location.href = ${JSON.stringify(backUrl)}; }, 900);`
       : 'setTimeout(openWhatsApp, 600);'}
   }
+  // Billed-to first: saved on the payment, which is what the invoice prints.
   btn.onclick = function () {
     btn.disabled = true; err.textContent = '';
+    fetch(location.pathname + '/buyer', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: bname.value.trim(), state_code: bstate.value, email: bemail.value.trim() })
+    }).then(function (x) { return x.json(); }).then(function (out) {
+      if (!out.ok) { err.textContent = out.message || 'Please check your name and state.'; renderTax(); return; }
+      openCheckout();
+    }).catch(function () { err.textContent = 'Please check your connection and try again.'; renderTax(); });
+  };
+  function openCheckout() {
     var rz = new Razorpay({
       key: ${JSON.stringify(rzp.KEY)},
       order_id: ${JSON.stringify(pay.order_id)},
@@ -291,7 +354,8 @@ router.get('/pay/:token', safe(async (req, res) => {
       name: 'GaadiPe',
       description: ${JSON.stringify(`${isReport ? 'Full report' : 'Watch'} — ${pay.reg_no || ''}`)},
       prefill: { contact: ${JSON.stringify('+91' + String(pay.mobile).slice(-10))},
-                 name: ${JSON.stringify(pay.wa_profile_name || '')} },
+                 name: bname.value.trim(),
+                 email: bemail.value.trim() },
       theme: { color: '#0F766E' },
       // Verified server-side before the customer is told anything: the browser
       // could claim any payment succeeded.
@@ -315,15 +379,44 @@ router.get('/pay/:token', safe(async (req, res) => {
             done();
           });
       },
-      modal: { ondismiss: function () { btn.disabled = false; } }
+      modal: { ondismiss: function () { renderTax(); } }
     });
     rz.on('payment.failed', function (e) {
       err.textContent = (e.error && e.error.description) || 'Payment failed. Please try again.';
-      btn.disabled = false;
+      renderTax();
     });
     rz.open();
-  };
+  }
 </script>`));
+}));
+
+/* -------------------------------------------------------------- billed to */
+
+/* The invoice's name and place of supply, saved on this payment (and on the
+   account for next time) before Razorpay opens. Only while unpaid. */
+router.post('/pay/:token/buyer', express.json(), safe(async (req, res) => {
+  const { STATES } = require('../pay/invoice');
+  const pay = await db.one(`SELECT id, user_id, status FROM payments WHERE checkout_token = $1`, [req.params.token]);
+  if (!pay) return res.status(404).json({ ok: false, message: 'This payment link is not valid.' });
+  if (pay.status === 'paid') return res.status(409).json({ ok: false, message: 'This payment is already complete.' });
+  const name = String(req.body?.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const state = String(req.body?.state_code || '').replace(/\D/g, '').padStart(2, '0');
+  if (name.length < 2) return res.status(400).json({ ok: false, message: 'Please enter your name for the invoice.' });
+  if (!STATES[state]) return res.status(400).json({ ok: false, message: 'Please choose your state or union territory.' });
+  // The email: required, and a new one is sent a confirmation link (mail/customer.js).
+  const customerMail = require('../mail/customer');
+  const email = String(req.body?.email || '').trim();
+  if (!customerMail.validEmail(email)) {
+    return res.status(400).json({ ok: false, message: 'Please enter your email — your invoice and daily vehicle updates are sent there.' });
+  }
+  await customerMail.setEmail(pay.user_id, email);
+  await db.query(
+    `UPDATE payments SET raw = COALESCE(raw,'{}'::jsonb) || $2::jsonb WHERE id = $1`,
+    [pay.id, JSON.stringify({ buyer_name: name, buyer_state_code: state })]);
+  await db.query(
+    `UPDATE users SET display_name = $2, state_code = $3, modified_at = now() WHERE id = $1`,
+    [pay.user_id, name, state]);
+  res.json({ ok: true });
 }));
 
 /* ------------------------------------------------------- the success callback */
