@@ -261,7 +261,26 @@ function digestMail(user, records) {
   return { subject, ...out };
 }
 
+/** The referrer's reward: a free full report is waiting (never sent to the parent). */
+function rewardMail(user, { parentName, expiresAt }) {
+  const name = String(user.display_name || '').split(' ')[0] || 'there';
+  const out = T.layout({
+    tagline: 'Referral reward',
+    badge: { text: 'Free report earned', tone: 'good' },
+    title: 'Your free full vehicle report is ready',
+    lead: `Hi ${name}, ${parentName || 'the parent you referred'} joined QuizPe premium — thank you! You have earned one free GaadiPe full report.`,
+    blocks: [`<div style="font-size:13px;line-height:1.6;color:#0b1f1c;background:#e9f8ef;border-radius:8px;padding:12px 14px;">
+      Open any vehicle you have checked and tap <b>Use my free report</b>: the full record, the PDF and 28 days of daily
+      updates, exactly as a paid report. Use it by <b>${esc(istDay(expiresAt))}</b>.</div>`],
+    cta: { label: 'Use my free report', url: `${SITE()}/app` },
+    footer: 'You are receiving this because you referred someone to QuizPe from your GaadiPe account.',
+    footerHtml: footerFor(user.email_token, ''),
+  });
+  out.text += `\nUnsubscribe: ${API()}/email/unsubscribe/${user.email_token}`;
+  return { subject: 'Your free vehicle report is ready — GaadiPe', ...out };
+}
+
 module.exports = {
   setEmail, validEmail, onlyTo, deliver, storedRecord,
-  confirmMail, dailyMail, digestMail, istDay, SITE, API,
+  confirmMail, dailyMail, digestMail, rewardMail, istDay, SITE, API,
 };

@@ -35,6 +35,7 @@ const POLICIES = {
   // and means neither side has to be redeployed in step with the other.
   deletion: 'data_deletion_policy',
   partner: 'partner_policy',
+  email: 'email_policy',
 };
 
 // Legal text changes rarely and every visitor loads it, so it is read once and

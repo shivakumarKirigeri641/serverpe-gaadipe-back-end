@@ -43,6 +43,7 @@ const razorpay = require('../pay/razorpay');
 const settings = require('../util/settings');
 const activity = require('../site/activity');
 const customerMail = require('../mail/customer');
+const referrals = require('../referrals/quizpe');
 
 const router = express.Router();
 
@@ -71,8 +72,34 @@ router.get('/pricing', safe(async (_req, res) => {
     duration_days: plan?.duration_days ?? 28,
     report_valid_days: validDays,
     free_checks_per_day: await settings.num('free_checks_per_day', 10),
+    // How a full report is unlocked: pay | both | refer (user, 2026-09-21).
+    unlock: await unlockMode(),
   });
 }));
+
+/* ────────────────────────────────────────── how a full report is unlocked ── */
+
+const unlockMode = async () => {
+  const m = String(await settings.get('report_unlock', 'both')).toLowerCase();
+  return ['pay', 'both', 'refer'].includes(m) ? m : 'both';
+};
+
+/**
+ * What the vehicle page may offer (user, 2026-09-21): pay Rs.19, and/or refer
+ * QuizPe to a parent for a free report — per report_unlock — and whether this
+ * customer already holds a free report to use.
+ */
+async function offerFor(req, plan, paid) {
+  const mode = await unlockMode();
+  const referralsOn = String(await settings.get('referral_enabled', 'true')).toLowerCase() !== 'false';
+  return {
+    unlock: mode,
+    can_buy: Boolean(plan && razorpay.configured() && !paid && mode !== 'refer'),
+    can_refer: Boolean(!paid && referralsOn && mode !== 'pay'),
+    free_credits: paid ? 0 : await referrals.availableCredits(req.user.id),
+    price_paise: plan?.price_paise ?? null,
+  };
+}
 
 /*
  * CONTACT US (user, 2026-09-18). Public — a person with a problem may not be
@@ -193,6 +220,72 @@ router.put('/me', safe(async (req, res) => {
   res.json({ ok: true, user: auth.publicUser(rows[0]), email_confirmation_sent: mail.changed });
 }));
 
+/* ─────────────────────────────── QuizPe referrals (user, 2026-09-21) ── */
+
+/* My referrals and my free reports. */
+router.get('/referrals', safe(async (req, res) => {
+  const out = await referrals.listFor(req.user.id);
+  res.json({ ...out, enabled: String(await settings.get('referral_enabled', 'true')).toLowerCase() !== 'false',
+             unlock: await unlockMode(), consent_text: referrals.CONSENT_TEXT,
+             monthly_cap: await settings.num('referral_monthly_cap', 10),
+             window_days: await settings.num('referral_window_days', 30) });
+}));
+
+/* Refer a parent. GaadiPe stores the number to match it on QuizPe; it never messages them. */
+router.post('/referrals', safe(async (req, res) => {
+  const out = await referrals.create(req.user, {
+    name: req.body?.name, mobile: req.body?.mobile, consent: req.body?.consent === true }, req);
+  if (!out.ok) return res.status(out.error === 'slow_down' ? 429 : 400).json(out);
+  await activity.record(req, { action: 'referral_created' });
+  res.json(out);
+}));
+
+/* Spend a free report on a vehicle — the same declaration as a purchase is required. */
+router.post('/credits/use', safe(async (req, res) => {
+  const parsed = plate.parse(req.body?.reg_no);
+  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  if (req.body?.declared !== true) {
+    return res.status(400).json({ error: 'declaration_required',
+      message: 'Please confirm that this vehicle is yours or that its owner is known to you.' });
+  }
+  const lang = langOf(req.body?.language);
+  const out = await referrals.useCredit(req.user, parsed.regNo, {
+    declaration: { mobile: req.user.mobile, documents: ['terms', 'refund', 'privacy'],
+      declaration: DECLARATIONS[lang], declaration_language: lang, declaration_en: DECLARATION,
+      ip: req.ip, user_agent: req.get('user-agent') || null },
+    ctx: { ip: req.ip, user_agent: req.get('user-agent') || null },
+  });
+  if (!out.ok) return res.status(out.error === 'no_credit' ? 409 : 503).json(out);
+  await activity.record(req, { action: 'free_report_used', regNo: parsed.regNo });
+  res.json(out);
+}));
+
+/*
+ * QuizPe may message me — a SEPARATE, OPTIONAL consent (DPDP): never pre-ticked,
+ * not a condition of anything, withdrawable here any time. The exact words and
+ * the time are recorded.
+ */
+const QUIZPE_CONSENT = 'I agree that QuizPe, a product of ServerPe App Solutions, may send me messages '
+  + 'about QuizPe on my mobile number. I can withdraw this at any time from my GaadiPe profile.';
+router.put('/me/consents', safe(async (req, res) => {
+  const agree = req.body?.quizpe === true;
+  const { rows } = await db.query(
+    agree
+      ? `UPDATE users SET quizpe_consent_at = now(), quizpe_consent_text = $2, quizpe_consent_withdrawn_at = NULL,
+                modified_at = now() WHERE id = $1 RETURNING *`
+      : `UPDATE users SET quizpe_consent_withdrawn_at = CASE WHEN quizpe_consent_at IS NOT NULL THEN now() END,
+                quizpe_consent_at = NULL, modified_at = now() WHERE id = $1 RETURNING *`,
+    agree ? [req.user.id, QUIZPE_CONSENT] : [req.user.id]);
+  await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, $2, $3)`,
+    [req.user.id, agree ? 'quizpe_consent_given' : 'quizpe_consent_withdrawn',
+     JSON.stringify({ text: QUIZPE_CONSENT, ip: req.ip, user_agent: req.get('user-agent') || null })]);
+  res.json({ ok: true, user: auth.publicUser(rows[0]), text: QUIZPE_CONSENT });
+}));
+router.get('/me/consents', safe(async (req, res) => {
+  const u = await db.one(`SELECT quizpe_consent_at FROM users WHERE id = $1`, [req.user.id]);
+  res.json({ quizpe: Boolean(u?.quizpe_consent_at), quizpe_at: u?.quizpe_consent_at || null, text: QUIZPE_CONSENT });
+}));
+
 /* The confirmation link again, for an address not yet confirmed. At most one every two minutes. */
 router.post('/me/email/resend', safe(async (req, res) => {
   const u = await db.one(`SELECT email, email_verified_at FROM users WHERE id = $1`, [req.user.id]);
@@ -295,8 +388,7 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
   res.json({
     vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
-    can_buy: Boolean(plan && razorpay.configured() && !paid),
-    price_paise: plan?.price_paise ?? null,
+    ...(await offerFor(req, plan, paid)),
   });
 }));
 
@@ -354,8 +446,7 @@ router.post('/check', safe(async (req, res) => {
   res.json({
     vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
-    can_buy: Boolean(plan && razorpay.configured() && !paid),
-    price_paise: plan?.price_paise ?? null,
+    ...(await offerFor(req, plan, paid)),
   });
 }));
 
@@ -423,6 +514,11 @@ router.post('/buy', safe(async (req, res) => {
   if (req.body?.declared !== true) {
     return res.status(400).json({ error: 'declaration_required',
       message: 'Please confirm that this vehicle is yours or that its owner is known to you.' });
+  }
+  // Referral-only mode: reports are unlocked by referring, not by paying.
+  if (await unlockMode() === 'refer') {
+    return res.status(409).json({ error: 'refer_only',
+      message: 'Full reports are unlocked by referring QuizPe to a parent right now.' });
   }
 
   /*

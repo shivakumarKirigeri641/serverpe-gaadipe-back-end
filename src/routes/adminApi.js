@@ -102,7 +102,10 @@ const needs = (capability) => (req, res, next) => {
 router.get('/session', safe(async (req, res) => {
   res.json({ ok: true, user: { id: req.admin.id, name: req.admin.name,
                                mobile: req.admin.mobile, role: req.admin.role },
-             can: auth.ROLES[req.admin.role] || [] });
+             // report_access: the owner's per-vehicle report switch, shown only while
+             // admin_report_access_enabled is on (user, 2026-09-21).
+             can: [...(auth.ROLES[req.admin.role] || []),
+                   ...(auth.can(req.admin.role, 'admins') && await reportAccessOn() ? ['report_access'] : [])] });
 }));
 
 router.delete('/session', safe(async (req, res) => {
@@ -768,6 +771,130 @@ router.get('/health', safe(async (_req, res) => {
     reports_missing: Number(row.reports_missing),
     at: new Date().toISOString(),
   });
+}));
+
+/* ─────────────────────────────── QuizPe referrals (user, 2026-09-21) ── */
+
+router.get('/referrals', safe(async (req, res) => {
+  const status = ['pending', 'rewarded', 'expired', 'not_eligible', 'revoked'].includes(req.query.status) ? req.query.status : null;
+  const { rows } = await db.query(
+    `SELECT r.id, r.parent_name, r.mobile_masked, r.status, r.status_reason, r.quizpe_payment, r.quizpe_amount,
+            r.rewarded_at, r.expires_at, r.created_at, r.last_checked_at,
+            u.id AS referrer_id, u.mobile AS referrer_mobile, coalesce(u.display_name, u.wa_profile_name) AS referrer_name,
+            c.id AS credit_id, c.used_at, c.used_reg_no, c.revoked_at, c.expires_at AS credit_expires_at
+       FROM quizpe_referrals r
+       JOIN users u ON u.id = r.referrer_id
+       LEFT JOIN report_credits c ON c.referral_id = r.id
+      WHERE ($1::text IS NULL OR r.status = $1)
+      ORDER BY r.id DESC LIMIT 300`, [status]);
+  const totals = await db.one(
+    `SELECT count(*)::int AS referrals,
+            count(*) FILTER (WHERE status = 'pending')::int AS pending,
+            count(*) FILTER (WHERE status = 'rewarded')::int AS rewarded,
+            count(*) FILTER (WHERE status = 'expired')::int AS expired,
+            count(*) FILTER (WHERE status = 'not_eligible')::int AS not_eligible,
+            count(DISTINCT referrer_id)::int AS referrers,
+            (SELECT count(*) FROM report_credits WHERE source = 'referral' AND used_at IS NOT NULL)::int AS credits_used,
+            coalesce((SELECT sum(quizpe_amount) FROM quizpe_referrals WHERE status = 'rewarded'), 0)::numeric AS quizpe_revenue
+       FROM quizpe_referrals`);
+  res.json({ rows: rows.map((r) => ({ ...r, id: String(r.id), referrer_id: String(r.referrer_id),
+                                       credit_id: r.credit_id ? String(r.credit_id) : null })),
+             totals, quizpe_connected: require('../quizpe/readonly').configured() });
+}));
+
+/* Take back an unused free report (abuse). */
+router.post('/referrals/credits/:id/revoke', needs('settings'), safe(async (req, res) => {
+  const reason = String(req.body?.reason || '').trim().slice(0, 300);
+  if (reason.length < 3) return res.status(400).json({ error: 'reason', message: 'Please give a reason.' });
+  const { rows } = await db.query(
+    `UPDATE report_credits SET revoked_at = now(), revoked_reason = $2
+      WHERE id = $1 AND used_at IS NULL AND revoked_at IS NULL RETURNING id, user_id, referral_id`, [req.params.id, reason]);
+  if (!rows.length) return res.status(409).json({ error: 'not_revocable', message: 'That free report is already used or revoked.' });
+  if (rows[0].referral_id) await db.query(`UPDATE quizpe_referrals SET status = 'revoked', status_reason = $2 WHERE id = $1`, [rows[0].referral_id, reason]);
+  await auth.audit({ adminId: req.admin.id, action: 'revoke_referral_credit', ip: ipOf(req),
+    detail: { credit_id: String(rows[0].id), user_id: String(rows[0].user_id), reason } });
+  res.json({ ok: true });
+}));
+
+/* Customers who agreed that QuizPe may message them (consent in force now). */
+router.get('/quizpe-consents', safe(async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT u.id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name, u.quizpe_consent_at, u.quizpe_consent_text
+       FROM users u
+      WHERE u.quizpe_consent_at IS NOT NULL AND u.deactivated_at IS NULL
+      ORDER BY u.quizpe_consent_at DESC`);
+  if (!refreshing(req)) {
+    await auth.audit({ adminId: req.admin.id, action: 'view_quizpe_consents', ip: ipOf(req), detail: { count: rows.length } });
+  }
+  res.json({ rows: rows.map((r) => ({ ...r, id: String(r.id) })) });
+}));
+
+/* ───────────────── report access, per customer and vehicle (owner, rare) ── */
+
+const reportAccessOn = async () =>
+  String(await settings.get('admin_report_access_enabled', 'true')).toLowerCase() !== 'false';
+
+/* One customer's vehicles, and whether each has a full report right now. */
+router.get('/report-access', needs('admins'), safe(async (req, res) => {
+  if (!(await reportAccessOn())) return res.status(403).json({ error: 'off', message: 'Report access is switched off in Settings.' });
+  const m = String(req.query.mobile || '').replace(/\D/g, '').slice(-10);
+  if (m.length !== 10) return res.status(400).json({ error: 'mobile', message: 'Enter the customer\'s 10-digit mobile number.' });
+  const u = await db.one(
+    `SELECT id, mobile, coalesce(display_name, wa_profile_name) AS name, email, deactivated_at, created_at
+       FROM users WHERE mobile = $1`, [m]);
+  if (!u) return res.status(404).json({ error: 'not_found', message: 'No customer with that number.' });
+  const { rows } = await db.query(
+    `SELECT v.reg_no, v.maker, v.model, uv.last_checked_at,
+            r.id AS report_id, r.report_number, r.valid_until,
+            p.gateway, p.amount_paise, p.raw->>'free' AS free_source,
+            s.ends_on AS alerts_until
+       FROM user_vehicles uv
+       JOIN vehicles v ON v.id = uv.vehicle_id
+       LEFT JOIN LATERAL (SELECT * FROM vehicle_reports vr WHERE vr.user_id = uv.user_id AND vr.reg_no = v.reg_no
+                            AND vr.valid_until > now() ORDER BY vr.id DESC LIMIT 1) r ON true
+       LEFT JOIN payments p ON p.id = r.payment_id
+       LEFT JOIN LATERAL (SELECT ends_on FROM subscriptions su WHERE su.user_id = uv.user_id AND su.vehicle_id = v.id
+                            AND su.is_active ORDER BY su.ends_on DESC LIMIT 1) s ON true
+      WHERE uv.user_id = $1
+      ORDER BY uv.last_checked_at DESC NULLS LAST`, [u.id]);
+  res.json({ customer: { ...u, id: String(u.id) },
+    vehicles: rows.map((r) => ({ ...r, report_id: r.report_id ? String(r.report_id) : null,
+      access: r.report_id ? (r.gateway === 'free' ? `free (${r.free_source || 'granted'})` : 'paid') : 'none' })) });
+}));
+
+/* Grant a free full report (GaadiPe loses the Rs.19). Typed confirmation and a reason, audited. */
+router.post('/report-access/grant', needs('admins'), safe(async (req, res) => {
+  if (!(await reportAccessOn())) return res.status(403).json({ error: 'off', message: 'Report access is switched off in Settings.' });
+  if (req.body?.confirm !== 'GRANT') return res.status(400).json({ error: 'confirm', message: 'Type GRANT to confirm.' });
+  const reason = String(req.body?.reason || '').trim().slice(0, 300);
+  if (reason.length < 5) return res.status(400).json({ error: 'reason', message: 'Please give a reason (at least 5 characters).' });
+  const parsed = plate.parse(req.body?.reg_no);
+  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  const u = await db.one(`SELECT id FROM users WHERE id = $1`, [String(req.body?.user_id || '0').replace(/\D/g, '') || '0']);
+  if (!u) return res.status(404).json({ error: 'not_found', message: 'Customer not found.' });
+  const out = await require('../pay/free').issueFree({ userId: u.id, regNo: parsed.regNo, source: 'admin',
+    adminId: req.admin.id, reason, ctx: { ip: req.ip } });
+  await auth.audit({ adminId: req.admin.id, action: 'grant_report', ip: ipOf(req),
+    detail: { user_id: String(u.id), reg_no: parsed.regNo, reason, ok: out.ok, already: Boolean(out.already), error: out.error || null } });
+  if (!out.ok) return res.status(503).json({ error: out.error, message: out.error === 'not_checked'
+    ? 'That vehicle has never been checked — check it first.' : 'The report could not be issued right now. Please try again.' });
+  res.json({ ok: true, already: Boolean(out.already), report_id: String(out.report.id) });
+}));
+
+/* Take a full report away: download, alerts and daily emails stop now. Typed confirmation, audited. */
+router.post('/report-access/revoke', needs('admins'), safe(async (req, res) => {
+  if (!(await reportAccessOn())) return res.status(403).json({ error: 'off', message: 'Report access is switched off in Settings.' });
+  if (req.body?.confirm !== 'REVOKE') return res.status(400).json({ error: 'confirm', message: 'Type REVOKE to confirm.' });
+  const reason = String(req.body?.reason || '').trim().slice(0, 300);
+  if (reason.length < 5) return res.status(400).json({ error: 'reason', message: 'Please give a reason (at least 5 characters).' });
+  const parsed = plate.parse(req.body?.reg_no);
+  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  const userId = String(req.body?.user_id || '').replace(/\D/g, '');
+  const out = await require('../pay/free').revoke({ userId, regNo: parsed.regNo, adminId: req.admin.id, reason });
+  await auth.audit({ adminId: req.admin.id, action: 'revoke_report', ip: ipOf(req),
+    detail: { user_id: userId, reg_no: parsed.regNo, reason, ...out } });
+  if (!out.ok) return res.status(404).json({ error: out.error, message: 'Vehicle not found.' });
+  res.json(out);
 }));
 
 module.exports = router;

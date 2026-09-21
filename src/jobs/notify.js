@@ -129,6 +129,7 @@ async function payments() {
   const { rows } = await db.query(
     `SELECT p.id FROM payments p
       WHERE p.status = 'paid' AND p.paid_at > now() - interval '1 day'
+        AND p.gateway <> 'free'  -- a free report (referral / owner grant) is not a payment
         AND (EXISTS (SELECT 1 FROM invoices i WHERE i.payment_id = p.id) OR p.paid_at < now() - interval '3 minutes')
         AND ${notDone('payment', 'p.id::text')}
       ORDER BY p.id LIMIT 10`);
