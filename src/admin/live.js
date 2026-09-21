@@ -146,7 +146,7 @@ async function visitors({ minutes = 30 } = {}) {
   const { rows } = await db.query(
     `SELECT s.id, s.user_id, s.created_at, s.last_used_at, s.ended_at, s.ended_reason,
             s.request_count, coalesce(s.last_ip, s.ip) AS ip, s.user_agent,
-            s.current_page, s.current_reg_no, s.current_action, s.current_at,
+            s.current_page, s.current_reg_no, s.current_action, s.current_at, s.current_detail,
             u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name, u.state_code,
             CASE WHEN s.ended_at IS NULL AND s.last_used_at > now() - interval '15 minutes' THEN 'online'
                  WHEN s.ended_at IS NULL THEN 'idle'
@@ -180,4 +180,49 @@ async function trail(sessionId, { limit = 200 } = {}) {
   return rows.map((r) => ({ ...r, id: String(r.id) }));
 }
 
-module.exports = { conversations, thread, pulse, activity, visitors, trail };
+/**
+ * EVERY CUSTOMER, THEIR OWN TABLE (user, 2026-09-21): one row per signed-in
+ * customer active in the last `days` — visits, pages, clicks, actions, the last
+ * thing they did and whether they are on the site now. Tap one for the table.
+ */
+async function customers({ days = 7, q = '' } = {}) {
+  const term = String(q || '').trim();
+  const digits = term.replace(/\D/g, '');
+  const { rows } = await db.query(
+    `SELECT u.id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
+            count(DISTINCT a.session_id)::int AS visits,
+            count(*) FILTER (WHERE a.kind = 'page')::int   AS pages,
+            count(*) FILTER (WHERE a.kind = 'click')::int  AS clicks,
+            count(*) FILTER (WHERE a.kind = 'action')::int AS actions,
+            count(DISTINCT a.reg_no)::int AS vehicles,
+            max(a.created_at) AS last_at,
+            (SELECT CASE WHEN x.kind = 'click' THEN 'Clicked “' || coalesce(x.detail->>'label', '') || '”'
+                         WHEN x.kind = 'page' THEN 'Opened ' || coalesce(x.page, '') ELSE x.action END
+               FROM site_activity x WHERE x.user_id = u.id ORDER BY x.id DESC LIMIT 1) AS last_what,
+            EXISTS (SELECT 1 FROM site_sessions s WHERE s.user_id = u.id AND s.ended_at IS NULL
+                      AND s.last_used_at > now() - interval '15 minutes') AS online
+       FROM site_activity a JOIN users u ON u.id = a.user_id
+      WHERE a.created_at > now() - ($1 || ' days')::interval
+        AND ($2 = '' OR u.mobile LIKE '%' || $3 || '%' OR coalesce(u.display_name, '') ILIKE '%' || $2 || '%')
+      GROUP BY u.id
+      ORDER BY max(a.created_at) DESC LIMIT 300`,
+    [String(Math.min(180, Math.max(1, Number(days) || 7))), term, digits || term]);
+  return rows.map((r) => ({ ...r, id: String(r.id) }));
+}
+
+/** One customer's table: every page, click and action, newest first, across all visits. */
+async function customerActivity(userId, { kind = null, before = null, limit = 200 } = {}) {
+  const { rows } = await db.query(
+    `SELECT a.id, a.session_id, a.kind, a.page, a.action, a.reg_no, a.detail, a.ip, a.created_at
+       FROM site_activity a
+      WHERE a.user_id = $1
+        AND ($2::text IS NULL OR a.kind = $2)
+        AND ($3::bigint IS NULL OR a.id < $3)
+      ORDER BY a.id DESC LIMIT $4`,
+    [userId, kind, before, Math.min(1000, Math.max(1, Number(limit) || 200))]);
+  const u = await db.one(`SELECT id, mobile, coalesce(display_name, wa_profile_name) AS name, email FROM users WHERE id = $1`, [userId]);
+  return { customer: u ? { ...u, id: String(u.id) } : null,
+           rows: rows.map((r) => ({ ...r, id: String(r.id), session_id: r.session_id ? String(r.session_id) : null })) };
+}
+
+module.exports = { conversations, thread, pulse, activity, visitors, trail, customers, customerActivity };
