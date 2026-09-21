@@ -98,6 +98,11 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
             EXISTS (SELECT 1 FROM subscriptions s
                      WHERE s.user_id = u.id AND s.is_active
                        AND s.ends_on >= CURRENT_DATE)               AS active,
+            -- Until when vehicle alerts run: shown as "Alerts on · until …", so
+            -- it is never mistaken for being signed in (user, 2026-09-21).
+            (SELECT max(s.ends_on) FROM subscriptions s
+              WHERE s.user_id = u.id AND s.is_active
+                AND s.ends_on >= CURRENT_DATE)                      AS alerts_until,
             EXISTS (SELECT 1 FROM blocks b
                      WHERE b.kind = 'mobile' AND b.value = u.mobile
                        AND b.released_at IS NULL)                   AS blocked,
