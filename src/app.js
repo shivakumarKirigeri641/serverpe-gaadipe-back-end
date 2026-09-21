@@ -213,6 +213,8 @@ app.listen(config.port, () => {
   require('./jobs/notify').start(Number(process.env.NOTIFY_TICK_SECONDS) || 30);
   // Emails to customers: confirmations, the daily update, the free digest.
   require('./jobs/customerMail').start(Number(process.env.CUSTOMER_MAIL_TICK_SECONDS) || 60);
+  // QuizPe referrals: has a referred parent bought premium? (read-only on QuizPe)
+  require('./jobs/referrals').start();
   if (config.whatsapp.phoneNumberId) {
     console.log(`  whatsapp: +${config.whatsapp.ownNumber} id ${config.whatsapp.phoneNumberId}`
       + `  signature ${config.whatsapp.appSecret ? 'enforced' : 'OFF'}`
