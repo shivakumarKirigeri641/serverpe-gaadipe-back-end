@@ -52,12 +52,17 @@ async function claim(userId, kind, to, day) {
 /* ───────────────────────────────────────────────────────── confirmations ── */
 
 async function confirmations(limit = 20) {
+  // HELD IN TEST MODE, NOT DROPPED: a customer who gives an address while test
+  // mode is on gets their confirmation link the moment test mode is switched
+  // off (within 30 days) — otherwise they could never be mailed at all.
+  const only = await C.onlyTo();
   const { rows } = await db.query(
     `SELECT e.id, e.to_email, u.id AS user_id, u.email, u.email_token, u.email_verified_at, u.display_name
        FROM customer_emails e JOIN users u ON u.id = e.user_id
       WHERE e.kind = 'confirm' AND e.status IN ('pending', 'failed') AND e.attempts < ${MAX_ATTEMPTS}
-        AND e.created_at > now() - interval '2 days'
-      ORDER BY e.id LIMIT $1`, [limit]);
+        AND e.created_at > now() - interval '30 days'
+        AND (cardinality($2::text[]) = 0 OR lower(e.to_email) = ANY($2::text[]))
+      ORDER BY e.id LIMIT $1`, [limit, only]);
   let sent = 0;
   for (const r of rows) {
     // The address changed again, or was confirmed already: this one is moot.
