@@ -44,7 +44,7 @@ async function adminRecipients() {
  * Send one email. `to` defaults to the admin recipients.
  * @returns {Promise<{ok: boolean, to?: string, id?: string, error?: string}>}
  */
-async function send({ to, subject, html, text, attachments = [], replyTo }) {
+async function send({ to, subject, html, text, attachments = [], replyTo, headers = {} }) {
   const t = transporter();
   if (!t) return { ok: false, error: 'mail is not configured (MAIL_HOST, NOREPLYMAIL, NOREPLYMAIL_PASSWORD)' };
   const recipients = to ? [].concat(to) : await adminRecipients();
@@ -58,7 +58,7 @@ async function send({ to, subject, html, text, attachments = [], replyTo }) {
       text,
       attachments,
       ...(replyTo ? { replyTo } : {}),
-      headers: { 'X-Auto-Response-Suppress': 'All', 'Auto-Submitted': 'auto-generated' },
+      headers: { 'X-Auto-Response-Suppress': 'All', 'Auto-Submitted': 'auto-generated', ...headers },
     });
     return { ok: true, to: recipients.join(', '), id: info.messageId };
   } catch (e) {

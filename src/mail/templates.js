@@ -47,8 +47,13 @@ const duration = (sec) => {
  *   sections: [{ heading, rows: [[k, v], …] }]  every detail
  *   note:     a block of free text (a message someone wrote)
  *   cta:      { label, path }           a button into the admin panel
+ *   cta.url:  an absolute link instead (customer email)
+ *   tagline, footerHtml, blocks: customer email — its own header line, a footer
+ *            with links, and raw HTML blocks placed after the sections
+ *            (intro: raw HTML blocks placed before them)
  */
-function layout({ preheader = '', badge, title, lead, stats = [], sections = [], note, cta, footer }) {
+function layout({ preheader = '', badge, title, lead, stats = [], sections = [], note, cta, footer,
+                  tagline = 'Admin alert', footerHtml = '', blocks = [], intro = [] }) {
   const tone = TONES[badge?.tone] || TONES.info;
   const statCells = stats.map(([k, v]) => `
       <td style="padding:0 6px 12px 6px;" width="${Math.floor(100 / stats.length)}%" valign="top">
@@ -86,7 +91,7 @@ function layout({ preheader = '', badge, title, lead, stats = [], sections = [],
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
         <td style="color:#ffffff;">
           <div style="font-size:22px;font-weight:800;letter-spacing:-.3px;">GaadiPe</div>
-          <div style="font-size:12px;opacity:.8;margin-top:2px;">Har gaadi ki kundli · Admin alert</div>
+          <div style="font-size:12px;opacity:.8;margin-top:2px;">Har gaadi ki kundli · ${esc(tagline)}</div>
         </td>
         <td align="right" style="color:#d6efec;font-size:12px;">${esc(ist(new Date()))}</td>
       </tr></table>
@@ -99,14 +104,16 @@ function layout({ preheader = '', badge, title, lead, stats = [], sections = [],
     </td></tr>
     ${stats.length ? `<tr><td style="padding:16px 22px 0 22px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>${statCells}</tr></table></td></tr>` : ''}
     ${note ? `<tr><td style="padding:14px 28px 0 28px;"><div style="background:#f6faf9;border-left:4px solid ${tone.bar};border-radius:8px;padding:14px 16px;font-size:14px;line-height:1.6;color:#0b1f1c;white-space:pre-wrap;">${esc(note)}</div></td></tr>` : ''}
+    ${intro.map((b) => `<tr><td style="padding:14px 28px 0 28px;">${b}</td></tr>`).join('')}
     ${sectionHtml}
+    ${blocks.map((b) => `<tr><td style="padding:14px 28px 0 28px;">${b}</td></tr>`).join('')}
     ${cta ? `<tr><td style="padding:24px 28px 8px 28px;" align="left">
-      <a href="${esc(PANEL() + (cta.path || ''))}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:12px 22px;border-radius:10px;">${esc(cta.label)} →</a>
+      <a href="${esc(cta.url || (PANEL() + (cta.path || '')))}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:12px 22px;border-radius:10px;">${esc(cta.label)} →</a>
     </td></tr>` : ''}
     <tr><td style="padding:22px 28px 26px 28px;">
       <div style="border-top:1px solid #e3ecea;padding-top:14px;font-size:11.5px;line-height:1.6;color:#6b8380;">
         ${esc(footer || 'You are receiving this because you administer GaadiPe. Alerts can be switched off under Settings in the admin panel.')}<br>
-        GaadiPe · ServerPe App Solutions · Bengaluru · This mailbox is not monitored — please do not reply.
+        ${footerHtml ? `${footerHtml}<br>` : ''}GaadiPe · ServerPe App Solutions · Bengaluru · This mailbox is not monitored — please do not reply.
       </div>
     </td></tr>
   </table>
@@ -121,7 +128,7 @@ function layout({ preheader = '', badge, title, lead, stats = [], sections = [],
     ...sections.filter(Boolean).map((s) => `\n${s.heading.toUpperCase()}\n${s.rows
       .filter(([, v]) => v !== null && v !== undefined && v !== '')
       .map(([k, v]) => `  ${k}: ${typeof v === 'object' && v && v.text ? v.text : v}`).join('\n')}`),
-    cta ? `\n${cta.label}: ${PANEL()}${cta.path || ''}` : '',
+    cta ? `\n${cta.label}: ${cta.url || `${PANEL()}${cta.path || ''}`}` : '',
   ].filter(Boolean).join('\n');
 
   return { html, text };
