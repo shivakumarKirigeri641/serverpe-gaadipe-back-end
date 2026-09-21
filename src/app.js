@@ -118,6 +118,9 @@ app.use('/serverpe/platform/gaadipe/v1/public/users', paymentRoutes);
 // except the right to pay that one amount.
 app.use('/', checkoutRoutes);
 
+// The confirm and unsubscribe links in customer email. The token is the authorisation.
+app.use('/', require('./routes/email'));
+
 /* -------------------------------------------------------------------- auth */
 /** Constant-time compare, so a wrong key cannot be found by timing. */
 function keyMatches(given) {
@@ -208,6 +211,8 @@ app.listen(config.port, () => {
   reconcileJob.start(Number(process.env.RECONCILE_TICK_SECONDS) || 60);
   // Emails to the admin: sign-ins, payments, contact messages, the day's summary.
   require('./jobs/notify').start(Number(process.env.NOTIFY_TICK_SECONDS) || 30);
+  // Emails to customers: confirmations, the daily update, the free digest.
+  require('./jobs/customerMail').start(Number(process.env.CUSTOMER_MAIL_TICK_SECONDS) || 60);
   if (config.whatsapp.phoneNumberId) {
     console.log(`  whatsapp: +${config.whatsapp.ownNumber} id ${config.whatsapp.phoneNumberId}`
       + `  signature ${config.whatsapp.appSecret ? 'enforced' : 'OFF'}`

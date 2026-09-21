@@ -252,6 +252,8 @@ const publicUser = (u) => ({
   mobile: u.mobile,
   name: u.display_name || u.wa_profile_name || null,
   email: u.email || null,
+  email_verified: Boolean(u.email && u.email_verified_at),
+  email_unsubscribed: Boolean(u.email_unsubscribed_at),
   language: u.preferred_language || 'en',
   state_code: u.state_code || null,
   joined_at: u.created_at,

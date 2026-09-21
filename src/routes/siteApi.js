@@ -42,6 +42,7 @@ const billing = require('../pay/billing');
 const razorpay = require('../pay/razorpay');
 const settings = require('../util/settings');
 const activity = require('../site/activity');
+const customerMail = require('../mail/customer');
 
 const router = express.Router();
 
@@ -183,12 +184,26 @@ router.put('/me', safe(async (req, res) => {
   }
   // The language alerts are sent in. Only the two Meta has templates for.
   const language = ['en', 'hi'].includes(req.body?.language) ? req.body.language : null;
+  // A new address starts unconfirmed and is sent a confirmation link (mail/customer.js).
+  const mail = email ? await customerMail.setEmail(req.user.id, email) : { changed: false };
   const { rows } = await db.query(
     `UPDATE users SET display_name = coalesce($2, display_name),
-            email = coalesce($3, email),
-            preferred_language = coalesce($4, preferred_language), modified_at = now()
-      WHERE id = $1 RETURNING *`, [req.user.id, name, email, language]);
-  res.json({ ok: true, user: auth.publicUser(rows[0]) });
+            preferred_language = coalesce($3, preferred_language), modified_at = now()
+      WHERE id = $1 RETURNING *`, [req.user.id, name, language]);
+  res.json({ ok: true, user: auth.publicUser(rows[0]), email_confirmation_sent: mail.changed });
+}));
+
+/* The confirmation link again, for an address not yet confirmed. At most one every two minutes. */
+router.post('/me/email/resend', safe(async (req, res) => {
+  const u = await db.one(`SELECT email, email_verified_at FROM users WHERE id = $1`, [req.user.id]);
+  if (!u?.email) return res.status(400).json({ error: 'no_email', message: 'Please add your email first.' });
+  if (u.email_verified_at) return res.json({ ok: true, already: true });
+  const recent = await db.one(
+    `SELECT 1 FROM customer_emails WHERE user_id = $1 AND kind = 'confirm' AND created_at > now() - interval '2 minutes'`,
+    [req.user.id]);
+  if (recent) return res.status(429).json({ error: 'wait', message: 'A link was just sent. Please check your inbox, or try again in two minutes.' });
+  await db.query(`INSERT INTO customer_emails (user_id, kind, to_email) VALUES ($1, 'confirm', $2)`, [req.user.id, u.email]);
+  res.json({ ok: true });
 }));
 
 /**
@@ -426,6 +441,13 @@ router.post('/buy', safe(async (req, res) => {
   if (!STATES[buyerState]) {
     return res.status(400).json({ error: 'state_required', message: 'Please choose your state or union territory.' });
   }
+  /* THE EMAIL, REQUIRED AT CHECKOUT (user, 2026-09-21): the daily updates the
+     report includes go there while GaadiPe has no WhatsApp Business number. */
+  const buyerEmail = String(req.body?.email || '').trim();
+  if (!customerMail.validEmail(buyerEmail)) {
+    return res.status(400).json({ error: 'email_required', message: 'Please enter your email — your daily vehicle updates are sent there.' });
+  }
+  await customerMail.setEmail(req.user.id, buyerEmail);
   await db.query(
     `UPDATE users SET display_name = $2, state_code = $3, modified_at = now() WHERE id = $1`,
     [req.user.id, buyerName, buyerState]);
