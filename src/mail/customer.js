@@ -262,24 +262,34 @@ function digestMail(user, records) {
 }
 
 /** The referrer's reward: a free full report is waiting (never sent to the parent). */
-function rewardMail(user, { count = 1, expiresAt }) {
+function rewardMail(user, { count = 0, reduced = 0, reducedPrice = null, expiresAt }) {
   const name = String(user.display_name || '').split(' ')[0] || 'there';
+  const price = reducedPrice ? `₹${(reducedPrice / 100).toFixed(2)}` : '₹10.62';
+  // Premium through the link = a free report; the Instant Quiz = a report at Rs.9 + GST.
+  const parts = [
+    count ? `${count} free full report${count > 1 ? 's' : ''}` : null,
+    reduced ? `${reduced} full report${reduced > 1 ? 's' : ''} at ${price} (₹9 + GST) instead of ₹19` : null,
+  ].filter(Boolean);
+  const onlyFree = count && !reduced;
   const out = T.layout({
     tagline: 'Referral reward',
-    badge: { text: count > 1 ? `${count} free reports earned` : 'Free report earned', tone: 'good' },
-    title: count > 1 ? `${count} free full vehicle reports are ready` : 'Your free full vehicle report is ready',
-    lead: count > 1
-      ? `Hi ${name}, ${count} parents joined QuizPe premium through your link — thank you! You have earned ${count} free GaadiPe full reports.`
-      : `Hi ${name}, a parent joined QuizPe premium through your link — thank you! You have earned one free GaadiPe full report.`,
+    badge: { text: onlyFree ? (count > 1 ? `${count} free reports earned` : 'Free report earned') : 'Referral reward earned', tone: 'good' },
+    title: onlyFree ? (count > 1 ? `${count} free full vehicle reports are ready` : 'Your free full vehicle report is ready')
+      : 'Your referral reward is ready',
+    lead: `Hi ${name}, parents joined QuizPe through your link — thank you! You have earned ${parts.join(' and ')}.`,
     blocks: [`<div style="font-size:13px;line-height:1.6;color:#0b1f1c;background:#e9f8ef;border-radius:8px;padding:12px 14px;">
-      Open any vehicle you have checked and tap <b>Use my free report</b>: the full record, the PDF and 28 days of daily
-      updates, exactly as a paid report. Use it by <b>${esc(istDay(expiresAt))}</b>.</div>`],
-    cta: { label: 'Use my free report', url: `${SITE()}/app` },
+      ${count ? 'Open any vehicle you have checked and tap <b>Use my free report</b>: the full record, the PDF and 28 days of daily updates, exactly as a paid report.<br>' : ''}
+      ${reduced ? `Your next full report costs <b>${esc(price)}</b> — it is applied automatically when you buy, with a GST invoice.<br>` : ''}
+      Use ${count + reduced > 1 ? 'them' : 'it'} by <b>${esc(istDay(expiresAt))}</b>.</div>`],
+    cta: { label: count ? 'Use my free report' : 'Get my report', url: `${SITE()}/app` },
     footer: 'You are receiving this because you shared your GaadiPe referral link for QuizPe.',
     footerHtml: footerFor(user.email_token, ''),
   });
   out.text += `\nUnsubscribe: ${API()}/email/unsubscribe/${user.email_token}`;
-  return { subject: count > 1 ? `${count} free vehicle reports are ready — GaadiPe` : 'Your free vehicle report is ready — GaadiPe', ...out };
+  const subject = onlyFree
+    ? (count > 1 ? `${count} free vehicle reports are ready — GaadiPe` : 'Your free vehicle report is ready — GaadiPe')
+    : 'Your referral reward is ready — GaadiPe';
+  return { subject, ...out };
 }
 
 /**

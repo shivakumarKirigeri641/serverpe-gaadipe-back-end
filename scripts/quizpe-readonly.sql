@@ -12,6 +12,8 @@
 --                             referral code: the sender's number, the code, the time
 --   gaadipe_premium_payments  captured QuizPe payments — ONLY for numbers that
 --                             sent a GaadiPe code: amount, when, and the plan's dates
+--   gaadipe_instant_payments  captured Instant Quiz payments (Rs.9 + GST) of
+--                             those same numbers: amount and when
 -- No other message, chat, child, quiz or table; no writes (every session is
 -- read-only). QuizPe's code and data are not changed; running this again is safe.
 
@@ -50,4 +52,16 @@ SELECT right(regexp_replace(p.parent_mobile_number, '[^0-9]', '', 'g'), 10)     
    AND right(regexp_replace(p.parent_mobile_number, '[^0-9]', '', 'g'), 10)
        IN (SELECT mobile FROM gaadipe_ref_messages);
 
-GRANT SELECT ON gaadipe_ref_messages, gaadipe_premium_payments TO gaadipe_ro;
+-- QuizPe's Instant Quiz (Rs.9 + GST): a captured payment described 'Instant
+-- Quiz', whose contact is the parent's number — the same way QuizPe's own
+-- finance page resolves it. Only numbers that sent a GaadiPe code.
+CREATE OR REPLACE VIEW gaadipe_instant_payments AS
+SELECT right(regexp_replace(pay.contact, '[^0-9]', '', 'g'), 10) AS mobile,
+       pay.payment_id, pay.amount, pay.created_at AS paid_at
+  FROM payments pay
+ WHERE pay.captured = true
+   AND pay.description = 'Instant Quiz'
+   AND right(regexp_replace(pay.contact, '[^0-9]', '', 'g'), 10)
+       IN (SELECT mobile FROM gaadipe_ref_messages);
+
+GRANT SELECT ON gaadipe_ref_messages, gaadipe_premium_payments, gaadipe_instant_payments TO gaadipe_ro;

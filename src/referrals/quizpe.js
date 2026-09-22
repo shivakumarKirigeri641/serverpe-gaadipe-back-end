@@ -113,7 +113,7 @@ async function summaryFor(user) {
     `SELECT id, mobile_masked, status, status_reason, tapped_at, expires_at, rewarded_at
        FROM quizpe_referrals WHERE referrer_id = $1 AND link_id IS NOT NULL ORDER BY id DESC LIMIT 100`, [user.id]);
   const credits = await db.query(
-    `SELECT id, source, expires_at, used_at, used_reg_no, created_at FROM report_credits
+    `SELECT id, source, reward, price_paise, expires_at, used_at, used_reg_no, created_at FROM report_credits
       WHERE user_id = $1 AND revoked_at IS NULL ORDER BY id DESC LIMIT 100`, [user.id]);
   return {
     joined: Boolean(link && u.quizpe_consent_at),
@@ -126,15 +126,31 @@ async function summaryFor(user) {
     referrals: rows.map((r) => ({ ...r, id: String(r.id) })),
     credits: credits.rows.map((c) => ({ ...c, id: String(c.id),
       state: c.used_at ? 'used' : new Date(c.expires_at) < new Date() ? 'expired' : 'available' })),
-    available: credits.rows.filter((c) => !c.used_at && new Date(c.expires_at) > new Date()).length,
+    available: credits.rows.filter((c) => c.reward !== 'report_at_price' && !c.used_at && new Date(c.expires_at) > new Date()).length,
+    reduced: credits.rows.filter((c) => c.reward === 'report_at_price' && !c.used_at && new Date(c.expires_at) > new Date()).length,
+    reduced_price_paise: credits.rows.find((c) => c.reward === 'report_at_price' && !c.used_at && new Date(c.expires_at) > new Date())?.price_paise || null,
   };
 }
 
+const AVAILABLE = `used_at IS NULL AND revoked_at IS NULL AND expires_at > now()`;
+
+/** Free full reports this customer can use now. */
 async function availableCredits(userId) {
   const r = await db.one(
     `SELECT count(*)::int AS n FROM report_credits
-      WHERE user_id = $1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now()`, [userId]);
+      WHERE user_id = $1 AND reward <> 'report_at_price' AND ${AVAILABLE}`, [userId]);
   return r.n;
+}
+
+/**
+ * A reduced-price report this customer can use now (the Instant Quiz reward):
+ * the soonest-expiring one, as { id, price_paise }, or null.
+ */
+async function reducedPriceCredit(userId) {
+  return db.one(
+    `SELECT id, price_paise, expires_at FROM report_credits
+      WHERE user_id = $1 AND reward = 'report_at_price' AND price_paise IS NOT NULL AND ${AVAILABLE}
+      ORDER BY expires_at LIMIT 1`, [userId]);
 }
 
 /**
@@ -192,7 +208,7 @@ async function recordTaps(messages) {
   return created;
 }
 
-async function grant(ref, pay) {
+async function grant(ref, pay, kind = 'free_report') {
   const cap = await settings.num('referral_monthly_cap', 10);
   const validDays = await settings.num('referral_credit_valid_days', 90);
   return db.tx(async (c) => {
@@ -212,15 +228,16 @@ async function grant(ref, pay) {
         [ref.id, pay.payment_id, pay.amount]);
       return { granted: false };
     }
-    await c.query(`UPDATE quizpe_referrals SET status = 'rewarded', rewarded_at = now(), ${base} WHERE id = $1`,
-      [ref.id, pay.payment_id, pay.amount]);
+    await c.query(`UPDATE quizpe_referrals SET status = 'rewarded', rewarded_at = now(), reward_kind = $4, ${base} WHERE id = $1`,
+      [ref.id, pay.payment_id, pay.amount, kind]);
+    const price = kind === 'report_at_price' ? await settings.num('referral_instant_report_price_paise', 1062) : null;
     const credit = (await c.query(
-      `INSERT INTO report_credits (user_id, source, referral_id, reward, expires_at)
-            VALUES ($1, 'referral', $2, $3, now() + ($4 || ' days')::interval) RETURNING *`,
-      [ref.referrer_id, ref.id, String(await settings.get('referral_reward', 'free_report')), String(validDays)])).rows[0];
+      `INSERT INTO report_credits (user_id, source, referral_id, reward, price_paise, expires_at)
+            VALUES ($1, 'referral', $2, $3, $4, now() + ($5 || ' days')::interval) RETURNING *`,
+      [ref.referrer_id, ref.id, kind, price, String(validDays)])).rows[0];
     await c.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'referral_rewarded', $2)`,
       [ref.referrer_id, JSON.stringify({ referral_id: String(ref.id), credit_id: String(credit.id),
-        quizpe_payment: pay.payment_id, amount: String(pay.amount), mobile: ref.mobile_masked, code: ref.code })]);
+        quizpe_payment: pay.payment_id, amount: String(pay.amount), mobile: ref.mobile_masked, code: ref.code, reward: kind })]);
     return { granted: true, credit };
   });
 }
@@ -234,7 +251,7 @@ async function check() {
   if (!quizpe.configured()) return { expired: expired.rowCount, skipped: 'QuizPe read-only access not configured' };
 
   const days = await settings.num('referral_window_days', 30);
-  let taps; let pays;
+  let taps; let pays; let instant = [];
   try {
     taps = await quizpe.refMessages(new Date(Date.now() - (days + 2) * 86400000));
   } catch (e) {
@@ -251,7 +268,12 @@ async function check() {
   const mobiles = [...new Set(taps.map((t) => digits(t.mobile)))];
   const byHash = new Map(mobiles.map((m) => [hash(m), m]));
   try {
-    pays = await quizpe.premiumPayments(pending.map((r) => byHash.get(r.mobile_hash)).filter(Boolean));
+    const wanted = pending.map((r) => byHash.get(r.mobile_hash)).filter(Boolean);
+    pays = await quizpe.premiumPayments(wanted);
+    // The Instant Quiz (Rs.9 + GST) earns the smaller reward (user, 2026-09-22).
+    if (String(await settings.get('referral_instant_enabled', 'true')).toLowerCase() !== 'false') {
+      instant = await quizpe.instantPayments(wanted);
+    }
   } catch (e) {
     console.warn('[referrals] QuizPe payments read failed, will retry: %s', e.message);
     return { expired: expired.rowCount, taps: created, error: e.message };
@@ -269,14 +291,19 @@ async function check() {
     const running = mine.some((p) => new Date(p.paid_at) < tapped && p.plan_end_date
       && new Date(p.plan_end_date) >= new Date(tapped.toISOString().slice(0, 10)));
     if (running) { await end(ref.id, 'not_eligible', 'premium already running when the link was opened'); ineligible += 1; continue; }
-    const pay = mine.find((p) => new Date(p.paid_at) >= tapped && new Date(p.paid_at) <= new Date(ref.expires_at)
-      && Number(p.amount) >= minRupees);
+    const inWindow = (p) => new Date(p.paid_at) >= tapped && new Date(p.paid_at) <= new Date(ref.expires_at);
+    // ONE reward per parent: whichever they bought first after opening the link.
+    const premium = mine.find((p) => inWindow(p) && Number(p.amount) >= minRupees);
+    const quick = instant.find((p) => p.mobile === mobile && inWindow(p));
+    const first = [premium && { pay: premium, kind: 'free_report' }, quick && { pay: quick, kind: 'report_at_price' }]
+      .filter(Boolean).sort((a, b) => new Date(a.pay.paid_at) - new Date(b.pay.paid_at))[0];
+    const pay = first?.pay;
     if (!pay) { await db.query(`UPDATE quizpe_referrals SET last_checked_at = now() WHERE id = $1`, [ref.id]); continue; }
     if (ref.deactivated_at || !ref.quizpe_consent_at || ref.link_active === false
         || await blocks.isBlocked('mobile', ref.referrer_mobile)) {
       await end(ref.id, 'not_eligible', 'referrer link not active'); ineligible += 1; continue;
     }
-    const g = await grant(ref, pay);
+    const g = await grant(ref, pay, first.kind);
     if (g.granted) {
       rewarded += 1;
       if (!rewards.has(ref.referrer_id)) rewards.set(ref.referrer_id, []);
@@ -312,7 +339,10 @@ async function notifyReward(referrerId, credits) {
   const u = await db.one(`SELECT * FROM users WHERE id = $1`, [referrerId]);
   if (!u?.email || !u.email_verified_at || u.email_unsubscribed_at) return;
   const C = require('../mail/customer');
-  const mail = C.rewardMail(u, { count: credits.length, expiresAt: credits[0].expires_at });
+  const free = credits.filter((c) => c.reward !== 'report_at_price');
+  const reduced = credits.filter((c) => c.reward === 'report_at_price');
+  const mail = C.rewardMail(u, { count: free.length, reduced: reduced.length,
+    reducedPrice: reduced[0]?.price_paise || null, expiresAt: credits[0].expires_at });
   const row = (await db.query(
     `INSERT INTO customer_emails (user_id, kind, to_email, subject, attempts) VALUES ($1, 'reward', $2, $3, 1) RETURNING id`,
     [u.id, u.email, mail.subject])).rows[0];
@@ -328,7 +358,7 @@ async function useCredit(user, regNo, { declaration, ctx }) {
   const credit = (await db.query(
     `UPDATE report_credits SET used_at = now(), used_reg_no = $2
       WHERE id = (SELECT id FROM report_credits
-                   WHERE user_id = $1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now()
+                   WHERE user_id = $1 AND reward <> 'report_at_price' AND used_at IS NULL AND revoked_at IS NULL AND expires_at > now()
                    ORDER BY expires_at LIMIT 1 FOR UPDATE SKIP LOCKED)
       RETURNING *`, [user.id, regNo])).rows[0];
   if (!credit) return { ok: false, error: 'no_credit', message: 'You do not have a free report to use right now.' };
@@ -358,6 +388,6 @@ async function setLinkActive(userId, active, reason = null) {
 }
 
 module.exports = {
-  join, summaryFor, availableCredits, resolve, check, useCredit, resetLink, setLinkActive,
+  join, summaryFor, availableCredits, reducedPriceCredit, resolve, check, useCredit, resetLink, setLinkActive,
   PROGRAMME_CONSENT, hash, mask,
 };

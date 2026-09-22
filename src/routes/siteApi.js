@@ -92,12 +92,18 @@ const unlockMode = async () => {
 async function offerFor(req, plan, paid) {
   const mode = await unlockMode();
   const referralsOn = String(await settings.get('referral_enabled', 'true')).toLowerCase() !== 'false';
+  // The Instant Quiz reward: this customer's next report at Rs.9 + GST (1062 paise).
+  const reduced = paid ? null : await referrals.reducedPriceCredit(req.user.id);
+  const price = reduced && plan ? Math.min(reduced.price_paise, plan.price_paise) : plan?.price_paise ?? null;
   return {
     unlock: mode,
-    can_buy: Boolean(plan && razorpay.configured() && !paid && mode !== 'refer'),
+    // A reduced price is a referral reward, so it can be paid even in referral-only mode.
+    can_buy: Boolean(plan && razorpay.configured() && !paid && (mode !== 'refer' || reduced)),
     can_refer: Boolean(!paid && referralsOn && mode !== 'pay'),
     free_credits: paid ? 0 : await referrals.availableCredits(req.user.id),
-    price_paise: plan?.price_paise ?? null,
+    price_paise: price,
+    list_price_paise: plan?.price_paise ?? null,
+    reduced: Boolean(reduced),
   };
 }
 
@@ -151,6 +157,7 @@ router.post('/session/otp', safe(async (req, res) => {
 router.post('/session/verify', safe(async (req, res) => {
   const out = await auth.verifyCode({
     mobile: req.body?.mobile, code: req.body?.code, ctx: device.contextOf(req),
+    quizpeConsent: req.body?.quizpe_consent === true,  // optional tick on the sign-in page
   });
   if (!out.ok) return res.status(401).json(out);
   res.json(out);
@@ -534,8 +541,10 @@ router.post('/buy', safe(async (req, res) => {
     return res.status(400).json({ error: 'declaration_required',
       message: 'Please confirm that this vehicle is yours or that its owner is known to you.' });
   }
-  // Referral-only mode: reports are unlocked by referring, not by paying.
-  if (await unlockMode() === 'refer') {
+  // Referral-only mode: reports are unlocked by referring, not by paying —
+  // except a report at the reduced price, which is itself a referral reward.
+  const reducedCredit = await referrals.reducedPriceCredit(req.user.id);
+  if (await unlockMode() === 'refer' && !reducedCredit) {
     return res.status(409).json({ error: 'refer_only',
       message: 'Full reports are unlocked by referring QuizPe to a parent right now.' });
   }
@@ -589,14 +598,22 @@ router.post('/buy', safe(async (req, res) => {
       message: 'Payments are not available right now. Please try again shortly.' });
   }
 
-  // An unpaid order for the same vehicle is reused rather than opened twice.
+  /*
+   * THE PRICE: Rs.19, or — when the customer holds an Instant Quiz referral
+   * reward — Rs.9 + GST (report_credits.price_paise). The credit is attached to
+   * this payment now and spent only when it is paid (billing.activate).
+   */
+  const amountPaise = reducedCredit ? Math.min(reducedCredit.price_paise, plan.price_paise) : plan.price_paise;
+
+  // An unpaid order for the same vehicle AT THE SAME PRICE is reused rather than opened twice.
   let row = await db.one(
     `SELECT * FROM payments
       WHERE user_id = $1 AND plan_id = $2 AND status = 'created'
         AND checkout_token IS NOT NULL
         AND (raw->>'vehicle_id')::bigint = $3
+        AND amount_paise = $4
         AND created_at > now() - interval '1 hour'
-      ORDER BY id DESC LIMIT 1`, [req.user.id, plan.id, vehicle.id]);
+      ORDER BY id DESC LIMIT 1`, [req.user.id, plan.id, vehicle.id, amountPaise]);
 
   /*
    * RECORDED EVERY TIME, not only when a new order is opened. A customer who
@@ -609,7 +626,7 @@ router.post('/buy', safe(async (req, res) => {
     `INSERT INTO event_log (user_id, vehicle_id, kind, detail)
           VALUES ($1, $2, 'purchase_consent', $3)`,
     [req.user.id, vehicle.id, JSON.stringify({
-      mobile: req.user.mobile, reg_no: parsed.regNo, amount_paise: plan.price_paise,
+      mobile: req.user.mobile, reg_no: parsed.regNo, amount_paise: amountPaise,
       plan: plan.code, channel: 'web', documents: ['terms', 'refund', 'privacy'],
       declaration: DECLARATIONS[langOf(req.body?.language)],
       declaration_language: langOf(req.body?.language),
@@ -619,13 +636,13 @@ router.post('/buy', safe(async (req, res) => {
 
   if (!row) {
     const pending = await billing.createPending({
-      userId: req.user.id, planId: plan.id, amountPaise: plan.price_paise, vehicleId: vehicle.id,
+      userId: req.user.id, planId: plan.id, amountPaise, vehicleId: vehicle.id,
     });
 
     let order;
     try {
       order = await razorpay.createOrder({
-        amountPaise: plan.price_paise,
+        amountPaise,
         receipt: `gp-${pending.id}`,
         notes: { reference_id: `gp-${pending.id}`, reg_no: parsed.regNo,
                  mobile: req.user.mobile, plan: plan.code, channel: 'web' },
@@ -651,7 +668,12 @@ router.post('/buy', safe(async (req, res) => {
   // This purchase's buyer, as entered — the invoice reads it from here.
   await db.query(
     `UPDATE payments SET raw = COALESCE(raw,'{}'::jsonb) || $2::jsonb WHERE id = $1`,
-    [row.id, JSON.stringify({ buyer_name: buyerName, buyer_state_code: buyerState })]);
+    [row.id, JSON.stringify({ buyer_name: buyerName, buyer_state_code: buyerState,
+      ...(reducedCredit ? { referral_credit_id: String(reducedCredit.id), list_price_paise: plan.price_paise } : {}) })]);
+  // The reward is held for this payment; it is spent when the payment completes.
+  if (reducedCredit) {
+    await db.query(`UPDATE report_credits SET payment_id = $2 WHERE id = $1 AND used_at IS NULL`, [reducedCredit.id, row.id]);
+  }
 
   res.json({ ok: true, pay_path: `/pay/${row.checkout_token}`,
              pay_url: base ? `${base}/pay/${row.checkout_token}` : null,

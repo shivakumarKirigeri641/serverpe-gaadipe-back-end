@@ -58,4 +58,14 @@ async function premiumPayments(mobiles) {
   return rows;
 }
 
-module.exports = { configured, refMessages, premiumPayments };
+/** Captured Instant Quiz payments (Rs.9 + GST) of these numbers: [{ mobile, payment_id, amount, paid_at }]. */
+async function instantPayments(mobiles) {
+  const p = get();
+  if (!p || !mobiles.length) return [];
+  const { rows } = await p.query(
+    `SELECT mobile, payment_id, amount, paid_at FROM gaadipe_instant_payments
+      WHERE mobile = ANY($1::text[]) ORDER BY paid_at`, [mobiles]);
+  return rows;
+}
+
+module.exports = { configured, refMessages, premiumPayments, instantPayments };

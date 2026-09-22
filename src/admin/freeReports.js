@@ -19,6 +19,7 @@ async function list({ state = null, q = '' } = {}) {
   const { rows } = await db.query(
     `WITH credits AS (
        SELECT 'referral'::text AS source, c.id::text AS ref, c.user_id, c.created_at AS earned_at, c.expires_at,
+              c.reward, c.price_paise,
               c.used_at, c.used_reg_no AS reg_no, c.revoked_at, c.revoked_reason AS note,
               r.mobile_masked AS parent, r.code, r.quizpe_payment, r.quizpe_amount, r.tapped_at,
               vr.report_number, NULL::text AS admin_name,
@@ -26,9 +27,10 @@ async function list({ state = null, q = '' } = {}) {
                    WHEN c.expires_at <= now() THEN 'expired' ELSE 'available' END AS state
          FROM report_credits c
          LEFT JOIN quizpe_referrals r ON r.id = c.referral_id
-         LEFT JOIN vehicle_reports vr ON vr.payment_id = c.payment_id
+         LEFT JOIN vehicle_reports vr ON vr.payment_id = c.payment_id AND c.used_at IS NOT NULL
      ), grants AS (
        SELECT 'admin'::text AS source, p.id::text AS ref, p.user_id, p.paid_at AS earned_at, NULL::timestamptz AS expires_at,
+              'free_report'::text AS reward, NULL::integer AS price_paise,
               p.paid_at AS used_at, v.reg_no, NULL::timestamptz AS revoked_at, p.raw->>'reason' AS note,
               NULL::text AS parent, NULL::text AS code, NULL::text AS quizpe_payment, NULL::numeric AS quizpe_amount,
               NULL::timestamptz AS tapped_at, vr.report_number, a.name AS admin_name, 'used'::text AS state
@@ -49,14 +51,19 @@ async function list({ state = null, q = '' } = {}) {
   const plan = await billing.reportPlan().catch(() => null);
   const price = plan?.price_paise || 0;
   const count = (s) => rows.filter((r) => r.state === s).length;
+  const used = rows.filter((r) => r.state === 'used');
+  const reducedUsed = used.filter((r) => r.reward === 'report_at_price');
   return {
     rows: rows.map((r) => ({ ...r, user_id: String(r.user_id) })),
     totals: {
-      earned: rows.filter((r) => r.source === 'referral').length,
+      earned: rows.filter((r) => r.source === 'referral' && r.reward !== 'report_at_price').length,
+      reduced: rows.filter((r) => r.reward === 'report_at_price').length,
       granted: rows.filter((r) => r.source === 'admin').length,
       used: count('used'), available: count('available'), expired: count('expired'), revoked: count('revoked'),
       // What GaadiPe did not charge for the reports actually given.
-      value_paise: count('used') * price,
+      // A free report forgoes the whole price; a reduced one only the difference.
+      value_paise: (used.length - reducedUsed.length) * price
+        + reducedUsed.reduce((s, r) => s + Math.max(0, price - Number(r.price_paise || 0)), 0),
       quizpe_rupees: rows.reduce((s, r) => s + Number(r.quizpe_amount || 0), 0),
     },
   };

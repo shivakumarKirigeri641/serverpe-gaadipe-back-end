@@ -162,7 +162,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   const pay = await db.one(
     `SELECT p.*, u.mobile, u.wa_profile_name, u.display_name, u.state_code, u.email,
             v.reg_no, v.maker, v.model, pl.duration_days,
-            pl.kind AS plan_kind
+            pl.kind AS plan_kind, pl.price_paise AS plan_price_paise
        FROM payments p
        JOIN users u ON u.id = p.user_id
        LEFT JOIN plans pl ON pl.id = p.plan_id
@@ -265,6 +265,8 @@ router.get('/pay/:token', safe(async (req, res) => {
   ${vehicleName ? `<div class="muted">${esc(vehicleName)}</div>` : ''}
   <div class="row" style="margin-top:12px"><span>Plan</span>
     <b>${esc(planLine)}</b></div>
+  ${pay.raw?.referral_credit_id && pay.plan_price_paise > grossPaise ? `<div class="row"><span>Referral reward (QuizPe)</span>
+    <b>₹${(pay.plan_price_paise / 100).toFixed(2)} → ₹${gross.toFixed(2)}</b></div>` : ''}
   <div class="row"><span>Taxable value</span><b>₹${taxable.toFixed(2)}</b></div>
   <div id="tax"></div>
   <div class="row total"><span>Total payable</span><b>₹${gross.toFixed(2)}</b></div>
@@ -293,7 +295,7 @@ router.get('/pay/:token', safe(async (req, res) => {
 </div>
 
 <div class="card">
-  <button id="pay">Pay ₹${gross.toFixed(0)} securely</button>
+  <button id="pay">Pay ₹${grossPaise % 100 ? gross.toFixed(2) : gross.toFixed(0)} securely</button>
   <div id="err" class="err"></div>
   <p class="muted" style="margin:12px 0 0;text-align:center">
     By paying you accept our

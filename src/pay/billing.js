@@ -136,6 +136,13 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
          endsOn.toISOString(), String(checkEvery), Math.max(1, Math.round(checkEvery / 60))]);
     }
 
+    // A reduced-price referral reward attached to this payment is now spent (user, 2026-09-22).
+    await c.query(
+      `UPDATE report_credits SET used_at = now(),
+              used_reg_no = (SELECT reg_no FROM vehicles WHERE id = $2)
+        WHERE payment_id = $1 AND used_at IS NULL AND reward = 'report_at_price'`,
+      [pay.id, vehicleId]);
+
     // A report does not carry the partner programme: Rs.10 commission on a
     // Rs.19 sale is most of the margin. Its own rate is a later decision.
     if (plan?.kind !== 'report') await accrueCommission(c, pay, sub);
