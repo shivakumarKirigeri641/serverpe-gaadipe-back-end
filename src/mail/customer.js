@@ -11,6 +11,9 @@
  *             they paid for, and what changed since the last email
  *   digest    a signed-in customer who has not paid, every few days: the BASIC
  *             view of the vehicles they checked — the same as the free check
+ *   purchase  the thank-you, the moment a payment is confirmed, carrying the
+ *             report and the GST invoice as attachments — with no WhatsApp
+ *             number this is the only thing a paying customer receives
  *
  * THE SAME RULE AS THE SITE. Both emails are built from site/vehicleView — full()
  * for a paid vehicle, basic() otherwise — from the record already stored, so an
@@ -31,6 +34,8 @@ const report = require('../whatsapp/report');
 const esc = T.esc;
 const SITE = () => (process.env.PUBLIC_SITE_URL || 'https://gaadipe.in').replace(/\/+$/, '');
 const API = () => (process.env.PUBLIC_BASE_URL || 'https://api.gaadipe.in').replace(/\/+$/, '');
+/** Where a customer's reply should land: a mailbox a person reads. */
+const SUPPORT = process.env.SUPPORT_EMAIL || 'support@gaadipe.in';
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/;
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -63,6 +68,25 @@ async function setEmail(userId, email) {
   return { changed: true };
 }
 
+/**
+ * Queue the thank-you email for a payment (user, 2026-09-22).
+ *
+ * Called once money is confirmed, from the one place that knows a payment
+ * succeeded. The unique index on payment_id is what makes it once-only: a
+ * webhook retry, or the reconciler recovering the same payment, queues nothing
+ * new. The address is resolved at SENDING time, not here, so someone who adds
+ * their email a minute after paying still gets it.
+ */
+async function queuePurchase(userId, paymentId) {
+  if (!userId || !paymentId) return { queued: false };
+  const row = await db.one(
+    `INSERT INTO customer_emails (user_id, kind, payment_id, to_email)
+     SELECT $1, 'purchase', $2, u.email FROM users u WHERE u.id = $1
+     ON CONFLICT (payment_id) WHERE kind = 'purchase' DO NOTHING
+     RETURNING id`, [userId, paymentId]);
+  return { queued: !!row };
+}
+
 /** The addresses customer email may go to while testing; empty means everyone. */
 async function onlyTo() {
   return String(await settings.get('customer_email_only_to', '') || '')
@@ -79,7 +103,13 @@ async function deliver(to, mail, token) {
     'List-Unsubscribe': `<${API()}/email/unsubscribe/${token}>`,
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
   } : {};
-  return mailer.send({ to, subject: mail.subject, html: mail.html, text: mail.text, headers });
+  return mailer.send({
+    to, subject: mail.subject, html: mail.html, text: mail.text, headers,
+    // A purchase email carries the report and the invoice; the rest carry nothing.
+    attachments: mail.attachments || [],
+    // ... and answers to a mailbox a person reads, since the sender does not.
+    replyTo: mail.replyTo,
+  });
 }
 
 /* ───────────────────────────────────────────────────────── the record ── */
@@ -308,6 +338,93 @@ function rewardMail(user, { count = 0, reduced = 0, reducedPrice = null, expires
 }
 
 /**
+ * The thank-you email, sent once a payment is confirmed (user, 2026-09-22).
+ *
+ * WHY IT CARRIES THE FILES. GaadiPe has no working WhatsApp Business number
+ * yet, so the receipt, the report and the invoice that notifyPaid tries to send
+ * on WhatsApp reach nobody. Email is the only channel a paying customer has,
+ * and so this email carries both PDFs itself rather than pointing at them: a
+ * customer who has paid must end up holding what they bought, whatever else is
+ * down.
+ *
+ * IT GOES TO THE ADDRESS GIVEN AT CHECKOUT, confirmed or not. The confirmation
+ * rule exists so a typo never mails somebody else's vehicle record to a
+ * stranger — but here the alternative is that the person who actually paid
+ * receives nothing at all, which is worse. Confirming still matters for the
+ * daily updates, and this email asks for it.
+ *
+ * It is a receipt, not an update: what was paid, what it bought, where to open
+ * it again, until when, and how to reach a person.
+ */
+function purchaseMail(user, p = {}) {
+  const name = String(user.display_name || '').split(' ')[0] || 'there';
+  const money = (paise) => `₹${(Number(paise || 0) / 100).toFixed(Number(paise || 0) % 100 ? 2 : 0)}`;
+  const reg = p.regNo || 'your vehicle';
+  const what = [p.maker, p.model].filter(Boolean).join(' ');
+  const link = p.reportToken
+    ? `${API()}/report/${p.reportToken}`
+    : `${SITE()}/app/vehicle/${encodeURIComponent(p.regNo || '')}`;
+
+  const stats = [
+    ['Paid', money(p.amountPaise)],
+    p.reportNumber ? ['Report', p.reportNumber] : null,
+    p.validUntil ? ['Download until', istDay(p.validUntil)] : null,
+    p.alertsUntil ? ['Alerts until', istDay(p.alertsUntil)] : null,
+  ].filter(Boolean);
+
+  const attached = [
+    p.reportNumber ? `the full report <b>${esc(p.reportNumber)}</b>` : null,
+    p.invoiceNumber ? `tax invoice <b>${esc(p.invoiceNumber)}</b> for ${esc(money(p.invoiceTotalPaise || p.amountPaise))} (inclusive of GST)` : null,
+  ].filter(Boolean);
+
+  const files = attached.length
+    ? `<div style="font-size:13px;line-height:1.7;color:#0b1f1c;background:#e9f8ef;border-left:4px solid #12a150;border-radius:8px;padding:12px 14px;">
+        <b>Attached to this email:</b> ${attached.join(' and ')}. They are yours to keep.
+        ${p.validUntil ? `You can also download the report again from the button below until <b>${esc(istDay(p.validUntil))}</b>.` : ''}</div>`
+    : `<div style="font-size:13px;line-height:1.6;color:#41514e;background:#fff6e6;border-left:4px solid #e08700;border-radius:8px;padding:12px 14px;">
+        The Government records service is slow at the moment, so your report is still being prepared.
+        Open GaadiPe from the button below in a few minutes and it will be there. Your payment is safe.</div>`;
+
+  const included = `<div style="font-size:13px;line-height:1.7;color:#0b1f1c;background:#f6faf9;border:1px solid #e3ecea;border-radius:10px;padding:14px 16px;">
+    <b>What your report includes</b><br>
+    • Every document — insurance, PUC, road tax, fitness and permit, with its expiry date<br>
+    • Every pending challan, with the offence, the place and the amount<br>
+    • Loan / hypothecation, blacklist and NOC status<br>
+    • FASTag status and balance, RTO, registration date and number of owners<br>
+    • A dated PDF you can keep${p.alertsUntil ? `, and a daily email until <b>${esc(istDay(p.alertsUntil))}</b> if anything changes` : ''}</div>`;
+
+  const confirm = p.confirmed || !user.email_token ? '' :
+    `<div style="font-size:13px;line-height:1.6;color:#41514e;">
+      <b>One more thing.</b> This address is not confirmed yet.
+      <a href="${esc(`${API()}/email/confirm/${user.email_token}`)}" style="color:#0f766e;font-weight:700;">Confirm it in one click</a>
+      so the daily updates for ${esc(reg)} reach you here.</div>`;
+
+  const help = `<div style="font-size:13px;line-height:1.6;color:#41514e;">
+    If anything is missing or looks wrong, write to <a href="mailto:${esc(SUPPORT)}" style="color:#0f766e;font-weight:700;">${esc(SUPPORT)}</a>
+    and a person will answer.
+    GaadiPe shows Government records (VAHAN, e-Challan, NETC FASTag) exactly as received; where they differ from your
+    documents, your RTO's record prevails.</div>`;
+
+  const out = T.layout({
+    tagline: 'Your purchase',
+    preheader: `Thank you — your full report for ${reg} is attached.`,
+    badge: { text: 'Payment received', tone: 'good' },
+    title: 'Thank you for your purchase',
+    lead: `Hi ${name}, we have received your payment of ${money(p.amountPaise)}. Your full report for `
+      + `${reg}${what ? ` (${what})` : ''} is ready.`,
+    stats,
+    blocks: [files, included, confirm, help].filter(Boolean),
+    cta: { label: 'Open my report', url: link },
+    footer: 'You are receiving this because this address was given when you bought a report on gaadipe.in. It is a purchase confirmation, not a marketing email.',
+    footerHtml: '',
+  });
+  out.text += `\nOpen your report: ${link}\nQuestions: ${SUPPORT}`;
+  // Replies go to a mailbox a person reads, not to the noreply sender.
+  return { subject: `Thank you — your report for ${reg} is ready`, ...out,
+           attachments: p.attachments || [], replyTo: SUPPORT };
+}
+
+/**
  * An announcement the admin wrote in the panel (user, 2026-09-21). The text is
  * plain: blank lines make paragraphs, web addresses become links, {name} is
  * the customer's first name. Nothing the admin types is treated as HTML.
@@ -330,6 +447,6 @@ function announcementMail(user, { subject, body }) {
 }
 
 module.exports = {
-  setEmail, validEmail, onlyTo, deliver, storedRecord,
-  confirmMail, dailyMail, digestMail, rewardMail, announcementMail, istDay, SITE, API,
+  setEmail, validEmail, onlyTo, deliver, storedRecord, queuePurchase,
+  confirmMail, dailyMail, digestMail, rewardMail, purchaseMail, announcementMail, istDay, SITE, API,
 };

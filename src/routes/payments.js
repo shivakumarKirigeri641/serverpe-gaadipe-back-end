@@ -134,6 +134,15 @@ async function notifyPaid(result) {
     `SELECT mobile, wa_profile_name FROM users WHERE id = $1`, [result.payment.user_id]);
   if (!user) return;
 
+  // FIRST, BEFORE ANY MESSAGE GOES OUT. GaadiPe is web-only for now — there is
+  // no WhatsApp number — so the email below is the only thing the customer will
+  // actually receive, and queueing it must not sit behind sends that will fail.
+  // A free report (₹0) is not a purchase: the referral reward email covers it.
+  if (Number(result.payment.amount_paise) > 0 && result.payment.gateway !== 'free') {
+    await require('../mail/customer').queuePurchase(result.payment.user_id, result.payment.id)
+      .catch((e) => console.error('[pay] could not queue the purchase email:', e.message));
+  }
+
   const veh = result.vehicleId
     ? await db.one(`SELECT reg_no FROM vehicles WHERE id = $1`, [result.vehicleId])
     : null;
