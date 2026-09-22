@@ -88,6 +88,42 @@ const R = (s, n) => String(s).padStart(n);
   console.log('\n  By day (IST):  date        sign-ins  checked  buy  checkout  paid');
   daily.forEach((r) => console.log(`                 ${r.date}  ${R(r.sign_ins, 8)}  ${R(r.checked, 7)}  ${R(r.opened_buy, 3)}  ${R(r.checkout, 8)}  ${R(r.paid, 4)}`));
 
+  /*
+   * ATTEMPTED vs SUCCEEDED. A check is recorded as an action only once the
+   * Government data comes back, so a failed or refused lookup leaves no 'check'
+   * row — it would look like a customer who never tried. api_calls records the
+   * attempt either way, so the two together show what really happened.
+   */
+  const attempts = await many(`
+    WITH d AS (SELECT generate_series((${SINCE})::date, now()::date, '1 day')::date AS dt)
+    SELECT d.dt::text date,
+      (SELECT count(DISTINCT user_id)::int FROM site_sign_ins s WHERE s.event='signed_in' AND (s.created_at ${IST})::date = d.dt) signed_in,
+      (SELECT count(DISTINCT user_id)::int FROM api_calls k WHERE k.user_id IS NOT NULL AND (k.created_at ${IST})::date = d.dt) tried,
+      (SELECT count(DISTINCT user_id)::int FROM api_calls k WHERE k.user_id IS NOT NULL AND k.ok AND (k.created_at ${IST})::date = d.dt) succeeded,
+      (SELECT count(DISTINCT user_id)::int FROM api_calls k WHERE k.user_id IS NOT NULL AND NOT k.ok AND (k.created_at ${IST})::date = d.dt) failed_for
+      FROM d ORDER BY d.dt`);
+  console.log('\n  Lookups per day (IST):  date        signed-in  tried  got data  hit a failure');
+  attempts.forEach((r) => console.log(`                          ${r.date}  ${R(r.signed_in, 9)}  ${R(r.tried, 5)}  ${R(r.succeeded, 8)}  ${R(r.failed_for, 13)}`));
+
+  const why = await many(`
+    SELECT coalesce(outcome, 'unknown') outcome, dataset, count(*)::int calls, count(DISTINCT user_id)::int customers
+      FROM api_calls WHERE created_at > ${SINCE} AND NOT ok GROUP BY 1, 2 ORDER BY calls DESC LIMIT 15`);
+  if (why.length) {
+    console.log('\n  Why lookups failed:');
+    why.forEach((r) => console.log(`   ${R(r.customers, 4)} customers  ${R(r.calls, 5)} calls  ${L(r.dataset, 8)} ${r.outcome}`));
+  } else {
+    console.log('\n  No failed lookups in this period.');
+  }
+
+  /* Someone who signed in, never reached a successful check, and never paid. */
+  const lost = await one(`
+    SELECT count(*)::int n FROM (
+      SELECT DISTINCT s.user_id FROM site_sign_ins s
+       WHERE s.event='signed_in' AND s.created_at > ${SINCE} AND s.user_id IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM site_activity a WHERE a.user_id = s.user_id
+                           AND a.created_at > ${SINCE} AND a.action IN ('check','check_paid'))) t`);
+  console.log(`\n  Signed in but never completed a check: ${lost.n} customer(s)`);
+
   const totals = await one(`SELECT
       (SELECT count(*)::int FROM users) customers,
       (SELECT count(*)::int FROM users WHERE created_at > ${SINCE}) new_customers,
@@ -101,7 +137,8 @@ const R = (s, n) => String(s).padStart(n);
 
   const out = { generated_at: new Date().toISOString(), window_days: days, contains_personal_data: false,
     funnel: steps.map(([step, customers]) => ({ step, customers })), payments: +f.payments, revenue_paise: +f.paise,
-    dropoff_of_non_payers: drop, top_pages: pages, sources: src, daily, totals };
+    dropoff_of_non_payers: drop, top_pages: pages, sources: src, daily, totals,
+    lookups_per_day: attempts, failed_lookup_reasons: why, signed_in_without_a_completed_check: lost.n };
   fs.writeFileSync('gp-funnel.json', JSON.stringify(out, null, 2));
   console.log('\n  Saved: gp-funnel.json  (counts only — safe to share)\n');
   await c.end(); process.exit(0);
