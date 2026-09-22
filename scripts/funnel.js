@@ -31,7 +31,7 @@ const R = (s, n) => String(s).padStart(n);
   const f = await one(`
     WITH a AS (SELECT user_id, kind, action, detail FROM site_activity WHERE created_at > ${SINCE})
     SELECT (SELECT count(DISTINCT user_id) FROM a) signed_in,
-           (SELECT count(DISTINCT user_id) FROM a WHERE action IN ('check','check_paid')) checked,
+           (SELECT count(DISTINCT user_id) FROM a WHERE action IN ('check','check_paid','view_vehicle','view_vehicle_paid')) checked,
            (SELECT count(DISTINCT user_id) FROM a WHERE action = 'buy_open') opened_buy,
            (SELECT count(DISTINCT user_id) FROM a WHERE kind='click' AND detail->>'label' ILIKE 'pay now%') tapped_pay,
            (SELECT count(DISTINCT user_id) FROM a WHERE action = 'pay_start') checkout,
@@ -79,7 +79,7 @@ const R = (s, n) => String(s).padStart(n);
   const daily = await many(`
     WITH d AS (SELECT generate_series((${SINCE})::date, now()::date, '1 day')::date AS dt)
     SELECT d.dt::text date,
-      (SELECT count(DISTINCT user_id)::int FROM site_activity a WHERE (a.created_at ${IST})::date = d.dt AND a.action IN ('check','check_paid')) checked,
+      (SELECT count(DISTINCT user_id)::int FROM site_activity a WHERE (a.created_at ${IST})::date = d.dt AND a.action IN ('check','check_paid','view_vehicle','view_vehicle_paid')) checked,
       (SELECT count(DISTINCT user_id)::int FROM site_activity a WHERE (a.created_at ${IST})::date = d.dt AND a.action='buy_open') opened_buy,
       (SELECT count(DISTINCT user_id)::int FROM site_activity a WHERE (a.created_at ${IST})::date = d.dt AND a.action='pay_start') checkout,
       (SELECT count(*)::int FROM payments p WHERE p.status='paid' AND p.gateway <> 'free' AND (p.paid_at ${IST})::date = d.dt) paid,
@@ -121,7 +121,7 @@ const R = (s, n) => String(s).padStart(n);
       SELECT DISTINCT s.user_id FROM site_sign_ins s
        WHERE s.event='signed_in' AND s.created_at > ${SINCE} AND s.user_id IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM site_activity a WHERE a.user_id = s.user_id
-                           AND a.created_at > ${SINCE} AND a.action IN ('check','check_paid'))) t`);
+                           AND a.created_at > ${SINCE} AND a.action IN ('check','check_paid','view_vehicle','view_vehicle_paid'))) t`);
   console.log(`\n  Signed in but never completed a check: ${lost.n} customer(s)`);
 
   const totals = await one(`SELECT
