@@ -154,6 +154,21 @@ function fullSections(v, extra = {}) {
 /** Rows for one vehicle NOT paid for: what the free check shows, nothing more. */
 function basicSection(v) {
   const f = v.found || {};
+  // The email says exactly what the free check says (free_view_detail).
+  if (v.detail === 'none' || v.detail === 'count') {
+    return {
+      heading: `${v.pretty || v.reg_no} · ${vehicleTitle(v)}`,
+      rows: [
+        ['Fuel · class', [v.identity?.fuel, v.identity?.vehicle_class].filter(Boolean).join(' · ') || null],
+        ['Needs attention', f.needs_attention
+          ? { html: pill(`${f.needs_attention} thing${f.needs_attention === 1 ? '' : 's'} on this vehicle`, 'expired'),
+              text: `${f.needs_attention} things on this vehicle` }
+          : v.detail === 'count' ? 'Nothing found needing attention' : null],
+        ['Full report', { html: `<a href="${esc(`${SITE()}/app/vehicle/${encodeURIComponent(v.reg_no)}`)}" style="color:#0f766e;font-weight:700;">See what they are →</a>`,
+          text: `${SITE()}/app/vehicle/${v.reg_no}` }],
+      ],
+    };
+  }
   return {
     heading: `${v.pretty || v.reg_no} · ${vehicleTitle(v)}`,
     rows: [
@@ -215,7 +230,7 @@ function dailyMail(user, { paid, changes = [], others = [] }) {
     intro: [changeHtml],
     sections: [
       ...fullViews.flatMap(({ v, alertsUntil }) => fullSections(v, { alertsUntil })),
-      ...others.map((r) => basicSection(view.basic(r))),
+      ...others.map((r) => basicSection(view.basic(r, { detail: 'labels' }))),
     ],
     cta: { label: 'Open GaadiPe', url: regs.length === 1 ? `${SITE()}/app/vehicle/${encodeURIComponent(regs[0])}` : `${SITE()}/app` },
     footer: 'You are receiving this daily because you bought a GaadiPe report and it includes alerts.',
@@ -233,9 +248,9 @@ function dailyMail(user, { paid, changes = [], others = [] }) {
 }
 
 /** The every-few-days email for a customer who has not paid: basic view only. */
-function digestMail(user, records) {
+function digestMail(user, records, { detail = 'count' } = {}) {
   const name = String(user.display_name || '').split(' ')[0] || 'there';
-  const views = records.map((r) => view.basic(r));
+  const views = records.map((r) => view.basic(r, { detail }));
   const attention = views.filter((v) => v.found?.expired?.length || v.found?.challans_pending).length;
   const price = user.price_paise ? rupees(user.price_paise) : '₹19';
   const out = T.layout({

@@ -79,6 +79,12 @@ router.get('/pricing', safe(async (_req, res) => {
 
 /* ────────────────────────────────────────── how a full report is unlocked ── */
 
+/** How much the free view gives away: labels | count | none (migration 050). */
+const freeDetail = async () => {
+  const v = String(await settings.get('free_view_detail', 'count')).toLowerCase();
+  return ['labels', 'count', 'none'].includes(v) ? v : 'count';
+};
+
 const unlockMode = async () => {
   const m = String(await settings.get('report_unlock', 'both')).toLowerCase();
   return ['pay', 'both', 'refer'].includes(m) ? m : 'both';
@@ -370,6 +376,7 @@ router.get('/vehicles', safe(async (req, res) => {
    * the list says which documents have lapsed, by name, and nothing more.
    */
   const report = require('../whatsapp/report');
+  const detail = await freeDetail();
   const DATES = ['insurance_upto', 'pucc_upto', 'fitness_upto', 'tax_upto', 'permit_upto', 'reg_upto'];
   res.json({
     rows: rows.map((r) => {
@@ -379,8 +386,13 @@ router.get('/vehicles', safe(async (req, res) => {
         ...r,
         report_id: r.report_id ? String(r.report_id) : null,
         check_count: Number(r.check_count || 0),
-        expired: docs.filter(d => d.days < 0).map(d => d.label),
       };
+      // My vehicles obeys the same rule as the free check (migration 050):
+      // names only while free_view_detail is 'labels'.
+      const expired = docs.filter((d) => d.days < 0).map((d) => d.label);
+      const dueSoon = docs.filter((d) => d.days >= 0 && d.days <= 60).map((d) => d.label);
+      if (paid || detail === 'labels') out.expired = expired;
+      else if (detail === 'count') out.needs_attention = expired.length + dueSoon.length;
       if (!paid) for (const k of DATES) delete out[k];
       return out;
     }),
@@ -412,7 +424,7 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
   const plan = await billing.reportPlan();
   await activity.record(req, { action: paid ? 'view_vehicle_paid' : 'view_vehicle', regNo: parsed.regNo });
   res.json({
-    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data),
+    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() }),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     ...(await offerFor(req, plan, paid)),
   });
@@ -470,7 +482,7 @@ router.post('/check', safe(async (req, res) => {
 
   const plan = await billing.reportPlan();
   res.json({
-    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data),
+    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() }),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     ...(await offerFor(req, plan, paid)),
   });
@@ -516,7 +528,7 @@ async function fullRecord(req, regNo, data) {
   if (today.n >= cap) {
     await require('../security/guard').record('full_view_cap', req, {
       surface: 'site', detail: { views_today: today.n, cap, reg_no: regNo } });
-    return { ...view.basic(data), limited: true, limit_per_day: cap };
+    return { ...view.basic(data, { detail: await freeDetail() }), limited: true, limit_per_day: cap };
   }
   await db.query(
     `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'full_view', $2)`,

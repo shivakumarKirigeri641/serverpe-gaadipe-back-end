@@ -167,7 +167,8 @@ async function digest(day, limit) {
     const records = [];
     for (const v of vs) { const r = await C.storedRecord(v.vehicle_id); if (r) records.push(r); }
     if (!records.length) { await settle(row.id, { ok: false, skipped: true, error: 'no stored record' }); continue; }
-    const mail = C.digestMail({ ...u, price_paise: plan?.price_paise }, records);
+    const detail = String(await settings.get('free_view_detail', 'count')).toLowerCase();
+    const mail = C.digestMail({ ...u, price_paise: plan?.price_paise }, records, { detail });
     await db.query(`UPDATE customer_emails SET subject = $2, vehicles = $3 WHERE id = $1`,
       [row.id, mail.subject, JSON.stringify(records.map((r) => r.vehicle_number))]);
     const out = await C.deliver(u.email, mail, u.email_token);
