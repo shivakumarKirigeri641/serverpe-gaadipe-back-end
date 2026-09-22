@@ -151,6 +151,7 @@ router.post('/session/otp', safe(async (req, res) => {
 router.post('/session/verify', safe(async (req, res) => {
   const out = await auth.verifyCode({
     mobile: req.body?.mobile, code: req.body?.code, ctx: device.contextOf(req),
+    quizpeConsent: req.body?.quizpe_consent === true,  // optional tick on the sign-in page
   });
   if (!out.ok) return res.status(401).json(out);
   res.json(out);

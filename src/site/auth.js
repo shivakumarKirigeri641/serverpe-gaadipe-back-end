@@ -155,15 +155,15 @@ async function requestCodeInner({ mobile, ip }) {
  * A customer row is created here if there is none: somebody may reach the site
  * before they ever message WhatsApp, and being new is not an error.
  */
-async function verifyCode({ mobile, code, ip, userAgent, ctx = {} }) {
-  const out = await verifyCodeInner({ mobile, code, ip: ip || ctx.ip, userAgent: userAgent || ctx.user_agent, ctx });
+async function verifyCode({ mobile, code, ip, userAgent, ctx = {}, quizpeConsent = false }) {
+  const out = await verifyCodeInner({ mobile, code, ip: ip || ctx.ip, userAgent: userAgent || ctx.user_agent, ctx, quizpeConsent });
   if (!out.ok) {
     await track('sign_in_failed', { mobile: localMobile(mobile) || null, ctx, outcome: out.error });
   }
   return out;
 }
 
-async function verifyCodeInner({ mobile, code, ip, userAgent, ctx }) {
+async function verifyCodeInner({ mobile, code, ip, userAgent, ctx, quizpeConsent = false }) {
   const m = localMobile(mobile);
 
   if (!allowedForTesting(m)) {
@@ -244,7 +244,24 @@ async function verifyCodeInner({ mobile, code, ip, userAgent, ctx }) {
       versions: v, ip: ip || null, user_agent: userAgent || null,
       at: new Date().toISOString() })]);
 
-  return { ok: true, token, user: publicUser({ ...user, deactivated_at: null }) };
+  /*
+   * QUIZPE MAY MESSAGE ME — offered at sign-in (user, 2026-09-22), OPTIONAL and
+   * never pre-ticked: signing in works either way (DPDP — consent cannot be a
+   * condition of the service). Ticked, it is recorded with its exact words and
+   * the time, as the Profile tick does. Unticked changes nothing: it never
+   * withdraws a consent given before (that is done in Profile).
+   */
+  let quizpe = user.quizpe_consent_at || null;
+  if (quizpeConsent === true && !quizpe) {
+    const text = require('../referrals/quizpe').PROGRAMME_CONSENT;
+    quizpe = (await db.one(
+      `UPDATE users SET quizpe_consent_at = now(), quizpe_consent_text = $2, quizpe_consent_withdrawn_at = NULL,
+              modified_at = now() WHERE id = $1 RETURNING quizpe_consent_at`, [user.id, text])).quizpe_consent_at;
+    await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'quizpe_consent_given', $2)`,
+      [user.id, JSON.stringify({ text, via: 'sign_in', ip: ip || null, user_agent: userAgent || null })]);
+  }
+
+  return { ok: true, token, user: publicUser({ ...user, deactivated_at: null, quizpe_consent_at: quizpe }) };
 }
 
 const publicUser = (u) => ({
