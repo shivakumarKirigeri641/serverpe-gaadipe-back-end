@@ -101,6 +101,18 @@ const config = {
     verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || '',
     // Our own number, so we can recognise it in a payload.
     ownNumber: String(process.env.WHATSAPP_BUSINESS_PHONENUMBER || ''),
+    /*
+     * IS WHATSAPP OFFERED TO CUSTOMERS? (user, 2026-09-22)
+     *
+     * GaadiPe has no WhatsApp Business number of its own yet, so GaadiPe is
+     * web-only and every "Open WhatsApp" shown to a customer points at a number
+     * that will not answer. This hides those doors; it closes nothing — the bot,
+     * the webhook and the sending code are untouched, and WHATSAPP_ENABLED=1
+     * brings the links back the day the number arrives.
+     *
+     * The site has the same switch of its own (VITE_WHATSAPP_ENABLED).
+     */
+    enabled: String(process.env.WHATSAPP_ENABLED || '') === '1',
     // Receive and record, but never reply. The flow is not built yet, and a
     // half-built bot answering real customers is worse than a silent one.
     replyEnabled: bool(process.env.WHATSAPP_REPLY_ENABLED, false),

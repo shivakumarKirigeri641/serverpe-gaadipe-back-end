@@ -91,6 +91,23 @@ const waButton = (label = 'Open WhatsApp') =>
      Not opening? <a href="https://wa.me/${WA_NUMBER}">Tap here</a></p>
    <script>${WA_JS}</script>`;
 
+/*
+ * THE WAY OUT OF A DEAD END (user, 2026-09-22).
+ *
+ * Every screen here that cannot go forward has to offer something. While
+ * GaadiPe has no WhatsApp number (config.whatsapp.enabled), sending someone to
+ * a chat nobody reads is worse than saying nothing — so the button goes to the
+ * website instead, and the words alongside it change with it. Turning the
+ * number on brings the WhatsApp version back with no other edit.
+ */
+const WA_ON = () => config.whatsapp.enabled;
+const siteButton = (url, label) =>
+  `<button onclick="location.href=${esc(JSON.stringify(url))}">${esc(label)}</button>`;
+const wayOut = (url, { wa = 'Open WhatsApp', web = 'Open GaadiPe' } = {}) =>
+  (WA_ON() ? waButton(wa) : siteButton(url, web));
+/** "on WhatsApp" is a promise GaadiPe cannot keep today; the inbox is. */
+const sentTo = () => (WA_ON() ? 'in your WhatsApp chat' : 'in your email');
+
 const page = (title, body) => `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -154,7 +171,9 @@ const safe = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
   } else {
     // The money may already be taken; the webhook and the reconciler finish the
     // job, so this must not invite a second payment.
-    res.status(500).json({ ok: false, message: 'We could not confirm the payment yet. Please check WhatsApp in a minute.' });
+    res.status(500).json({ ok: false, message: config.whatsapp.enabled
+      ? 'We could not confirm the payment yet. Please check WhatsApp in a minute.'
+      : 'We could not confirm the payment yet. Your money is safe — check your email in a minute, or write to support@gaadipe.in.' });
   }
 });
 
@@ -172,9 +191,10 @@ router.get('/pay/:token', safe(async (req, res) => {
   if (!pay) {
     return res.status(404).send(page('Not found', `<div class="card">
       <h1>This payment link is not valid</h1>
-      <p class="muted">It may have already been used. Please go back to WhatsApp
-      and ask for a new one.</p>
-      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+      <p class="muted">It may have already been used. ${WA_ON()
+        ? 'Please go back to WhatsApp and ask for a new one.'
+        : 'Open GaadiPe, check the vehicle again and start a new payment — nothing has been charged.'}</p>
+      ${wayOut(`${SITE_URL}/app/check`, { web: 'Open GaadiPe' })}</div>`));
   }
 
   const web = pay.raw?.channel === 'web';
@@ -191,8 +211,8 @@ router.get('/pay/:token', safe(async (req, res) => {
       <p class="muted">${pay.plan_kind === 'report'
         ? `Your full report for <b>${esc(pay.reg_no || 'your vehicle')}</b> has been sent.`
         : `Monitoring for <b>${esc(pay.reg_no || 'your vehicle')}</b> is active.`}
-      The confirmation and invoice are in your WhatsApp chat.</p>
-      ${waButton('Back to WhatsApp')}</div>`));
+      The confirmation and invoice are ${sentTo()}.</p>
+      ${wayOut(`${site}/app/reports`, { wa: 'Back to WhatsApp', web: 'Open my reports' })}</div>`));
   }
 
   /*
@@ -503,22 +523,27 @@ router.get('/report/:token', safe(async (req, res) => {
   if (!r || !r.valid_until) {
     return res.status(404).send(page('Not found', `<div class="card">
       <h1>This report link is not valid</h1>
-      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+      <p class="muted">The link may have been mistyped or already replaced.
+      ${WA_ON() ? '' : 'Sign in to GaadiPe and open the vehicle — every report you have paid for is there.'}</p>
+      ${wayOut(`${SITE_URL}/app`, { web: 'Open my reports' })}</div>`));
   }
   if (new Date(r.valid_until) <= new Date()) {
     return res.status(410).send(page('Link expired', `<div class="card">
       <h1>This download link has expired</h1>
       <p class="muted">The report for <b>${esc(r.reg_no)}</b> could be downloaded until
-      ${esc(new Date(r.valid_until).toDateString())}. Send the vehicle number on WhatsApp to
-      check today's records.</p>
-      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+      ${esc(new Date(r.valid_until).toDateString())}. ${WA_ON()
+        ? "Send the vehicle number on WhatsApp to check today's records."
+        : "Check the vehicle again on GaadiPe for today's records. Your copy was also emailed to you when you bought it."}</p>
+      ${wayOut(`${SITE_URL}/app/vehicle/${encodeURIComponent(r.reg_no || '')}`, { web: 'Check it again' })}</div>`));
   }
   if (!r.pdf_path || !fs.existsSync(r.pdf_path)) {
     console.error('[report] %s file missing at %s', r.report_number, r.pdf_path);
     return res.status(404).send(page('Not available', `<div class="card">
       <h1>This report is not available right now</h1>
-      <p class="muted">Reply <b>report</b> on WhatsApp and it will be sent to you.</p>
-      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+      <p class="muted">${WA_ON()
+        ? 'Reply <b>report</b> on WhatsApp and it will be sent to you.'
+        : 'The copy emailed to you when you bought it still works. If you cannot find it, write to support@gaadipe.in and it will be sent again.'}</p>
+      ${wayOut(`${SITE_URL}/app/vehicle/${encodeURIComponent(r.reg_no || '')}`, { web: 'Open GaadiPe' })}</div>`));
   }
   res.set('Cache-Control', 'private, no-store');
   res.download(r.pdf_path, `${r.report_number}.pdf`);
