@@ -3,6 +3,8 @@
  *
  * Every minute:
  *   1. confirmation emails waiting to go (any time of day — someone is waiting)
+ *   1b. the thank-you for a purchase, with the report and invoice attached
+ *        (any time of day — GaadiPe is web-only, so this is how a buyer is served)
  *   2. from customer_email_hour_ist (7 pm) until customer_email_until_hour_ist:
  *        daily   every paying customer, once a day
  *        digest  every signed-in customer without an active purchase, once
@@ -17,6 +19,7 @@
  * in mail/customer.js.
  */
 
+const fs = require('fs');
 const db = require('../db');
 const settings = require('../util/settings');
 const billing = require('../pay/billing');
@@ -75,6 +78,84 @@ async function confirmations(limit = 20) {
     await db.query(`UPDATE customer_emails SET subject = $2 WHERE id = $1`, [r.id, mail.subject]);
     const out = await C.deliver(r.to_email, mail, null);
     await settle(r.id, out);
+    if (out.ok) sent += 1;
+  }
+  return sent;
+}
+
+/* ──────────────────────────────────────── the thank-you (user, 2026-09-22) ── */
+
+/*
+ * Queued by payments.js the moment money is confirmed, sent on the next tick —
+ * any time of day, because someone has just paid and is waiting.
+ *
+ * WHAT IT CARRIES. GaadiPe is web-only for now: there is no WhatsApp number, so
+ * the report and invoice that notifyPaid tries to send on WhatsApp reach nobody.
+ * This email attaches both PDFs, and is therefore the only thing standing
+ * between a paying customer and having nothing to show for it.
+ *
+ * WAITING FOR THE REPORT. The report is normally issued within seconds of the
+ * payment. If the Government records service was slow it may not exist yet, so
+ * the first few attempts wait for it; after that the email goes anyway, saying
+ * so and pointing at the site, because silence after a payment is the one thing
+ * that must not happen.
+ */
+const WAIT_FOR_REPORT = 3;
+
+async function purchases(limit) {
+  const { rows } = await db.query(
+    // e.id is NAMED: u.* carries an id of its own that would replace it.
+    `SELECT e.id AS email_id, e.attempts, e.payment_id AS pay_id, p.amount_paise, p.paid_at,
+            v.reg_no, r.report_number, r.access_token, r.valid_until, r.pdf_path,
+            s.ends_on, u.*
+       FROM customer_emails e
+       JOIN payments p ON p.id = e.payment_id
+       JOIN users u ON u.id = e.user_id
+       LEFT JOIN vehicles v ON v.id = (p.raw->>'vehicle_id')::bigint
+       LEFT JOIN vehicle_reports r ON r.payment_id = p.id
+       LEFT JOIN subscriptions s ON s.id = p.subscription_id
+      WHERE e.kind = 'purchase' AND e.status IN ('pending', 'failed') AND e.attempts < ${MAX_ATTEMPTS}
+        AND e.created_at > now() - interval '30 days'
+        AND u.email IS NOT NULL AND u.deactivated_at IS NULL
+      ORDER BY e.id LIMIT $1`, [limit]);
+
+  let sent = 0;
+  for (const r of rows) {
+    // No report yet, and still early: leave it pending and look again next tick.
+    if (!r.report_number && r.attempts < WAIT_FOR_REPORT) {
+      await db.query(`UPDATE customer_emails SET attempts = attempts + 1 WHERE id = $1`, [r.email_id]);
+      continue;
+    }
+    await db.query(`UPDATE customer_emails SET attempts = attempts + 1, to_email = $2 WHERE id = $1`,
+      [r.email_id, r.email]);
+
+    // The invoice is generated here if the payment path could not: the customer
+    // is owed it either way, and a missing invoice must not hold up the email.
+    let invoice = null;
+    try { ({ invoice } = await require('../pay/invoice').forPayment(r.pay_id)); }
+    catch (e) { console.warn('[customer-mail] invoice for the purchase email: %s', e.message); }
+
+    const attachments = [];
+    if (r.pdf_path && fs.existsSync(r.pdf_path)) attachments.push({ filename: `${r.report_number}.pdf`, path: r.pdf_path });
+    if (invoice?.pdf_path && fs.existsSync(invoice.pdf_path)) attachments.push({ filename: `${invoice.invoice_number}.pdf`, path: invoice.pdf_path });
+
+    const mail = C.purchaseMail(r, {
+      regNo: r.reg_no,
+      amountPaise: r.amount_paise,
+      reportNumber: r.report_number,
+      reportToken: r.access_token,
+      validUntil: r.valid_until,
+      alertsUntil: r.ends_on,
+      invoiceNumber: invoice?.invoice_number,
+      invoiceTotalPaise: invoice?.total_paise,
+      confirmed: !!r.email_verified_at,
+      attachments,
+    });
+    await db.query(`UPDATE customer_emails SET subject = $2, vehicles = $3 WHERE id = $1`,
+      [r.email_id, mail.subject, JSON.stringify(r.reg_no ? [r.reg_no] : [])]);
+    // No unsubscribe token: a receipt for something bought is not a mailing.
+    const out = await C.deliver(r.email, mail, null);
+    await settle(r.email_id, out);
     if (out.ok) sent += 1;
   }
   return sent;
@@ -221,12 +302,15 @@ async function announcements(limit) {
 async function runOnce({ force = false } = {}) {
   if (String(await settings.get('customer_email_enabled', 'true')).toLowerCase() === 'false') return { off: true };
   const confirmSent = await confirmations();
+  // Before anything on a timer: someone paid and is waiting for what they bought.
+  const bought = await purchases(Math.max(1, await settings.num('customer_email_per_tick', 10)));
+  if (bought) console.log('[customer-mail] purchase emails sent %d', bought);
   const announced = await announcements(Math.max(1, await settings.num('customer_email_per_tick', 10)));
   if (announced) console.log('[customer-mail] announcements sent %d', announced);
   const from = await settings.num('customer_email_hour_ist', 19);
   const until = await settings.num('customer_email_until_hour_ist', 22);
   const hour = istNow().getUTCHours();
-  if (!force && (hour < from || hour >= until)) return { confirm: confirmSent, daily: 0, digest: 0 };
+  if (!force && (hour < from || hour >= until)) return { confirm: confirmSent, purchase: bought, daily: 0, digest: 0 };
   const limit = Math.max(1, await settings.num('customer_email_per_tick', 10));
   const day = istToday();
   const dailySent = await daily(day, limit);
@@ -234,7 +318,7 @@ async function runOnce({ force = false } = {}) {
   if (confirmSent || dailySent || digestSent) {
     console.log('[customer-mail] confirm %d · daily %d · digest %d', confirmSent, dailySent, digestSent);
   }
-  return { confirm: confirmSent, daily: dailySent, digest: digestSent };
+  return { confirm: confirmSent, purchase: bought, daily: dailySent, digest: digestSent };
 }
 
 function start(everySeconds = 60) {
@@ -250,4 +334,4 @@ function start(everySeconds = 60) {
   console.log(`  customer email job: every ${everySeconds}s`);
 }
 
-module.exports = { start, runOnce, confirmations, announcements, daily, digest, dailyFor };
+module.exports = { start, runOnce, confirmations, purchases, announcements, daily, digest, dailyFor };

@@ -91,6 +91,23 @@ const waButton = (label = 'Open WhatsApp') =>
      Not opening? <a href="https://wa.me/${WA_NUMBER}">Tap here</a></p>
    <script>${WA_JS}</script>`;
 
+/*
+ * THE WAY OUT OF A DEAD END (user, 2026-09-22).
+ *
+ * Every screen here that cannot go forward has to offer something. While
+ * GaadiPe has no WhatsApp number (config.whatsapp.enabled), sending someone to
+ * a chat nobody reads is worse than saying nothing — so the button goes to the
+ * website instead, and the words alongside it change with it. Turning the
+ * number on brings the WhatsApp version back with no other edit.
+ */
+const WA_ON = () => config.whatsapp.enabled;
+const siteButton = (url, label) =>
+  `<button onclick="location.href=${esc(JSON.stringify(url))}">${esc(label)}</button>`;
+const wayOut = (url, { wa = 'Open WhatsApp', web = 'Open GaadiPe' } = {}) =>
+  (WA_ON() ? waButton(wa) : siteButton(url, web));
+/** "on WhatsApp" is a promise GaadiPe cannot keep today; the inbox is. */
+const sentTo = () => (WA_ON() ? 'in your WhatsApp chat' : 'in your email');
+
 const page = (title, body) => `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -154,7 +171,9 @@ const safe = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
   } else {
     // The money may already be taken; the webhook and the reconciler finish the
     // job, so this must not invite a second payment.
-    res.status(500).json({ ok: false, message: 'We could not confirm the payment yet. Please check WhatsApp in a minute.' });
+    res.status(500).json({ ok: false, message: config.whatsapp.enabled
+      ? 'We could not confirm the payment yet. Please check WhatsApp in a minute.'
+      : 'We could not confirm the payment yet. Your money is safe — check your email in a minute, or write to support@gaadipe.in.' });
   }
 });
 
@@ -172,9 +191,10 @@ router.get('/pay/:token', safe(async (req, res) => {
   if (!pay) {
     return res.status(404).send(page('Not found', `<div class="card">
       <h1>This payment link is not valid</h1>
-      <p class="muted">It may have already been used. Please go back to WhatsApp
-      and ask for a new one.</p>
-      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+      <p class="muted">It may have already been used. ${WA_ON()
+        ? 'Please go back to WhatsApp and ask for a new one.'
+        : 'Open GaadiPe, check the vehicle again and start a new payment — nothing has been charged.'}</p>
+      ${wayOut(`${SITE_URL}/app/check`, { web: 'Open GaadiPe' })}</div>`));
   }
 
   const web = pay.raw?.channel === 'web';
@@ -191,8 +211,8 @@ router.get('/pay/:token', safe(async (req, res) => {
       <p class="muted">${pay.plan_kind === 'report'
         ? `Your full report for <b>${esc(pay.reg_no || 'your vehicle')}</b> has been sent.`
         : `Monitoring for <b>${esc(pay.reg_no || 'your vehicle')}</b> is active.`}
-      The confirmation and invoice are in your WhatsApp chat.</p>
-      ${waButton('Back to WhatsApp')}</div>`));
+      The confirmation and invoice are ${sentTo()}.</p>
+      ${wayOut(`${site}/app/reports`, { wa: 'Back to WhatsApp', web: 'Open my reports' })}</div>`));
   }
 
   /*
@@ -223,8 +243,9 @@ router.get('/pay/:token', safe(async (req, res) => {
   /* A payment started on the website must end on the website: sending a web
      customer to WhatsApp would hand them to a different product than the one
      they were using. The channel was recorded when the order was created. */
+  // ?paid=1 so the page they land on can say what has just been emailed to them.
   const backUrl = web
-    ? `${site}/app/${pay.reg_no ? `vehicle/${encodeURIComponent(pay.reg_no)}` : 'reports'}`
+    ? `${site}/app/${pay.reg_no ? `vehicle/${encodeURIComponent(pay.reg_no)}` : 'reports'}?paid=1`
     : null;
   const validDays = await settings.num('report_valid_days', 7);
   const planLine = isReport
@@ -232,12 +253,12 @@ router.get('/pay/:token', safe(async (req, res) => {
     : `GaadiPe Watch · ${pay.duration_days || 28} days`;
   const where = web ? 'in your GaadiPe account' : 'on WhatsApp';
   const benefits = isReport
-    ? [`Full report PDF ${where} — download again for ${validDays} days`,
+    ? [`Full report PDF ${where}, and emailed to you — download again for ${validDays} days`,
        'Loan / hypothecation, blacklist and NOC status',
        'Every challan, with offence, place and amount',
        'Insurer, policy and PUC references',
        `${pay.duration_days || 28} days of alerts: new challans and document expiry`,
-       `GST invoice ${where}`]
+       `GST invoice ${where}, and emailed to you`]
     : ['Daily checks on this vehicle',
        'A message the moment a new challan appears',
        'Reminders before insurance, PUC or fitness expires',
@@ -251,8 +272,9 @@ router.get('/pay/:token', safe(async (req, res) => {
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready in your GaadiPe account.`
     : isReport
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is on its way to your WhatsApp chat.`
-    : 'Your confirmation is on its way to your WhatsApp chat.'}
-  ${backUrl ? 'Taking you back to it…' : 'Opening WhatsApp…'}</p>
+    : 'Your confirmation is on its way to your WhatsApp chat.'}</p>
+  <p class="muted" id="mailedTo" style="margin:0 0 14px"></p>
+  <p class="muted" style="margin:0 0 14px">${backUrl ? 'Taking you back to it…' : 'Opening WhatsApp…'}</p>
   ${backUrl
     ? `<button onclick="location.href=${JSON.stringify(backUrl)}">See my report</button>`
     : waButton('Open WhatsApp')}
@@ -331,9 +353,18 @@ router.get('/pay/:token', safe(async (req, res) => {
   function done() {
     document.getElementById('main').style.display = 'none';
     document.getElementById('done').style.display = 'block';
+    // Say where it is going, in the address they typed a moment ago. It is the
+    // one place the buyer learns that the report and the invoice will be in
+    // their inbox — GaadiPe has no WhatsApp number to send them to.
+    var mail = (bemail.value || '').trim();
+    if (mail) {
+      document.getElementById('mailedTo').innerHTML =
+        'Your report and GST invoice are on their way to <b>' + mail.replace(/[<>&]/g, '') + '</b>.';
+    }
     window.scrollTo(0, 0);
     ${backUrl
-      ? `setTimeout(function () { location.href = ${JSON.stringify(backUrl)}; }, 900);`
+      // Long enough to read the line above, short enough not to feel stuck.
+      ? `setTimeout(function () { location.href = ${JSON.stringify(backUrl)}; }, 2600);`
       : 'setTimeout(openWhatsApp, 600);'}
   }
   // Billed-to first: saved on the payment, which is what the invoice prints.
@@ -492,22 +523,27 @@ router.get('/report/:token', safe(async (req, res) => {
   if (!r || !r.valid_until) {
     return res.status(404).send(page('Not found', `<div class="card">
       <h1>This report link is not valid</h1>
-      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+      <p class="muted">The link may have been mistyped or already replaced.
+      ${WA_ON() ? '' : 'Sign in to GaadiPe and open the vehicle — every report you have paid for is there.'}</p>
+      ${wayOut(`${SITE_URL}/app`, { web: 'Open my reports' })}</div>`));
   }
   if (new Date(r.valid_until) <= new Date()) {
     return res.status(410).send(page('Link expired', `<div class="card">
       <h1>This download link has expired</h1>
       <p class="muted">The report for <b>${esc(r.reg_no)}</b> could be downloaded until
-      ${esc(new Date(r.valid_until).toDateString())}. Send the vehicle number on WhatsApp to
-      check today's records.</p>
-      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+      ${esc(new Date(r.valid_until).toDateString())}. ${WA_ON()
+        ? "Send the vehicle number on WhatsApp to check today's records."
+        : "Check the vehicle again on GaadiPe for today's records. Your copy was also emailed to you when you bought it."}</p>
+      ${wayOut(`${SITE_URL}/app/vehicle/${encodeURIComponent(r.reg_no || '')}`, { web: 'Check it again' })}</div>`));
   }
   if (!r.pdf_path || !fs.existsSync(r.pdf_path)) {
     console.error('[report] %s file missing at %s', r.report_number, r.pdf_path);
     return res.status(404).send(page('Not available', `<div class="card">
       <h1>This report is not available right now</h1>
-      <p class="muted">Reply <b>report</b> on WhatsApp and it will be sent to you.</p>
-      <p><a href="https://wa.me/${WA_NUMBER}">Open WhatsApp</a></p></div>`));
+      <p class="muted">${WA_ON()
+        ? 'Reply <b>report</b> on WhatsApp and it will be sent to you.'
+        : 'The copy emailed to you when you bought it still works. If you cannot find it, write to support@gaadipe.in and it will be sent again.'}</p>
+      ${wayOut(`${SITE_URL}/app/vehicle/${encodeURIComponent(r.reg_no || '')}`, { web: 'Open GaadiPe' })}</div>`));
   }
   res.set('Cache-Control', 'private, no-store');
   res.download(r.pdf_path, `${r.report_number}.pdf`);
