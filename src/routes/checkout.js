@@ -223,8 +223,9 @@ router.get('/pay/:token', safe(async (req, res) => {
   /* A payment started on the website must end on the website: sending a web
      customer to WhatsApp would hand them to a different product than the one
      they were using. The channel was recorded when the order was created. */
+  // ?paid=1 so the page they land on can say what has just been emailed to them.
   const backUrl = web
-    ? `${site}/app/${pay.reg_no ? `vehicle/${encodeURIComponent(pay.reg_no)}` : 'reports'}`
+    ? `${site}/app/${pay.reg_no ? `vehicle/${encodeURIComponent(pay.reg_no)}` : 'reports'}?paid=1`
     : null;
   const validDays = await settings.num('report_valid_days', 7);
   const planLine = isReport
@@ -232,12 +233,12 @@ router.get('/pay/:token', safe(async (req, res) => {
     : `GaadiPe Watch · ${pay.duration_days || 28} days`;
   const where = web ? 'in your GaadiPe account' : 'on WhatsApp';
   const benefits = isReport
-    ? [`Full report PDF ${where} — download again for ${validDays} days`,
+    ? [`Full report PDF ${where}, and emailed to you — download again for ${validDays} days`,
        'Loan / hypothecation, blacklist and NOC status',
        'Every challan, with offence, place and amount',
        'Insurer, policy and PUC references',
        `${pay.duration_days || 28} days of alerts: new challans and document expiry`,
-       `GST invoice ${where}`]
+       `GST invoice ${where}, and emailed to you`]
     : ['Daily checks on this vehicle',
        'A message the moment a new challan appears',
        'Reminders before insurance, PUC or fitness expires',
@@ -251,8 +252,9 @@ router.get('/pay/:token', safe(async (req, res) => {
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready in your GaadiPe account.`
     : isReport
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is on its way to your WhatsApp chat.`
-    : 'Your confirmation is on its way to your WhatsApp chat.'}
-  ${backUrl ? 'Taking you back to it…' : 'Opening WhatsApp…'}</p>
+    : 'Your confirmation is on its way to your WhatsApp chat.'}</p>
+  <p class="muted" id="mailedTo" style="margin:0 0 14px"></p>
+  <p class="muted" style="margin:0 0 14px">${backUrl ? 'Taking you back to it…' : 'Opening WhatsApp…'}</p>
   ${backUrl
     ? `<button onclick="location.href=${JSON.stringify(backUrl)}">See my report</button>`
     : waButton('Open WhatsApp')}
@@ -331,9 +333,18 @@ router.get('/pay/:token', safe(async (req, res) => {
   function done() {
     document.getElementById('main').style.display = 'none';
     document.getElementById('done').style.display = 'block';
+    // Say where it is going, in the address they typed a moment ago. It is the
+    // one place the buyer learns that the report and the invoice will be in
+    // their inbox — GaadiPe has no WhatsApp number to send them to.
+    var mail = (bemail.value || '').trim();
+    if (mail) {
+      document.getElementById('mailedTo').innerHTML =
+        'Your report and GST invoice are on their way to <b>' + mail.replace(/[<>&]/g, '') + '</b>.';
+    }
     window.scrollTo(0, 0);
     ${backUrl
-      ? `setTimeout(function () { location.href = ${JSON.stringify(backUrl)}; }, 900);`
+      // Long enough to read the line above, short enough not to feel stuck.
+      ? `setTimeout(function () { location.href = ${JSON.stringify(backUrl)}; }, 2600);`
       : 'setTimeout(openWhatsApp, 600);'}
   }
   // Billed-to first: saved on the payment, which is what the invoice prints.
