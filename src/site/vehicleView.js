@@ -34,10 +34,15 @@ const maskNumber = report.maskNumber;
  * running; when it expired, what else is due, what the challans come to and
  * whether there is a loan on it are the report.
  */
-function basic(data) {
+function basic(data, { detail = 'count' } = {}) {
   const rc = data.rc || {};
   const c = data.challans || {};
   const docs = report.documentsOf(rc);
+  const expired = docs.filter((d) => d.days < 0).map((d) => d.label);
+  const dueSoon = docs.filter((d) => d.days >= 0 && d.days <= 60).map((d) => d.label);
+  const pending = c.pending_count ?? 0;
+  // How many things are wrong, counted but not named.
+  const attention = expired.length + dueSoon.length + (pending > 0 ? 1 : 0);
 
   return {
     reg_no: data.vehicle_number,
@@ -60,11 +65,23 @@ function basic(data) {
      * are the report. A label without a date cannot be acted on: it can only be
      * verified by buying, or by asking the seller a much better question.
      */
-    found: {
-      expired: docs.filter(d => d.days < 0).map(d => d.label),
-      due_soon: docs.filter(d => d.days >= 0 && d.days <= 60).map(d => d.label),
+    /*
+     * HOW MUCH THE FREE CHECK GIVES AWAY (user, 2026-09-22), by free_view_detail:
+     *   labels  which documents lapsed, by name, and the challan count
+     *   count   only how many things need attention
+     *   none    nothing about what is wrong — identity only
+     * Naming them answered the buyer's question for free, and they left.
+     */
+    detail,
+    found: detail === 'none' ? { has_record: docs.length > 0 } : detail === 'count' ? {
+      needs_attention: attention,
       documents_total: docs.length,
-      challans_pending: c.pending_count ?? 0,
+      has_record: docs.length > 0,
+    } : {
+      expired,
+      due_soon: dueSoon,
+      documents_total: docs.length,
+      challans_pending: pending,
       has_record: docs.length > 0,
     },
     /* Named so the buyer knows what they are buying — with no answers in it. */
