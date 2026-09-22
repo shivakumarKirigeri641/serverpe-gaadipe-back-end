@@ -142,7 +142,7 @@ async function notifyPaid(result) {
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const fmt = (d) => `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
   const ends = fmt(result.endsOn);
-  const amount = (result.payment.amount_paise / 100).toFixed(0);
+  const amount = (result.payment.amount_paise / 100).toFixed(result.payment.amount_paise % 100 ? 2 : 0);  // ₹10.62 stays ₹10.62
 
   if (result.plan?.kind === 'report') {
     await notifyReportPaid(result, user, veh, { ends, amount });
