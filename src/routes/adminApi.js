@@ -932,6 +932,8 @@ router.get('/broadcasts', safe(async (req, res) => {
     templates: await broadcasts.templates({ refresh: req.query.refresh === '1' }),
     recipients: await broadcasts.recipients({ filter: req.query.filter || 'all', q: req.query.q || '' }),
     broadcasts: await broadcasts.list(),
+    // Which field fills which blank, per template — never a general guess.
+    defaults: await broadcasts.defaults(),
     whatsapp_enabled: require('../config').config.whatsapp.enabled,
     test_mode: require('../config').config.whatsapp.allowedRecipients,
   });

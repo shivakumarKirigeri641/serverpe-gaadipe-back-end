@@ -124,7 +124,7 @@ async function recipients({ filter = 'all', q = '', limit = 500 } = {}) {
   const where = filterWhere(filter);
   const term = String(q || '').trim().toLowerCase();
   const { rows } = await db.query(
-    `SELECT u.id, u.mobile, u.display_name, u.created_at,
+    `SELECT u.id, u.mobile, u.display_name, u.wa_profile_name, u.created_at,
             (SELECT v.reg_no FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
               WHERE uv.user_id = u.id ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 1) AS last_vehicle,
             (SELECT max(uv.last_checked_at) FROM user_vehicles uv WHERE uv.user_id = u.id) AS last_checked,
@@ -141,15 +141,53 @@ async function recipients({ filter = 'all', q = '', limit = 500 } = {}) {
   return { filters: FILTERS, fields: FIELDS, rows: rows.map((r) => ({ ...r, id: String(r.id) })) };
 }
 
+/* ──────────────────────────────────── what fills a template's blanks ── */
+
+/*
+ * WHICH FIELD GOES IN WHICH BLANK — PER TEMPLATE, NEVER IN GENERAL.
+ *
+ * "{{1}} is their name and {{2}} is their vehicle" is true of the start-here
+ * templates and of nothing else: the next template's {{1}} could be an amount,
+ * a date or a report number, and a panel that quietly pre-fills it with a name
+ * would send that name as the amount. So a template is pre-filled only when it
+ * is named here, or when the same template has been broadcast before — and
+ * anything else starts blank and has to be chosen.
+ */
+const KNOWN = {
+  gp_starthere_en_v1: ['first_name', 'last_vehicle'],
+  gp_starthere_hn_v1: ['first_name', 'last_vehicle'],
+};
+
+/** Suggested mapping per template: what was used last time, else what we know. */
+async function defaults() {
+  const { rows } = await db.query(
+    `SELECT DISTINCT ON (template_name, language) template_name, language, variables
+       FROM whatsapp_broadcasts ORDER BY template_name, language, id DESC`);
+  const out = {};
+  for (const [name, vars] of Object.entries(KNOWN)) out[`${name}|en`] = vars;
+  // A template's own history wins over the table above: it is what this admin
+  // actually chose the last time they sent it.
+  for (const r of rows) out[`${r.template_name}|${r.language}`] = r.variables || [];
+  // The Hindi start-here template is the same shape as the English one.
+  for (const [name, vars] of Object.entries(KNOWN)) {
+    if (!out[`${name}|hi`]) out[`${name}|hi`] = vars;
+  }
+  return out;
+}
+
 /* ──────────────────────────────────────────────────── the broadcast ── */
 
 /** One person's parameters, in {{1}}, {{2}} … order. */
 function paramsFor(person, variables) {
   return (variables || []).map((v) => {
     switch (v) {
+      // Meta gives no profile name before someone messages us, so a name can
+      // only come from our own record: what they typed on the site, or — if
+      // they have ever written to us — the name WhatsApp showed then.
       case 'first_name':
-        return String(person.display_name || '').trim().split(/\s+/)[0] || 'there';
-      case 'full_name': return String(person.display_name || '').trim() || 'there';
+        return String(person.display_name || person.wa_profile_name || '').trim().split(/\s+/)[0] || 'there';
+      case 'full_name':
+        return String(person.display_name || person.wa_profile_name || '').trim() || 'there';
       case 'last_vehicle': return person.last_vehicle || 'your vehicle';
       case 'mobile': return String(person.mobile || '');
       // Anything else is literal text the admin typed.
@@ -196,7 +234,7 @@ async function peopleByMobile(mobiles) {
     .map((m) => String(m).replace(/\D/g, '').slice(-10)).filter((m) => m.length === 10))];
   if (!clean.length) return [];
   const { rows } = await db.query(
-    `SELECT u.id, u.mobile, u.display_name,
+    `SELECT u.id, u.mobile, u.display_name, u.wa_profile_name,
             (SELECT v.reg_no FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
               WHERE uv.user_id = u.id ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 1) AS last_vehicle
        FROM users u
@@ -268,4 +306,4 @@ async function targets(id, { limit = 500 } = {}) {
   return rows.map((r) => ({ ...r, id: String(r.id) }));
 }
 
-module.exports = { FIELDS, FILTERS, templates, recipients, preview, queue, cancel, list, targets, paramsFor };
+module.exports = { FIELDS, FILTERS, KNOWN, defaults, templates, recipients, preview, queue, cancel, list, targets, paramsFor };
