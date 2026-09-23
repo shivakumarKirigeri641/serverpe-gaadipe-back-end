@@ -373,4 +373,31 @@ async function targets(id, { limit = 500 } = {}) {
   return rows.map((r) => ({ ...r, id: String(r.id) }));
 }
 
-module.exports = { FIELDS, FILTERS, KNOWN, defaults, templates, stored, recipients, preview, queue, cancel, list, targets, paramsFor };
+/**
+ * Record what Meta decided about a template.
+ *
+ * Normally the live list answers this and nothing needs saying. But a token
+ * belonging to a deleted app cannot read that list, and approvals arrive one
+ * at a time over days — so the panel can set it by hand until the credentials
+ * are replaced, at which point Meta's answer overwrites whatever is here.
+ *
+ * This records a decision; it never makes one. Marking something APPROVED that
+ * Meta refused does not make it send — it fails per message, and the failure
+ * is visible on the broadcast.
+ */
+async function setStatus(name, language, status) {
+  const allowed = ['APPROVED', 'PENDING', 'REJECTED', 'PAUSED', 'DISABLED'];
+  const clean = String(status || '').toUpperCase();
+  if (!allowed.includes(clean)) return { ok: false, error: 'status', message: `Status must be one of ${allowed.join(', ')}.` };
+  const row = await db.one(
+    `UPDATE wa_templates SET approval_status = $3, modified_at = now()
+      WHERE template_name = $1 AND language = $2
+      RETURNING template_name, language, approval_status`,
+    [String(name || ''), String(language || 'en'), clean]);
+  if (!row) return { ok: false, error: 'unknown', message: 'No such template is recorded.' };
+  cache = { at: 0, rows: null };            // the list must be read again
+  console.log('[broadcast] %s (%s) marked %s', row.template_name, row.language, clean);
+  return { ok: true, template: row };
+}
+
+module.exports = { FIELDS, FILTERS, KNOWN, defaults, templates, stored, setStatus, recipients, preview, queue, cancel, list, targets, paramsFor };

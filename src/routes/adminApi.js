@@ -1027,6 +1027,19 @@ router.get('/broadcasts', safe(async (req, res) => {
   });
 }));
 
+/*
+ * Record Meta's decision about a template. Needed while the API token belongs
+ * to a deleted app and the live list cannot be read; once it can, Meta's
+ * answer overwrites this on every refresh.
+ */
+router.post('/broadcasts/templates/status', needs('settings'), safe(async (req, res) => {
+  const out = await broadcasts.setStatus(req.body?.name, req.body?.language || 'en', req.body?.status);
+  if (!out.ok) return res.status(400).json(out);
+  await auth.audit({ adminId: req.admin.id, action: 'template_status_set', ip: ipOf(req),
+    detail: { template: req.body?.name, language: req.body?.language || 'en', status: req.body?.status } });
+  res.json(out);
+}));
+
 router.get('/broadcasts/:id/targets', safe(async (req, res) =>
   res.json({ targets: await broadcasts.targets(String(req.params.id).replace(/\D/g, '') || '0') })));
 
