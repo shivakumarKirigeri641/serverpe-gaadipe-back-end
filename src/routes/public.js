@@ -105,6 +105,38 @@ router.post('/policies/refresh', (_req, res) => {
   res.json({ success: true, message: 'Policy cache cleared.' });
 });
 
+
+/* ─────────────────────── support tickets (user, 2026-09-23) ─────────────── */
+
+/*
+ * The support form opened from a WhatsApp message. No sign-in: the token in
+ * the link identifies the customer, who has already proved who they are by
+ * messaging from their own number. It expires, and it is looked up rather
+ * than decoded — by itself it identifies nobody.
+ */
+const tickets = require('../support/tickets');
+
+/* Express 4 does not catch a rejected promise from an async handler, and an
+   unhandled rejection stops the process. */
+const safe = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
+  console.error('[public] %s %s: %s', req.method, req.path, e.message);
+  if (!res.headersSent) res.status(500).json({ ok: false, error: 'server_error' });
+});
+
+router.get('/support/:token', safe(async (req, res) => {
+  const who = await tickets.whoIs(req.params.token);
+  if (!who) return res.status(404).json({ ok: false, error: 'link_expired' });
+  // Only what the form needs to greet them; never the whole account.
+  res.json({ ok: true, name: who.name, email: who.email, reg_no: who.reg_no,
+             mobile_masked: `${String(who.mobile).slice(0, 2)}****${String(who.mobile).slice(-2)}` });
+}));
+
+router.post('/support/:token', express.json(), safe(async (req, res) => {
+  const out = await tickets.create({ token: req.params.token, ...(req.body || {}) });
+  if (!out.ok) return res.status(out.error === 'link_expired' ? 410 : 400).json(out);
+  res.json(out);
+}));
+
 module.exports = router;
 // The admin panel clears this after editing policy text: an edit nobody can
 // see for ten minutes looks like an edit that failed.

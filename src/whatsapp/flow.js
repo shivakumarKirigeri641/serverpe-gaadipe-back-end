@@ -71,6 +71,8 @@ const BTN = {
   DOWNLOAD_REPORT: 'download_report',
   FEEDBACK: 'feedback',
   REFER: 'refer',
+  SUPPORT: 'support',
+  MY_REPORTS: 'my_reports',
   INVOICE: 'invoice',
   MENU: 'menu',
 };
@@ -84,6 +86,102 @@ const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
  * the first three lives here. Each row carries a button id the router already
  * understands, which is why adding one costs nothing anywhere else.
  */
+/*
+ * THE THREE DOORS. Shown after agreeing, and again after every action.
+ *
+ * Three is not a style choice — WhatsApp allows exactly three reply buttons,
+ * and a reply button is one tap where a list is two. Anything rarer lives
+ * behind Support or the longer menu.
+ */
+async function doors(mobile, body) {
+  return send.buttons(mobile, body, [
+    { id: BTN.CHECK_ANOTHER, title: 'Check vehicle' },
+    { id: BTN.MY_REPORTS,    title: 'My vehicle reports' },
+    { id: BTN.SUPPORT,       title: 'Support' },
+  ]);
+}
+
+/**
+ * Support: a link that opens the form already knowing who is writing.
+ *
+ * Six round trips of buttons to collect a query, a name and an email loses
+ * people at every one. One screen collects it all, and the reply comes back
+ * here. The link expires, and a fresh one is made each time — a link forwarded
+ * to a friend should stop working.
+ */
+async function sendSupportLink(mobile) {
+  const tickets = require('../support/tickets');
+  const user = await store.upsertUser(mobile);
+  const reg = await pendingReg(mobile);
+  const { url, hours } = await tickets.linkFor({ userId: user.id, mobile, regNo: reg });
+
+  await send.text(mobile,
+    '💬 *Support*\n\n'
+    + 'Tell us what is wrong and we will get back to you here, with a ticket number.\n\n'
+    + `Open this to write to us (the link works for ${hours} hours):\n${url}`);
+
+  await doors(mobile, 'Anything else?');
+}
+
+/*
+ * THE VEHICLES THEY HAVE CHECKED, as a dropdown.
+ *
+ * WhatsApp allows ten list rows, so the ten most recent are offered and
+ * anyone with more is told they can type the number — which is quicker than
+ * paging through a list anyway. Each row says whether the full report is
+ * already theirs, so the choice is informed before it is made.
+ */
+async function myVehicles(mobile) {
+  const user = await store.upsertUser(mobile);
+  const { rows } = await db.query(
+    `SELECT v.reg_no, v.maker, v.model, uv.last_checked_at,
+            EXISTS (SELECT 1 FROM vehicle_reports r
+                     WHERE r.user_id = uv.user_id AND r.reg_no = v.reg_no
+                       AND r.valid_until > now()) AS has_report,
+            EXISTS (SELECT 1 FROM subscriptions sb
+                     WHERE sb.user_id = uv.user_id AND sb.vehicle_id = uv.vehicle_id
+                       AND sb.is_active AND sb.ends_on >= CURRENT_DATE) AS watched
+       FROM user_vehicles uv
+       JOIN vehicles v ON v.id = uv.vehicle_id
+      WHERE uv.user_id = $1
+      ORDER BY uv.last_checked_at DESC NULLS LAST
+      LIMIT 11`, [user.id]);
+
+  if (!rows.length) {
+    await doors(mobile,
+      'You have not checked any vehicle yet.\n\n'
+      + 'Send me a vehicle number and I will look it up — the basics are free.');
+    return;
+  }
+
+  const more = rows.length > 10;
+  const shown = rows.slice(0, 10);
+  const out = await send.list(mobile, {
+    body: more
+      ? 'Which vehicle? These are your ten most recent — for any other, just send me its number.'
+      : 'Which vehicle?',
+    button: 'My vehicles',
+    sectionTitle: 'Checked by you',
+    rows: shown.map((r) => ({
+      id: `veh:${r.reg_no}`,
+      title: r.reg_no,
+      description: [
+        [r.maker, r.model].filter(Boolean).join(' ').slice(0, 30),
+        r.has_report ? 'full report ready' : 'basic only',
+      ].filter(Boolean).join(' · '),
+    })),
+  });
+
+  // A list needs an open 24-hour window. If it is shut, say it in plain text
+  // rather than leaving them with nothing.
+  if (!out.ok) {
+    await send.text(mobile,
+      'Your vehicles:\n\n'
+      + shown.map((r) => `• *${r.reg_no}* — ${r.has_report ? 'full report ready' : 'basic only'}`).join('\n')
+      + '\n\nSend me the number of the one you want.');
+  }
+}
+
 async function mainMenu(mobile, body = 'What would you like to do?') {
   const out = await send.list(mobile, {
     body,
@@ -970,10 +1068,10 @@ async function handle(session, message, mobile) {
         await recordConsent(mobile, 'owner', ['terms', 'privacy', 'refund']);
         await funnel(mobile, 'agreed');
         await setState(mobile, 'owner_start', 'consent given');
-        await send.text(mobile,
+        await doors(mobile,
           'Thank you. ✅\n\n'
-          + 'Send me the vehicle number you want to check.\n\n'
-          + 'For example: *KA31N8147*');
+          + 'What would you like to do?\n\n'
+          + '_To check a vehicle you can also just send its number, like *KA31N8147*._');
         return;
 
       case BTN.AGREE_PARTNER:
@@ -1345,6 +1443,14 @@ async function handle(session, message, mobile) {
         await sendReports(mobile);
         return;
       }
+
+      case BTN.MY_REPORTS:
+        await myVehicles(mobile);
+        return;
+
+      case BTN.SUPPORT:
+        await sendSupportLink(mobile);
+        return;
 
       case BTN.REFER:
         await sendReferral(mobile);

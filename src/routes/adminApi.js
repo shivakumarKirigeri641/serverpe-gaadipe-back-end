@@ -978,6 +978,38 @@ router.post('/customer-emails/campaigns/:id/cancel', needs('settings'), safe(asy
   res.json(out);
 }));
 
+/* ──────────────────────── support tickets (user, 2026-09-23) ──────────── */
+
+const tickets = require('../support/tickets');
+
+router.get('/tickets', safe(async (req, res) => {
+  const status = ['open', 'replied', 'closed'].includes(req.query.status) ? req.query.status : null;
+  res.json(await tickets.list({ status, q: req.query.q || '' }));
+}));
+
+/*
+ * The answer goes back to the chat it came from. Outside the 24-hour window
+ * that has to be the approved template, so the reply is recorded whether or
+ * not it could be delivered — an answer that did not send is still an answer
+ * the panel must show as given.
+ */
+router.post('/tickets/:id/reply', needs('settings'), safe(async (req, res) => {
+  const out = await tickets.reply(String(req.params.id).replace(/\D/g, '') || '0',
+    req.body?.text, req.admin.id);
+  if (!out.ok) return res.status(400).json(out);
+  await auth.audit({ adminId: req.admin.id, action: 'ticket_replied', ip: ipOf(req),
+    detail: { ticket: out.ticket_no, delivered: out.delivered, reason: out.reason || null } });
+  res.json(out);
+}));
+
+router.post('/tickets/:id/close', needs('settings'), safe(async (req, res) => {
+  await db.query(`UPDATE contact_messages SET status = 'closed' WHERE id = $1`,
+    [String(req.params.id).replace(/\D/g, '') || '0']);
+  await auth.audit({ adminId: req.admin.id, action: 'ticket_closed', ip: ipOf(req),
+    detail: { id: req.params.id } });
+  res.json({ ok: true });
+}));
+
 /* ───────────────────── WhatsApp template broadcasts (user, 2026-09-23) ── */
 
 const broadcasts = require('../admin/broadcasts');
