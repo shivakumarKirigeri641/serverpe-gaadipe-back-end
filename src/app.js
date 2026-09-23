@@ -215,6 +215,8 @@ app.listen(config.port, () => {
   require('./jobs/customerMail').start(Number(process.env.CUSTOMER_MAIL_TICK_SECONDS) || 60);
   // QuizPe referrals: has a referred parent bought premium? (read-only on QuizPe)
   require('./jobs/referrals').start();
+  // Broadcasts the panel has queued, a few template messages a minute.
+  require('./jobs/broadcast').start(Number(process.env.BROADCAST_TICK_SECONDS) || 60);
   // Page, click and action history is kept activity_retention_days, then deleted.
   const pruneActivity = () => require('./site/activity').prune().catch((e) => console.warn('[activity] prune:', e.message));
   setInterval(pruneActivity, 6 * 60 * 60 * 1000).unref();

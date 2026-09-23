@@ -922,6 +922,48 @@ router.post('/customer-emails/campaigns/:id/cancel', needs('settings'), safe(asy
   res.json(out);
 }));
 
+/* ───────────────────── WhatsApp template broadcasts (user, 2026-09-23) ── */
+
+const broadcasts = require('../admin/broadcasts');
+
+/* The approved templates, the people who can be sent to, and what has gone. */
+router.get('/broadcasts', safe(async (req, res) => {
+  res.json({
+    templates: await broadcasts.templates({ refresh: req.query.refresh === '1' }),
+    recipients: await broadcasts.recipients({ filter: req.query.filter || 'all', q: req.query.q || '' }),
+    broadcasts: await broadcasts.list(),
+    // Which field fills which blank, per template — never a general guess.
+    defaults: await broadcasts.defaults(),
+    whatsapp_enabled: require('../config').config.whatsapp.enabled,
+    test_mode: require('../config').config.whatsapp.allowedRecipients,
+  });
+}));
+
+router.get('/broadcasts/:id/targets', safe(async (req, res) =>
+  res.json({ targets: await broadcasts.targets(String(req.params.id).replace(/\D/g, '') || '0') })));
+
+/* What each chosen customer would receive, before anything is sent. */
+router.post('/broadcasts/preview', needs('settings'), safe(async (req, res) =>
+  res.json(await broadcasts.preview(req.body || {}))));
+
+/* Send: typed confirmation, audited. Queued, then sent a few a minute. */
+router.post('/broadcasts/send', needs('settings'), safe(async (req, res) => {
+  if (req.body?.confirm !== 'SEND') return res.status(400).json({ error: 'confirm', message: 'Type SEND to confirm.' });
+  const out = await broadcasts.queue(req.body || {}, req.admin.id);
+  if (!out.ok) return res.status(400).json(out);
+  await auth.audit({ adminId: req.admin.id, action: 'broadcast_queued', ip: ipOf(req),
+    detail: { broadcast_id: out.id, template: req.body.template_name,
+              language: req.body.language, recipients: out.recipients } });
+  res.json(out);
+}));
+
+router.post('/broadcasts/:id/cancel', needs('settings'), safe(async (req, res) => {
+  const out = await broadcasts.cancel(String(req.params.id).replace(/\D/g, '') || '0');
+  await auth.audit({ adminId: req.admin.id, action: 'broadcast_cancelled', ip: ipOf(req),
+    detail: { broadcast_id: req.params.id, stopped: out.stopped } });
+  res.json(out);
+}));
+
 /* ────────────────────────────── free reports, one by one (2026-09-21) ── */
 
 const freeReports = require('../admin/freeReports');
