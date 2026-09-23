@@ -28,6 +28,39 @@ const reportPlan = () => db.one(
   `SELECT * FROM plans WHERE code = 'REPORT19' AND is_active LIMIT 1`);
 
 /**
+ * What a full report costs THIS customer for THIS vehicle (user, 2026-09-23).
+ *
+ * ₹19 the first time, ₹9 + GST to renew the same vehicle — because a renewal
+ * buys 28 more days of the same watching but issues no report, no PDF and no
+ * lookup for one. Roughly half the price for roughly seven-eighths of the
+ * cost, which is a real discount rather than a trick.
+ *
+ * "First" is a property of the VEHICLE, not the customer: somebody renewing
+ * one scooter and checking a friend's car pays ₹10.62 and ₹19 on the same day.
+ * That rule already existed for the watch plan; this is the same rule for
+ * reports, in one place, so no screen can quote a price the checkout will not
+ * honour.
+ *
+ * A referral credit still wins if it is cheaper — the customer gets the better
+ * of the two, never the worse.
+ */
+async function reportPriceFor(userId, vehicleId, { creditPaise = null } = {}) {
+  const plan = await reportPlan();
+  if (!plan) return null;
+
+  const priorPaid = vehicleId ? await db.one(
+    `SELECT 1 FROM payments
+      WHERE user_id = $1 AND status = 'paid' AND amount_paise > 0
+        AND (raw->>'vehicle_id')::bigint = $2
+      LIMIT 1`, [userId, vehicleId]) : null;
+
+  const renewal = Boolean(priorPaid) && Number(plan.renewal_paise) > 0;
+  const listed = renewal ? Number(plan.renewal_paise) : Number(plan.price_paise);
+  const paise = creditPaise ? Math.min(Number(creditPaise), listed) : listed;
+  return { plan, paise, renewal, listed };
+}
+
+/**
  * What this customer owes for this vehicle right now.
  *
  * First payment and renewal are different prices, and "first" is a property of
@@ -253,4 +286,4 @@ async function refund({ razorpayPaymentId, refundId, raw }) {
   return result;
 }
 
-module.exports = { watchPlan, reportPlan, priceFor, createPending, activate, refund };
+module.exports = { watchPlan, reportPlan, priceFor, reportPriceFor, createPending, activate, refund };

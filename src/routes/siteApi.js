@@ -655,7 +655,9 @@ router.post('/buy', safe(async (req, res) => {
    * reward — Rs.9 + GST (report_credits.price_paise). The credit is attached to
    * this payment now and spent only when it is paid (billing.activate).
    */
-  const amountPaise = reducedCredit ? Math.min(reducedCredit.price_paise, plan.price_paise) : plan.price_paise;
+  const priced = await billing.reportPriceFor(req.user.id, vehicle.id,
+    { creditPaise: reducedCredit?.price_paise || null });
+  const amountPaise = priced.paise;
 
   // An unpaid order for the same vehicle AT THE SAME PRICE is reused rather than opened twice.
   let row = await db.one(
