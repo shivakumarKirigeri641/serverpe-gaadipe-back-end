@@ -117,6 +117,12 @@ async function pulse({ sinceMessageId = null } = {}) {
     active_24h: Number(counts.active_24h),
     paying_now: Number(counts.paying_now),
     checks_15m: Number(counts.checks_15m),
+    /*
+     * Whether the chat is on at all. Without this the Live screen cannot tell
+     * "nobody is messaging" from "messaging is switched off", and it shows an
+     * empty panel that reads as broken.
+     */
+    whatsapp_on: require('../config').config.whatsapp.enabled,
     at: new Date().toISOString(),
   };
 }
