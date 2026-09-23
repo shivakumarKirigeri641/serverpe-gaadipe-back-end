@@ -83,7 +83,7 @@ async function due(limit = 20) {
   return rows;
 }
 
-function mailFor(person, { regNo, endsOn, paise }) {
+function mailFor(person, { regNo, endsOn, paise, days }) {
   const name = String(person.display_name || person.wa_profile_name || '').split(' ')[0] || 'there';
   const site = C.SITE();
   const out = T.layout({
@@ -96,7 +96,7 @@ function mailFor(person, { regNo, endsOn, paise }) {
     stats: [['Vehicle', regNo], ['Ends', istDay(endsOn)], ['Renew for', money(paise)]],
     blocks: [`<div style="font-size:13px;line-height:1.7;color:#0b1f1c;background:#f6faf9;
       border:1px solid #e3ecea;border-radius:10px;padding:14px 16px;">
-      <b>Another 28 days for ${T.esc(money(paise))}</b> — less than half what the first report cost,
+      <b>Another ${T.esc(String(days))} days for ${T.esc(money(paise))}</b> — less than half what the first report cost,
       because the report is already yours. You keep getting told the moment a new challan appears,
       and before any document runs out.</div>`,
       `<div style="font-size:13px;line-height:1.6;color:#41514e;">
@@ -135,7 +135,8 @@ async function runOnce({ limit = 20 } = {}) {
         price_paise: priced.paise,
       })]);
 
-    const payload = { regNo: r.reg_no, endsOn: r.ends_on, paise: priced.paise };
+    const payload = { regNo: r.reg_no, endsOn: r.ends_on, paise: priced.paise,
+                      days: priced.plan.duration_days || 28 };
 
     if (r.email && r.email_verified_at && !r.email_unsubscribed_at) {
       const out = await C.deliver(r.email, mailFor(r, payload), r.email_token);
@@ -151,7 +152,9 @@ async function runOnce({ limit = 20 } = {}) {
       const out = await send.template(
         r.mobile,
         await settings.get('wa_template_renewal', 'gp_renewal_en_v1'),
-        [name, r.reg_no, istDay(r.ends_on), money(priced.paise)],
+        // {{4}} is the window and {{5}} the price: Meta numbers variables in the
+        // order they appear, and the days figure comes first in the sentence.
+        [name, r.reg_no, istDay(r.ends_on), String(priced.plan.duration_days || 28), money(priced.paise)],
         { language: await settings.get('wa_template_language', 'en') },
       ).catch(() => ({ ok: false }));
       if (out.ok) told += 1;
