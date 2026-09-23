@@ -749,7 +749,7 @@ async function reportMenu(mobile, regNo, data, bought) {
     + lockedLines(data).join('\n')
     + `\n\n*${price}* — one-time\n`
     + `📄 PDF report on WhatsApp — download again for ${validDays} days\n`
-    + `🔔 ${plan.duration_days} days of alerts — new challans, and insurance, PUC, `
+    + `🔔 New challans watched ${plan.duration_days} days, and a warning before insurance, PUC, `
     + 'road tax, fitness or permit about to expire\n\n'
     + '_* Price includes GST. Owner details are never shown. Nothing renews automatically._',
     [{ id: BTN.BUY_REPORT,    title: `Full report ${price}*` },
@@ -1087,7 +1087,7 @@ async function handle(session, message, mobile) {
           await setState(mobile, 'owner_menu', 'trial already finished');
           await send.buttons(mobile,
             'Your free trial has already finished, so I cannot add another vehicle to it.\n\n'
-            + `To watch *${reg}*, it is ₹${price} for 28 days. Checking any vehicle stays free.`,
+            + `To watch *${reg}*, it is ₹${price}. Checking any vehicle stays free.`,
             [{ id: BTN.SUBSCRIBE,     title: `Continue for ₹${price}` },
              { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
           return;

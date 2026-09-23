@@ -257,7 +257,8 @@ router.get('/pay/:token', safe(async (req, res) => {
        'Loan / hypothecation, blacklist and NOC status',
        'Every challan, with offence, place and amount',
        'Insurer, policy and PUC references',
-       `${pay.duration_days || 28} days of alerts: new challans and document expiry`,
+       `New challans watched for ${pay.duration_days || 90} days`,
+       'A warning before insurance, PUC, road tax or fitness expires — no end date',
        `GST invoice ${where}, and emailed to you`]
     : ['Daily checks on this vehicle',
        'A message the moment a new challan appears',

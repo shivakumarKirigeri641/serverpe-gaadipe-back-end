@@ -792,6 +792,62 @@ router.get('/health', safe(async (_req, res) => {
   });
 }));
 
+/* ───────────────────── GaadiPe's own referrals (user, 2026-09-23) ── */
+
+/*
+ * Refer a friend who also has a vehicle. Shown alongside the QuizPe history
+ * rather than replacing it: QuizPe is switched off, not deleted, and anyone
+ * still holding a credit from it has to remain answerable for.
+ */
+router.get('/gp-referrals', safe(async (req, res) => {
+  const status = ['tapped', 'signed_up', 'rewarded', 'expired', 'not_eligible'].includes(req.query.status)
+    ? req.query.status : null;
+  const { rows } = await db.query(
+    `SELECT r.id, r.code, r.mobile_masked, r.status, r.status_reason, r.device_id,
+            r.signed_up_at, r.rewarded_at, r.expires_at, r.created_at, r.payment_id,
+            u.id AS referrer_id, u.mobile AS referrer_mobile,
+            coalesce(u.display_name, u.wa_profile_name) AS referrer_name,
+            f.mobile AS referred_mobile,
+            c.id AS credit_id, c.used_at, c.used_reg_no, c.revoked_at, c.revoked_reason,
+            c.expires_at AS credit_expires_at,
+            p.amount_paise
+       FROM gaadipe_referrals r
+       JOIN users u ON u.id = r.referrer_id
+       LEFT JOIN users f ON f.id = r.referred_user_id
+       LEFT JOIN report_credits c ON c.gaadipe_referral_id = r.id
+       LEFT JOIN payments p ON p.id = r.payment_id
+      WHERE ($1::text IS NULL OR r.status = $1)
+      ORDER BY r.id DESC LIMIT 300`, [status]);
+  const totals = await db.one(
+    `SELECT count(*)::int AS referrals,
+            count(*) FILTER (WHERE status = 'signed_up')::int AS waiting,
+            count(*) FILTER (WHERE status = 'rewarded')::int AS rewarded,
+            count(*) FILTER (WHERE status = 'expired')::int AS expired,
+            count(*) FILTER (WHERE status = 'not_eligible')::int AS not_eligible,
+            count(DISTINCT referrer_id)::int AS referrers,
+            (SELECT count(*) FROM report_credits
+              WHERE source = 'gaadipe_referral' AND used_at IS NOT NULL)::int AS credits_used,
+            (SELECT count(*) FROM report_credits
+              WHERE source = 'gaadipe_referral' AND used_at IS NULL AND revoked_at IS NULL
+                AND expires_at > now())::int AS credits_waiting,
+            coalesce((SELECT sum(p.amount_paise) FROM gaadipe_referrals r2
+                       JOIN payments p ON p.id = r2.payment_id
+                      WHERE r2.status = 'rewarded'), 0)::int AS revenue_paise
+       FROM gaadipe_referrals`);
+  res.json({
+    rows: rows.map((r) => ({ ...r, id: String(r.id), referrer_id: String(r.referrer_id),
+      // The referred person's number is masked here too: the panel shows who
+      // was brought in, not a list of numbers to contact.
+      referred_mobile: undefined,
+      credit_id: r.credit_id ? String(r.credit_id) : null })),
+    totals,
+    enabled: String(await settings.get('gaadipe_referral_enabled', 'true')).toLowerCase() !== 'false',
+    monthly_cap: await settings.num('gaadipe_referral_monthly_cap', 10),
+    window_days: await settings.num('gaadipe_referral_window_days', 30),
+    credit_valid_days: await settings.num('referral_credit_valid_days', 90),
+  });
+}));
+
 /* ─────────────────────────────── QuizPe referrals (user, 2026-09-21) ── */
 
 router.get('/referrals', safe(async (req, res) => {

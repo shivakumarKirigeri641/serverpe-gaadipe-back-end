@@ -164,8 +164,8 @@ async function notifyPaid(result) {
     'Payment received ✅\n\n'
     + `₹${amount} · ${veh ? `*${veh.reg_no}*` : 'your plan'}\n`
     + `Watching until *${ends}*\n\n`
-    + 'I check every day and message you the moment a new challan appears or a '
-    + 'document is close to expiring.\n\n'
+    + 'I check for new challans, and I will warn you before insurance, PUC, road tax '
+    + 'or fitness runs out — however far off that is.\n\n'
     + 'Nothing will be charged automatically — I will remind you before it ends.');
 
   // 2. The vehicle as it stands today — as a message to read now, and as a
@@ -231,9 +231,11 @@ async function notifyReportPaid(result, user, veh, { ends, amount }) {
   }
 
   await send.text(user.mobile,
-    `🔔 Alerts are on for *${veh ? veh.reg_no : 'your vehicle'}* until *${ends}*.\n\n`
-    + 'I will message you if a new challan appears, or before insurance, PUC, road tax, '
-    + 'fitness or permit expires. Nothing renews automatically.\n\n'
+    `🔔 *${veh ? veh.reg_no : 'Your vehicle'}* is being watched.\n\n`
+    + `New challans: I check until *${ends}*.\n`
+    + 'Insurance, PUC, road tax, fitness and permit: I will warn you before each one '
+    + 'expires, whenever that is — no end date.\n\n'
+    + 'Nothing renews automatically.\n\n'
     + 'Reply *report* to download the report again, or *invoice* for your GST invoice.');
 
   await sendInvoice(user, result.payment.id);
