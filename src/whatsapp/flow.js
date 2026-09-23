@@ -70,9 +70,38 @@ const BTN = {
   BUY_REPORT: 'buy_report',
   DOWNLOAD_REPORT: 'download_report',
   FEEDBACK: 'feedback',
+  REFER: 'refer',
+  INVOICE: 'invoice',
+  MENU: 'menu',
 };
 
 const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
+
+/*
+ * THE MENU, because nobody should have to remember a keyword.
+ *
+ * WhatsApp allows three reply buttons but ten list rows, so everything past
+ * the first three lives here. Each row carries a button id the router already
+ * understands, which is why adding one costs nothing anywhere else.
+ */
+async function mainMenu(mobile, body = 'What would you like to do?') {
+  const out = await send.list(mobile, {
+    body,
+    button: 'Choose',
+    sectionTitle: 'GaadiPe',
+    rows: [
+      { id: BTN.CHECK_ANOTHER,   title: 'Check a vehicle',  description: 'Any Indian number — basics are free' },
+      { id: BTN.DOWNLOAD_REPORT, title: 'My reports',       description: 'Send my report PDF again' },
+      { id: BTN.INVOICE,         title: 'My GST invoice',   description: 'The tax invoice for a payment' },
+      { id: BTN.REFER,           title: 'Refer & get free', description: 'A friend buys, your next is free' },
+      { id: BTN.FEEDBACK,        title: 'Feedback',         description: 'Tell us what is wrong or missing' },
+    ],
+  });
+  // A list needs an open 24-hour window; if it is shut, buttons would fail too,
+  // but a plain sentence still arrives.
+  if (!out.ok) await send.text(mobile, `${body}\n\nSend a vehicle number to begin.`);
+  return out;
+}
 const baseUrl = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 
 const INTRO =
@@ -544,9 +573,11 @@ async function sendReports(mobile) {
       const r = await deliverPaidReport(p.id, { withText: true });
       if (r.ok) recovered++;
       else if (r.reason === 'lookup_failed') {
-        await send.text(mobile,
+        await send.buttons(mobile,
           'The Government records service is still slow, so your report is not ready yet. '
-          + 'Please reply *report* again in a few minutes. Your payment is safe.');
+          + 'Please try again in a few minutes. Your payment is safe.',
+          [{ id: BTN.DOWNLOAD_REPORT, title: 'Try again' },
+           { id: BTN.MENU,            title: 'Menu' }]);
         return;
       }
     }
@@ -800,6 +831,64 @@ async function welcome(mobile) {
  * @param {object} message                     the raw WhatsApp message
  * @param {string} mobile                      10 digits
  */
+/**
+
+ * Their own referral link, as something to forward.
+
+ *
+
+ * Two messages on purpose: the first is the explanation, for them; the
+
+ * second is the one they pass on, so the explanation does not travel with
+
+ * it. Reached by tapping "Refer & get free" or by typing "refer".
+
+ */
+
+async function sendReferral(mobile) {
+
+    const user = await store.upsertUser(mobile);
+
+    const summary = await refer.summaryFor(user);
+
+    if (!summary.enabled) {
+
+      await send.text(mobile, 'Referrals are not running at the moment.');
+
+      return;
+
+    }
+
+    const plan = await billing.reportPlan().catch(() => null);
+
+    const price = Math.round((plan?.price_paise || 1900) / 100);
+
+    await send.text(mobile,
+
+      '🎁 *Refer a friend*\n\n'
+
+      + `Anyone who has a vehicle. When they buy their first report at ₹${price}, `
+
+      + 'your next full report is free.\n\n'
+
+      + (summary.available
+
+        ? `You have *${summary.available}* free report${summary.available === 1 ? '' : 's'} waiting — `
+
+          + 'send me a vehicle number and I will use one.\n\n'
+
+        : '')
+
+      + 'Forward the message below 👇');
+
+    await send.text(mobile,
+
+      'Check any vehicle on GaadiPe — challans, insurance, PUC and road tax, '
+
+      + `straight from the Government record.\n\n${summary.share_url}`);
+
+}
+
 async function handle(session, message, mobile) {
   const intent = intentOf(message);
   const state = session.state || 'new';
@@ -890,9 +979,10 @@ async function handle(session, message, mobile) {
       case BTN.AGREE_PARTNER:
         await recordConsent(mobile, 'partner', ['partner-policy', 'privacy']);
         await setState(mobile, 'partner_start', 'consent given');
-        await send.text(mobile,
+        await send.buttons(mobile,
           'Thank you. ✅ You have agreed to the partner terms.\n\n'
-          + 'Your partner account is being set up. Reply *hi* any time to start again.');
+          + 'Your partner account is being set up.',
+          [{ id: BTN.CHECK_ANOTHER, title: 'Check a vehicle' }]);
         return;
 
       case BTN.PLATE_OK: {
@@ -1125,8 +1215,10 @@ async function handle(session, message, mobile) {
           return;
         }
         if (!r.ok) {
-          await send.text(mobile,
-            'Something went wrong starting the trial. Please reply *hi* and try again.');
+          await send.buttons(mobile,
+            'Something went wrong starting the trial. Please try again.',
+            [{ id: BTN.CHECK_ANOTHER, title: 'Try again' },
+             { id: BTN.MENU,          title: 'Menu' }]);
           return;
         }
 
@@ -1254,6 +1346,18 @@ async function handle(session, message, mobile) {
         return;
       }
 
+      case BTN.REFER:
+        await sendReferral(mobile);
+        return;
+
+      case BTN.INVOICE:
+        await sendInvoices(mobile);
+        return;
+
+      case BTN.MENU:
+        await mainMenu(mobile);
+        return;
+
       case BTN.FEEDBACK:
         await setState(mobile, 'feedback', 'asked for feedback');
         await send.text(mobile,
@@ -1284,26 +1388,7 @@ async function handle(session, message, mobile) {
    * explanation attached to it.
    */
   if (/^(refer|referral|invite|share)\s*$/i.test(intent.text)) {
-    const user = await store.upsertUser(mobile);
-    const summary = await refer.summaryFor(user);
-    if (!summary.enabled) {
-      await send.text(mobile, 'Referrals are not running at the moment.');
-      return;
-    }
-    const plan = await billing.reportPlan().catch(() => null);
-    const price = Math.round((plan?.price_paise || 1900) / 100);
-    await send.text(mobile,
-      '🎁 *Refer a friend*\n\n'
-      + `Anyone who has a vehicle. When they buy their first report at ₹${price}, `
-      + 'your next full report is free.\n\n'
-      + (summary.available
-        ? `You have *${summary.available}* free report${summary.available === 1 ? '' : 's'} waiting — `
-          + 'send me a vehicle number and I will use one.\n\n'
-        : '')
-      + 'Forward the message below 👇');
-    await send.text(mobile,
-      'Check any vehicle on GaadiPe — challans, insurance, PUC and road tax, '
-      + `straight from the Government record.\n\n${summary.share_url}`);
+    await sendReferral(mobile);
     return;
   }
 
@@ -1426,32 +1511,36 @@ async function handle(session, message, mobile) {
           + 'Everything else keeps working as normal.');
         return;
       }
-      await send.text(mobile,
+      await send.buttons(mobile,
         `That does not match our records. ${r.attemptsLeft} attempt`
         + `${r.attemptsLeft === 1 ? '' : 's'} left.\n\n`
         + 'Send the first characters of the chassis number exactly as printed on '
-        + 'the RC, or reply *hi* to do this later.');
+        + 'the RC.',
+        [{ id: BTN.CHECK_ANOTHER, title: 'Do this later' }]);
       return;
     }
 
     case 'owner_consent':
-      await send.text(mobile,
+      await send.buttons(mobile,
         'Please tap *Agree & continue* above to proceed. '
-        + 'Reply *hi* if you would like to start again.');
+        + 'Tap below to start again.',
+        [{ id: BTN.CHECK_ANOTHER, title: 'Start again' }]);
       return;
 
     case 'partner_consent':
-      await send.text(mobile,
+      await send.buttons(mobile,
         'Please tap *Agree & continue* above to join as a partner. '
-        + 'Reply *hi* if you would like to start again.');
+        + 'Tap below to start again.',
+        [{ id: BTN.CHECK_ANOTHER, title: 'Start again' }]);
       return;
 
     default:
       // Past the menu, nothing is built yet. Say so honestly rather than going
       // quiet, which reads as broken.
-      await send.text(mobile,
+      await send.buttons(mobile,
         'Sorry, I did not understand that yet — I am still learning. '
-        + 'Reply *hi* to start again.');
+        + 'Tap below to start again.',
+        [{ id: BTN.CHECK_ANOTHER, title: 'Start again' }]);
       return;
   }
 }
