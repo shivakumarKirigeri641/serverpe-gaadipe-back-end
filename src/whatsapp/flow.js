@@ -49,6 +49,7 @@ const razorpay = require('../pay/razorpay');
 const billing = require('../pay/billing');
 const verify = require('../vehicle/verify');
 const reports = require('../pay/report');
+const refer = require('../referrals/gaadipe');
 
 /* Button ids as constants: a typo'd string would silently fall through to
    "I did not understand" rather than failing loudly. */
@@ -803,6 +804,30 @@ async function handle(session, message, mobile) {
   const intent = intentOf(message);
   const state = session.state || 'new';
 
+  /*
+   * ARRIVED THROUGH A FRIEND'S LINK (user, 2026-09-23).
+   *
+   * "Hi GaadiPe (ref ABC123)" — the code travels in the very first message,
+   * before there is a user row, a session state or anything to hang it on. So
+   * it is read here, ahead of the state machine, and never inside a branch of
+   * it: a referral that only worked from one state would be lost by anyone who
+   * typed something else first.
+   *
+   * Attaching is allowed to fail quietly. Their own link, already a customer,
+   * already referred — each is a real rule, and none of them is a reason to
+   * refuse the person a conversation.
+   */
+  const referralCode = refer.codeFromText(intent.text);
+  if (referralCode) {
+    const user = await store.upsertUser(mobile);
+    const out = await refer.attach(user, referralCode, { deviceId: null, ip: null })
+      .catch(() => ({ ok: false }));
+    console.log('[wa] %s arrived through %s -> %s', mobile, referralCode, out.ok ? 'attached' : out.reason);
+    // Whatever the verdict, they have just walked in: start at the beginning.
+    await start(mobile);
+    return;
+  }
+
   // A tapped button is unambiguous wherever it arrives from, so it is routed
   // before the state machine rather than inside every branch of it.
   if (intent.kind === 'button') {
@@ -1252,6 +1277,36 @@ async function handle(session, message, mobile) {
 
   // "invoice" and "report" are typed, not tapped, because they are asked for
   // days later — long after any button has scrolled out of view.
+  /*
+   * "refer" — their own link, as a message they can forward as it stands.
+   * Sent as two messages on purpose: the explanation is for them, and the
+   * second one is the thing they pass on, so it travels without the
+   * explanation attached to it.
+   */
+  if (/^(refer|referral|invite|share)\s*$/i.test(intent.text)) {
+    const user = await store.upsertUser(mobile);
+    const summary = await refer.summaryFor(user);
+    if (!summary.enabled) {
+      await send.text(mobile, 'Referrals are not running at the moment.');
+      return;
+    }
+    const plan = await billing.reportPlan().catch(() => null);
+    const price = Math.round((plan?.price_paise || 1900) / 100);
+    await send.text(mobile,
+      '🎁 *Refer a friend*\n\n'
+      + `Anyone who has a vehicle. When they buy their first report at ₹${price}, `
+      + 'your next full report is free.\n\n'
+      + (summary.available
+        ? `You have *${summary.available}* free report${summary.available === 1 ? '' : 's'} waiting — `
+          + 'send me a vehicle number and I will use one.\n\n'
+        : '')
+      + 'Forward the message below 👇');
+    await send.text(mobile,
+      'Check any vehicle on GaadiPe — challans, insurance, PUC and road tax, '
+      + `straight from the Government record.\n\n${summary.share_url}`);
+    return;
+  }
+
   if (/^(invoice|bill|receipt)s?\s*$/i.test(intent.text)) {
     await sendInvoices(mobile);
     return;

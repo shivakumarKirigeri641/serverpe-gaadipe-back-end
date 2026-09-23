@@ -25,6 +25,7 @@
 const crypto = require('crypto');
 const db = require('../db');
 const settings = require('../util/settings');
+const { config } = require('../config');
 
 const on = async () => String(await settings.get('gaadipe_referral_enabled', 'true')).toLowerCase() !== 'false';
 const SITE = () => (process.env.PUBLIC_SITE_URL || 'https://gaadipe.in').replace(/\/+$/, '');
@@ -51,6 +52,35 @@ async function ensureLink(userId) {
 
 const linkUrl = (code) => `${SITE()}/r/${code}`;
 
+/*
+ * WHERE A REFERRAL LINK LEADS (user, 2026-09-23).
+ *
+ * Into the GaadiPe chat, with the code already in the message — the friend
+ * presses Send and is in the product, with no sign-in, no form and no app.
+ * That is a far shorter walk than a website that asks for their number first.
+ *
+ * While GaadiPe has no number of its own, the link goes to the website
+ * instead. Not a compromise about where referrals belong: a link that opens a
+ * chat nobody reads is a referral programme nobody can use.
+ */
+const waNumber = () => String(config.whatsapp.ownNumber || '').replace(/\D/g, '');
+const waUrl = (code) => {
+  if (!config.whatsapp.enabled || !waNumber()) return null;
+  return `https://wa.me/${waNumber()}?text=${encodeURIComponent(`Hi GaadiPe (ref ${code})`)}`;
+};
+
+/**
+ * The code hidden in "Hi GaadiPe (ref ABC123)".
+ *
+ * Read from ANY inbound message, whatever the conversation was doing, because
+ * it arrives in the very first one — before there is a session, a user or a
+ * state to attach it to.
+ */
+const codeFromText = (text) => {
+  const m = String(text || '').match(/\(\s*ref[:\s]+([A-Za-z0-9]{4,12})\s*\)/i);
+  return m ? m[1].toUpperCase() : null;
+};
+
 /**
  * Someone opened a referral link.
  *
@@ -73,6 +103,8 @@ async function resolve(code, { viewer = null } = {}) {
   return {
     ok: true, code: link.code,
     from: String(owner.display_name || '').split(' ')[0] || null,
+    // Present once GaadiPe has a number: the site sends them straight here.
+    wa_url: waUrl(link.code),
   };
 }
 
@@ -228,6 +260,9 @@ async function summaryFor(user) {
     enabled: true,
     code: link.code,
     url: linkUrl(link.code),
+    wa_url: waUrl(link.code),
+    // What to share: the chat when there is one, the website until then.
+    share_url: waUrl(link.code) || linkUrl(link.code),
     active: link.is_active,
     joined: people.filter((p) => p.status !== 'expired').length,
     rewarded: people.filter((p) => p.status === 'rewarded').length,
@@ -237,4 +272,4 @@ async function summaryFor(user) {
   };
 }
 
-module.exports = { ensureLink, linkUrl, resolve, attach, onPaid, onRefunded, summaryFor, on };
+module.exports = { ensureLink, linkUrl, waUrl, codeFromText, resolve, attach, onPaid, onRefunded, summaryFor, on };
