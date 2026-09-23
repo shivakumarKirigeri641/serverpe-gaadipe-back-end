@@ -44,6 +44,7 @@ const settings = require('../util/settings');
 const activity = require('../site/activity');
 const customerMail = require('../mail/customer');
 const referrals = require('../referrals/quizpe');
+const refer = require('../referrals/gaadipe');
 
 const router = express.Router();
 
@@ -183,6 +184,20 @@ router.get('/q/:code', safe(async (req, res) => {
     viewer: viewer?.user || null, ip: req.ip, userAgent: req.get('user-agent') }));
 }));
 
+/*
+ * A GaadiPe referral link, /r/<code> (user, 2026-09-23).
+ *
+ * Public, because the person tapping is by definition not yet a customer. No
+ * row is written here: a tap is not a referral, and one row per tap would let
+ * anyone fill the table from a browser. The site remembers the code until they
+ * sign in, and /referral/attach is where it becomes real.
+ */
+router.get('/r/:code', safe(async (req, res) => {
+  const token = tokenOf(req);
+  const viewer = token ? await auth.sessionFor(token, { ip: req.ip }).catch(() => null) : null;
+  res.json(await refer.resolve(req.params.code, { viewer: viewer?.user || null }));
+}));
+
 /* ------------------------------------------------------------- signed in */
 
 router.use(safe(async (req, res, next) => {
@@ -251,6 +266,29 @@ router.put('/me', safe(async (req, res) => {
             preferred_language = coalesce($3, preferred_language), modified_at = now()
       WHERE id = $1 RETURNING *`, [req.user.id, name, language]);
   res.json({ ok: true, user: auth.publicUser(rows[0]), email_confirmation_sent: mail.changed });
+}));
+
+/* ───────────────────── GaadiPe's own referrals (user, 2026-09-23) ── */
+
+/* My link, who came through it, and the free reports I have earned. */
+router.get('/referral', safe(async (req, res) => {
+  const out = await refer.summaryFor(req.user);
+  res.json({ ...out,
+             price_paise: (await billing.reportPlan().catch(() => null))?.price_paise || null,
+             monthly_cap: await settings.num('gaadipe_referral_monthly_cap', 10),
+             credit_valid_days: await settings.num('referral_credit_valid_days', 90) });
+}));
+
+/*
+ * "I arrived through this link." Sent once, just after signing in, by someone
+ * the site remembered a code for. Every refusal is a real rule — their own
+ * link, already referred, already a customer, same device as the referrer — so
+ * the reason is returned plainly rather than pretended away.
+ */
+router.post('/referral/attach', safe(async (req, res) => {
+  const out = await refer.attach(req.user, req.body?.code, {
+    deviceId: req.get('x-gp-device') || null, ip: req.ip });
+  res.json(out);
 }));
 
 /* ─────────────────────────────── QuizPe referrals (user, 2026-09-21) ── */

@@ -66,7 +66,7 @@ async function createPending({ userId, planId, amountPaise, vehicleId }) {
  * payment was already processed, which is a normal outcome, not an error.
  */
 async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
-  return db.tx(async (c) => {
+  const result = await db.tx(async (c) => {
     // Lock the row: two webhook deliveries can arrive at the same instant.
     const pay = (await c.query(
       `SELECT * FROM payments WHERE id = $1 FOR UPDATE`, [paymentRowId])).rows[0];
@@ -155,6 +155,22 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
 
     return { activated: true, subscription: sub, endsOn, payment: pay, vehicleId, plan };
   });
+
+  /*
+   * WHOEVER SENT THEM EARNS THEIR FREE REPORT — after the money is committed,
+   * never inside the transaction. A referral that cannot be granted must not
+   * roll back a payment: an unrewarded referrer is a support conversation, a
+   * reversed payment is a disaster. onPaid() swallows its own errors for the
+   * same reason.
+   */
+  if (result.activated) {
+    result.referral = await require('../referrals/gaadipe').onPaid({
+      userId: result.payment.user_id,
+      paymentId: result.payment.id,
+      amountPaise: result.payment.amount_paise,
+    });
+  }
+  return result;
 }
 
 /**
@@ -196,7 +212,7 @@ async function accrueCommission(c, pay, sub) {
  * system disagrees with itself, and nobody finds out until the accounts do.
  */
 async function refund({ razorpayPaymentId, refundId, raw }) {
-  return db.tx(async (c) => {
+  const result = await db.tx(async (c) => {
     const pay = (await c.query(
       `SELECT * FROM payments WHERE payment_id = $1 FOR UPDATE`, [razorpayPaymentId])).rows[0];
     if (!pay) return { reversed: false, reason: 'unknown_payment' };
@@ -228,6 +244,13 @@ async function refund({ razorpayPaymentId, refundId, raw }) {
 
     return { reversed: true, payment: pay };
   });
+
+  // The friend's free report goes back with it, if it has not been spent.
+  // Without this, ₹19 paid and refunded still buys somebody a free report.
+  if (result.reversed) {
+    await require('../referrals/gaadipe').onRefunded(result.payment.id);
+  }
+  return result;
 }
 
 module.exports = { watchPlan, reportPlan, priceFor, createPending, activate, refund };
