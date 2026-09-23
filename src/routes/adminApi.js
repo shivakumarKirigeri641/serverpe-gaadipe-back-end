@@ -115,6 +115,12 @@ router.delete('/session', safe(async (req, res) => {
 
 /* -------------------------------------------------------------- the numbers */
 
+/*
+ * The home screen: what needs a person, and what happened today. The old
+ * /dashboard stays — it is what the numbers page still reads.
+ */
+router.get('/home', safe(async (_req, res) => res.json(await require('../admin/home').everything())));
+
 router.get('/dashboard', safe(async (_req, res) => res.json(await stats.dashboard())));
 
 router.get('/series', safe(async (req, res) => res.json(
