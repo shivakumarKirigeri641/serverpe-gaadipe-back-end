@@ -115,6 +115,12 @@ router.delete('/session', safe(async (req, res) => {
 
 /* -------------------------------------------------------------- the numbers */
 
+/*
+ * The home screen: what needs a person, and what happened today. The old
+ * /dashboard stays — it is what the numbers page still reads.
+ */
+router.get('/home', safe(async (_req, res) => res.json(await require('../admin/home').everything())));
+
 router.get('/dashboard', safe(async (_req, res) => res.json(await stats.dashboard())));
 
 router.get('/series', safe(async (req, res) => res.json(
@@ -792,6 +798,62 @@ router.get('/health', safe(async (_req, res) => {
   });
 }));
 
+/* ───────────────────── GaadiPe's own referrals (user, 2026-09-23) ── */
+
+/*
+ * Refer a friend who also has a vehicle. Shown alongside the QuizPe history
+ * rather than replacing it: QuizPe is switched off, not deleted, and anyone
+ * still holding a credit from it has to remain answerable for.
+ */
+router.get('/gp-referrals', safe(async (req, res) => {
+  const status = ['tapped', 'signed_up', 'rewarded', 'expired', 'not_eligible'].includes(req.query.status)
+    ? req.query.status : null;
+  const { rows } = await db.query(
+    `SELECT r.id, r.code, r.mobile_masked, r.status, r.status_reason, r.device_id,
+            r.signed_up_at, r.rewarded_at, r.expires_at, r.created_at, r.payment_id,
+            u.id AS referrer_id, u.mobile AS referrer_mobile,
+            coalesce(u.display_name, u.wa_profile_name) AS referrer_name,
+            f.mobile AS referred_mobile,
+            c.id AS credit_id, c.used_at, c.used_reg_no, c.revoked_at, c.revoked_reason,
+            c.expires_at AS credit_expires_at,
+            p.amount_paise
+       FROM gaadipe_referrals r
+       JOIN users u ON u.id = r.referrer_id
+       LEFT JOIN users f ON f.id = r.referred_user_id
+       LEFT JOIN report_credits c ON c.gaadipe_referral_id = r.id
+       LEFT JOIN payments p ON p.id = r.payment_id
+      WHERE ($1::text IS NULL OR r.status = $1)
+      ORDER BY r.id DESC LIMIT 300`, [status]);
+  const totals = await db.one(
+    `SELECT count(*)::int AS referrals,
+            count(*) FILTER (WHERE status = 'signed_up')::int AS waiting,
+            count(*) FILTER (WHERE status = 'rewarded')::int AS rewarded,
+            count(*) FILTER (WHERE status = 'expired')::int AS expired,
+            count(*) FILTER (WHERE status = 'not_eligible')::int AS not_eligible,
+            count(DISTINCT referrer_id)::int AS referrers,
+            (SELECT count(*) FROM report_credits
+              WHERE source = 'gaadipe_referral' AND used_at IS NOT NULL)::int AS credits_used,
+            (SELECT count(*) FROM report_credits
+              WHERE source = 'gaadipe_referral' AND used_at IS NULL AND revoked_at IS NULL
+                AND expires_at > now())::int AS credits_waiting,
+            coalesce((SELECT sum(p.amount_paise) FROM gaadipe_referrals r2
+                       JOIN payments p ON p.id = r2.payment_id
+                      WHERE r2.status = 'rewarded'), 0)::int AS revenue_paise
+       FROM gaadipe_referrals`);
+  res.json({
+    rows: rows.map((r) => ({ ...r, id: String(r.id), referrer_id: String(r.referrer_id),
+      // The referred person's number is masked here too: the panel shows who
+      // was brought in, not a list of numbers to contact.
+      referred_mobile: undefined,
+      credit_id: r.credit_id ? String(r.credit_id) : null })),
+    totals,
+    enabled: String(await settings.get('gaadipe_referral_enabled', 'true')).toLowerCase() !== 'false',
+    monthly_cap: await settings.num('gaadipe_referral_monthly_cap', 10),
+    window_days: await settings.num('gaadipe_referral_window_days', 30),
+    credit_valid_days: await settings.num('referral_credit_valid_days', 90),
+  });
+}));
+
 /* ─────────────────────────────── QuizPe referrals (user, 2026-09-21) ── */
 
 router.get('/referrals', safe(async (req, res) => {
@@ -922,6 +984,38 @@ router.post('/customer-emails/campaigns/:id/cancel', needs('settings'), safe(asy
   res.json(out);
 }));
 
+/* ──────────────────────── support tickets (user, 2026-09-23) ──────────── */
+
+const tickets = require('../support/tickets');
+
+router.get('/tickets', safe(async (req, res) => {
+  const status = ['open', 'replied', 'closed'].includes(req.query.status) ? req.query.status : null;
+  res.json(await tickets.list({ status, q: req.query.q || '' }));
+}));
+
+/*
+ * The answer goes back to the chat it came from. Outside the 24-hour window
+ * that has to be the approved template, so the reply is recorded whether or
+ * not it could be delivered — an answer that did not send is still an answer
+ * the panel must show as given.
+ */
+router.post('/tickets/:id/reply', needs('settings'), safe(async (req, res) => {
+  const out = await tickets.reply(String(req.params.id).replace(/\D/g, '') || '0',
+    req.body?.text, req.admin.id);
+  if (!out.ok) return res.status(400).json(out);
+  await auth.audit({ adminId: req.admin.id, action: 'ticket_replied', ip: ipOf(req),
+    detail: { ticket: out.ticket_no, delivered: out.delivered, reason: out.reason || null } });
+  res.json(out);
+}));
+
+router.post('/tickets/:id/close', needs('settings'), safe(async (req, res) => {
+  await db.query(`UPDATE contact_messages SET status = 'closed' WHERE id = $1`,
+    [String(req.params.id).replace(/\D/g, '') || '0']);
+  await auth.audit({ adminId: req.admin.id, action: 'ticket_closed', ip: ipOf(req),
+    detail: { id: req.params.id } });
+  res.json({ ok: true });
+}));
+
 /* ───────────────────── WhatsApp template broadcasts (user, 2026-09-23) ── */
 
 const broadcasts = require('../admin/broadcasts');
@@ -937,6 +1031,19 @@ router.get('/broadcasts', safe(async (req, res) => {
     whatsapp_enabled: require('../config').config.whatsapp.enabled,
     test_mode: require('../config').config.whatsapp.allowedRecipients,
   });
+}));
+
+/*
+ * Record Meta's decision about a template. Needed while the API token belongs
+ * to a deleted app and the live list cannot be read; once it can, Meta's
+ * answer overwrites this on every refresh.
+ */
+router.post('/broadcasts/templates/status', needs('settings'), safe(async (req, res) => {
+  const out = await broadcasts.setStatus(req.body?.name, req.body?.language || 'en', req.body?.status);
+  if (!out.ok) return res.status(400).json(out);
+  await auth.audit({ adminId: req.admin.id, action: 'template_status_set', ip: ipOf(req),
+    detail: { template: req.body?.name, language: req.body?.language || 'en', status: req.body?.status } });
+  res.json(out);
 }));
 
 router.get('/broadcasts/:id/targets', safe(async (req, res) =>

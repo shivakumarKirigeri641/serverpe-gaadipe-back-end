@@ -215,6 +215,11 @@ app.listen(config.port, () => {
   require('./jobs/customerMail').start(Number(process.env.CUSTOMER_MAIL_TICK_SECONDS) || 60);
   // QuizPe referrals: has a referred parent bought premium? (read-only on QuizPe)
   require('./jobs/referrals').start();
+  // Expiry warnings: insurance, PUC, tax, fitness and permit, for anyone who
+  // paid. Hourly is plenty — a date a month away does not move.
+  require('./jobs/expiryWatch').start(Number(process.env.EXPIRY_TICK_SECONDS) || 3600);
+  // Three days before monitoring ends, once per subscription.
+  require('./jobs/renewal').start(Number(process.env.RENEWAL_TICK_SECONDS) || 6 * 3600);
   // Broadcasts the panel has queued, a few template messages a minute.
   require('./jobs/broadcast').start(Number(process.env.BROADCAST_TICK_SECONDS) || 60);
   // Page, click and action history is kept activity_retention_days, then deleted.

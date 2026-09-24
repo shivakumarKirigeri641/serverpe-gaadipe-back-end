@@ -39,6 +39,38 @@ const FIELDS = {
 let cache = { at: 0, rows: null };
 
 /**
+ * What GaadiPe submitted to Meta, as recorded in wa_templates.
+ *
+ * Used when the live list cannot be read, and merged into it when it can:
+ * a template Meta knows about keeps Meta's approval status, because only Meta
+ * can say whether a message will actually deliver.
+ */
+async function stored() {
+  const { rows } = await db.query(
+    `SELECT template_name, language, category, variables,
+            header_text, body_text, footer_text, approval_status
+       FROM wa_templates WHERE is_active ORDER BY category, template_name`);
+  return rows.map((t) => ({
+    name: t.template_name,
+    language: t.language,
+    status: t.approval_status || 'PENDING',
+    category: t.category,
+    body: t.body_text || '',
+    footer: t.footer_text || '',
+    header_format: t.header_text ? 'TEXT' : null,
+    header_text: t.header_text || null,
+    buttons: [],
+    // What each {{n}} means, recorded when the template was written down.
+    fills: Array.isArray(t.variables) ? t.variables : [],
+    variables: [...new Set((t.body_text || '').match(/\{\{\s*\d+\s*\}\}/g) || [])]
+      .map((m) => Number(m.replace(/\D/g, ''))).sort((a, b) => a - b),
+    // Never sendable on our say-so: Meta decides, and until it has, it has not.
+    sendable: t.approval_status === 'APPROVED',
+    source: 'stored',
+  }));
+}
+
+/**
  * The approved templates on the WhatsApp Business account.
  *
  * Read from Meta rather than typed by hand: a template name that does not exist,
@@ -64,10 +96,13 @@ async function templates({ refresh = false } = {}) {
     });
     json = await res.json();
   } catch (e) {
-    return { ok: false, error: 'unreachable', message: `Could not reach Meta: ${e.message}` };
+    return { ok: true, templates: await stored(), source: 'stored',
+             warning: `Could not reach Meta (${e.message}). Showing the templates GaadiPe has recorded — approval status may be out of date.` };
   }
   if (json?.error) {
-    return { ok: false, error: 'meta', message: `${json.error.code}: ${json.error.message}` };
+    return { ok: true, templates: await stored(), source: 'stored',
+             warning: `Meta said: ${json.error.code}: ${String(json.error.message).replace(/\.\s*$/, '')}.`
+               + ' Showing the templates GaadiPe has recorded — none can be sent until Meta approves them.' };
   }
 
   const rows = (json?.data || []).map((t) => {
@@ -88,8 +123,25 @@ async function templates({ refresh = false } = {}) {
     };
   }).sort((a, b) => a.name.localeCompare(b.name) || a.language.localeCompare(b.language));
 
+  /*
+   * Meta's answer is the truth about approval, so it is written back. A
+   * template GaadiPe never recorded is still listed — somebody may have
+   * raised it in the console directly, and hiding it would be a lie.
+   */
+  for (const t of rows) {
+    await db.query(
+      `UPDATE wa_templates SET approval_status = $3, category = coalesce($4, category), modified_at = now()
+        WHERE template_name = $1 AND language = $2`,
+      [t.name, t.language, t.status, t.category]).catch(() => {});
+  }
+  const byKey = new Map(rows.map((t) => [`${t.name}|${t.language}`, t]));
+  for (const t of await stored()) {
+    // Recorded here but unknown to Meta: not raised yet, and worth seeing.
+    if (!byKey.has(`${t.name}|${t.language}`)) rows.push({ ...t, status: 'NOT RAISED', sendable: false });
+  }
+
   cache = { at: Date.now(), rows };
-  return { ok: true, templates: rows };
+  return { ok: true, templates: rows, source: 'meta' };
 }
 
 /* ────────────────────────────────────────── who there is to send to ── */
@@ -158,12 +210,27 @@ const KNOWN = {
   gp_starthere_hn_v1: ['first_name', 'last_vehicle'],
 };
 
-/** Suggested mapping per template: what was used last time, else what we know. */
+/**
+ * Suggested mapping per template.
+ *
+ * Three sources, weakest first: what was written down in wa_templates when the
+ * template was recorded, then the hardcoded pair below, then whatever was
+ * actually chosen the last time this template was broadcast — because that is
+ * the only one of the three that reflects a decision somebody made.
+ */
 async function defaults() {
   const { rows } = await db.query(
     `SELECT DISTINCT ON (template_name, language) template_name, language, variables
        FROM whatsapp_broadcasts ORDER BY template_name, language, id DESC`);
   const out = {};
+  // What the template itself says each blank is for.
+  const { rows: recorded } = await db.query(
+    `SELECT template_name, language, variables FROM wa_templates WHERE is_active`);
+  for (const t of recorded) {
+    if (Array.isArray(t.variables) && t.variables.length) {
+      out[`${t.template_name}|${t.language}`] = t.variables;
+    }
+  }
   for (const [name, vars] of Object.entries(KNOWN)) out[`${name}|en`] = vars;
   // A template's own history wins over the table above: it is what this admin
   // actually chose the last time they sent it.
@@ -306,4 +373,31 @@ async function targets(id, { limit = 500 } = {}) {
   return rows.map((r) => ({ ...r, id: String(r.id) }));
 }
 
-module.exports = { FIELDS, FILTERS, KNOWN, defaults, templates, recipients, preview, queue, cancel, list, targets, paramsFor };
+/**
+ * Record what Meta decided about a template.
+ *
+ * Normally the live list answers this and nothing needs saying. But a token
+ * belonging to a deleted app cannot read that list, and approvals arrive one
+ * at a time over days — so the panel can set it by hand until the credentials
+ * are replaced, at which point Meta's answer overwrites whatever is here.
+ *
+ * This records a decision; it never makes one. Marking something APPROVED that
+ * Meta refused does not make it send — it fails per message, and the failure
+ * is visible on the broadcast.
+ */
+async function setStatus(name, language, status) {
+  const allowed = ['APPROVED', 'PENDING', 'REJECTED', 'PAUSED', 'DISABLED'];
+  const clean = String(status || '').toUpperCase();
+  if (!allowed.includes(clean)) return { ok: false, error: 'status', message: `Status must be one of ${allowed.join(', ')}.` };
+  const row = await db.one(
+    `UPDATE wa_templates SET approval_status = $3, modified_at = now()
+      WHERE template_name = $1 AND language = $2
+      RETURNING template_name, language, approval_status`,
+    [String(name || ''), String(language || 'en'), clean]);
+  if (!row) return { ok: false, error: 'unknown', message: 'No such template is recorded.' };
+  cache = { at: 0, rows: null };            // the list must be read again
+  console.log('[broadcast] %s (%s) marked %s', row.template_name, row.language, clean);
+  return { ok: true, template: row };
+}
+
+module.exports = { FIELDS, FILTERS, KNOWN, defaults, templates, stored, setStatus, recipients, preview, queue, cancel, list, targets, paramsFor };

@@ -293,7 +293,8 @@ function digestMail(user, records, { detail = 'count' } = {}) {
     sections: views.map(basicSection),
     blocks: [`<div style="font-size:13px;line-height:1.6;color:#0b1f1c;background:#e7f3f2;border-radius:8px;padding:12px 14px;">
       <b>Want the dates, amounts and daily alerts?</b> The full report shows every expiry date, each challan with its amount,
-      loan / blacklist / NOC and FASTag — and then emails you every day for 28 days. <b>${esc(price)}</b> one time, nothing renews.</div>`,
+      loan / blacklist / NOC and FASTag. Then it watches for new challans for three months, and warns you before
+      insurance, PUC, road tax or fitness runs out — whenever that is. <b>${esc(price)}</b> one time, nothing renews.</div>`,
       dataNote()],
     cta: { label: `Get the full report for ${price}`, url: views.length === 1 ? `${SITE()}/app/vehicle/${encodeURIComponent(views[0].reg_no)}` : `${SITE()}/app` },
     footer: 'You are receiving this every few days because you checked these vehicles on gaadipe.in.',
@@ -323,7 +324,7 @@ function rewardMail(user, { count = 0, reduced = 0, reducedPrice = null, expires
       : 'Your referral reward is ready',
     lead: `Hi ${name}, parents joined QuizPe through your link — thank you! You have earned ${parts.join(' and ')}.`,
     blocks: [`<div style="font-size:13px;line-height:1.6;color:#0b1f1c;background:#e9f8ef;border-radius:8px;padding:12px 14px;">
-      ${count ? 'Open any vehicle you have checked and tap <b>Use my free report</b>: the full record, the PDF and 28 days of daily updates, exactly as a paid report.<br>' : ''}
+      ${count ? 'Open any vehicle you have checked and tap <b>Use my free report</b>: the full record, the PDF, three months of challan watching and expiry warnings — exactly as a paid report.<br>' : ''}
       ${reduced ? `Your next full report costs <b>${esc(price)}</b> — it is applied automatically when you buy, with a GST invoice.<br>` : ''}
       Use ${count + reduced > 1 ? 'them' : 'it'} by <b>${esc(istDay(expiresAt))}</b>.</div>`],
     cta: { label: count ? 'Use my free report' : 'Get my report', url: `${SITE()}/app` },
@@ -391,7 +392,8 @@ function purchaseMail(user, p = {}) {
     • Every pending challan, with the offence, the place and the amount<br>
     • Loan / hypothecation, blacklist and NOC status<br>
     • FASTag status and balance, RTO, registration date and number of owners<br>
-    • A dated PDF you can keep${p.alertsUntil ? `, and a daily email until <b>${esc(istDay(p.alertsUntil))}</b> if anything changes` : ''}</div>`;
+    • A dated PDF you can keep${p.alertsUntil ? `, new challans watched until <b>${esc(istDay(p.alertsUntil))}</b>` : ''}<br>
+    • A warning before insurance, PUC, road tax or fitness expires — however far off that is</div>`;
 
   const confirm = p.confirmed || !user.email_token ? '' :
     `<div style="font-size:13px;line-height:1.6;color:#41514e;">

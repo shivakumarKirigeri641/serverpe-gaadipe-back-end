@@ -164,8 +164,8 @@ async function notifyPaid(result) {
     'Payment received ✅\n\n'
     + `₹${amount} · ${veh ? `*${veh.reg_no}*` : 'your plan'}\n`
     + `Watching until *${ends}*\n\n`
-    + 'I check every day and message you the moment a new challan appears or a '
-    + 'document is close to expiring.\n\n'
+    + 'I check for new challans, and I will warn you before insurance, PUC, road tax '
+    + 'or fitness runs out — however far off that is.\n\n'
     + 'Nothing will be charged automatically — I will remind you before it ends.');
 
   // 2. The vehicle as it stands today — as a message to read now, and as a
@@ -217,7 +217,7 @@ async function notifyPaid(result) {
 async function notifyReportPaid(result, user, veh, { ends, amount }) {
   const send = require('../whatsapp/send');
 
-  await send.text(user.mobile,
+  await send.buttons(user.mobile,
     'Payment received ✅\n\n'
     + `₹${amount} · full report${veh ? ` for *${veh.reg_no}*` : ''}`);
 
@@ -225,16 +225,22 @@ async function notifyReportPaid(result, user, veh, { ends, amount }) {
   if (!delivered.ok) {
     // Paid and nothing delivered is the worst outcome here, so say so and leave
     // a way back rather than going quiet. "report" retries this same function.
-    await send.text(user.mobile,
+    await send.buttons(user.mobile,
       'The Government records service is slow right now, so your report is not ready yet. '
-      + 'Reply *report* in a few minutes and I will send it. Your payment is safe.');
+      + 'Tap below in a few minutes and I will send it. Your payment is safe.',
+      [{ id: 'download_report', title: 'Send my report' }]);
   }
 
-  await send.text(user.mobile,
-    `🔔 Alerts are on for *${veh ? veh.reg_no : 'your vehicle'}* until *${ends}*.\n\n`
-    + 'I will message you if a new challan appears, or before insurance, PUC, road tax, '
-    + 'fitness or permit expires. Nothing renews automatically.\n\n'
-    + 'Reply *report* to download the report again, or *invoice* for your GST invoice.');
+  await send.buttons(user.mobile,
+    `🔔 *${veh ? veh.reg_no : 'Your vehicle'}* is being watched.\n\n`
+    + `New challans: I check until *${ends}*.\n`
+    + 'Insurance, PUC, road tax, fitness and permit: I will warn you before each one '
+    + 'expires, whenever that is — no end date.\n\n'
+    + 'Nothing renews automatically.\n\n'
+    + 'Everything is one tap away below.',
+    [{ id: 'download_report', title: 'My report' },
+     { id: 'invoice',         title: 'My GST invoice' },
+     { id: 'check_another',   title: 'Check a vehicle' }]);
 
   await sendInvoice(user, result.payment.id);
 }
@@ -358,7 +364,8 @@ async function sendInvoice(user, paymentId) {
     // silently did not arrive becomes a support conversation weeks later.
     if (!sent.ok) {
       console.warn('[pay] invoice PDF not delivered (%s) — sent the figures instead', sent.error);
-      await send.text(user.mobile, caption + '\n\nReply *invoice* to get the PDF again.');
+      await send.buttons(user.mobile, caption,
+        [{ id: 'invoice', title: 'Send the invoice' }]);
     }
   } catch (e) {
     // A failed invoice must never look like a failed payment.

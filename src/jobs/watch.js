@@ -55,7 +55,8 @@ const WARN_DAYS = {
 async function due(limit = 50) {
   const { rows } = await db.query(
     `SELECT w.id, w.user_id, w.vehicle_id, w.expires_at, w.fail_count,
-            w.challan_interval_hours,
+            w.challan_interval_hours, w.created_at,
+            extract(epoch FROM (now() - w.created_at)) / 86400 AS age_days,
             v.reg_no, u.mobile, u.wa_profile_name, u.is_paused, u.preferred_language
        FROM watches w
        JOIN vehicles v ON v.id = w.vehicle_id
@@ -177,9 +178,23 @@ async function checkOne(w) {
   // daily costs 112 upstream calls a cycle against 20 for these intervals — the
   // difference between surviving a ULIP price list and not.
   const fallback = await settings.num('watch_check_interval_minutes', 48 * 60);
+
+  /*
+   * THE CADENCE SLOWS WITH AGE (user, 2026-09-23). A watch now runs 90 days
+   * rather than 28, and checking all of it at the opening pace would nearly
+   * triple what a ₹19 sale costs upstream. Someone who has just paid wants to
+   * know about a new challan within a day or two; by the third month a week is
+   * plenty. Worry fades. The ULIP bill does not.
+   */
+  const taperAfter = await settings.num('watch_taper_after_days', 28);
+  const late = Number(w.age_days || 0) > taperAfter;
   const every = {
-    challan: await settings.num('watch_interval_minutes_challan', fallback),
-    rc:      await settings.num('watch_interval_minutes_rc', fallback),
+    challan: late
+      ? await settings.num('watch_interval_minutes_challan_late', 7 * 24 * 60)
+      : await settings.num('watch_interval_minutes_challan', fallback),
+    rc: late
+      ? await settings.num('watch_interval_minutes_rc_late', 30 * 24 * 60)
+      : await settings.num('watch_interval_minutes_rc', fallback),
     fastag:  await settings.num('watch_interval_minutes_fastag', fallback),
   };
   await db.query(
