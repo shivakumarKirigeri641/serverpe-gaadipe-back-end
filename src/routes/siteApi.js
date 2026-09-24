@@ -98,21 +98,38 @@ const unlockMode = async () => {
  * QuizPe to a parent for a free report — per report_unlock — and whether this
  * customer already holds a free report to use.
  */
-async function offerFor(req, plan, paid) {
+async function offerFor(req, plan, paid, regNo = null) {
   const mode = await unlockMode();
   const referralsOn = String(await settings.get('referral_enabled', 'true')).toLowerCase() !== 'false';
   // The Instant Quiz reward: this customer's next report at Rs.9 + GST (1062 paise).
   const reduced = paid ? null : await referrals.reducedPriceCredit(req.user.id);
-  const price = reduced && plan ? Math.min(reduced.price_paise, plan.price_paise) : plan?.price_paise ?? null;
+
+  /*
+   * THE SAME QUESTION THE CHECKOUT ASKS. reportPriceFor knows that renewing a
+   * vehicle this customer has already paid for costs ₹9 + GST rather than ₹19,
+   * and that a referral credit wins only if it is cheaper. Quoting anything
+   * else here would mean the page and the till disagree.
+   */
+  const vehicle = regNo
+    ? await db.one(`SELECT id FROM vehicles WHERE reg_no = $1`, [regNo])
+    : null;
+  const priced = plan
+    ? await billing.reportPriceFor(req.user.id, vehicle?.id || null,
+        { creditPaise: reduced?.price_paise || null })
+    : null;
+
   return {
     unlock: mode,
     // A reduced price is a referral reward, so it can be paid even in referral-only mode.
     can_buy: Boolean(plan && razorpay.configured() && !paid && (mode !== 'refer' || reduced)),
     can_refer: Boolean(!paid && referralsOn && mode !== 'pay'),
     free_credits: paid ? 0 : await referrals.availableCredits(req.user.id),
-    price_paise: price,
+    price_paise: priced?.paise ?? plan?.price_paise ?? null,
     list_price_paise: plan?.price_paise ?? null,
     reduced: Boolean(reduced),
+    // So the page can say "renewal" rather than leaving a cheaper number
+    // looking like a mistake.
+    renewal: Boolean(priced?.renewal),
   };
 }
 
@@ -466,7 +483,7 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
   res.json({
     vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() }),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
-    ...(await offerFor(req, plan, paid)),
+    ...(await offerFor(req, plan, paid, parsed.regNo)),
   });
 }));
 
@@ -524,7 +541,7 @@ router.post('/check', safe(async (req, res) => {
   res.json({
     vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() }),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
-    ...(await offerFor(req, plan, paid)),
+    ...(await offerFor(req, plan, paid, parsed.regNo)),
   });
 }));
 
