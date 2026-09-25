@@ -72,24 +72,33 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
  * automatically, AND offered as a big button, because a tap is the one thing
  * every browser lets through.
  */
-const WA_JS = `
-  var WA_WEB = 'https://wa.me/${WA_NUMBER}';
+/*
+ * `text` is typed into the chat for them. A customer who paid on the website
+ * may never have written to the number, and WhatsApp lets the bot send a PDF
+ * only inside 24 hours of THEIR last message — so the chat opens with "Report"
+ * ready, and pressing Send is what lets the report through.
+ */
+const waJs = (text = '') => {
+  const q = text ? `&text=${encodeURIComponent(text)}` : '';
+  return `
+  var WA_WEB = 'https://wa.me/${WA_NUMBER}${text ? `?text=${encodeURIComponent(text)}` : ''}';
   function waUrl() {
     var ua = navigator.userAgent || '';
     if (/Android/i.test(ua)) {
-      return 'intent://send/?phone=${WA_NUMBER}#Intent;scheme=whatsapp;'
+      return 'intent://send/?phone=${WA_NUMBER}${q}#Intent;scheme=whatsapp;'
         + 'S.browser_fallback_url=' + encodeURIComponent(WA_WEB) + ';end';
     }
-    if (/iPhone|iPad|iPod/i.test(ua)) return 'whatsapp://send?phone=${WA_NUMBER}';
+    if (/iPhone|iPad|iPod/i.test(ua)) return 'whatsapp://send?phone=${WA_NUMBER}${q}';
     return WA_WEB;
   }
   function openWhatsApp() { location.href = waUrl(); return false; }
 `;
-const waButton = (label = 'Open WhatsApp') =>
+};
+const waButton = (label = 'Open WhatsApp', text = '') =>
   `<button onclick="return openWhatsApp()">${esc(label)}</button>
    <p class="muted" style="text-align:center;margin:10px 0 0">
-     Not opening? <a href="https://wa.me/${WA_NUMBER}">Tap here</a></p>
-   <script>${WA_JS}</script>`;
+     Not opening? <a href="https://wa.me/${WA_NUMBER}${text ? `?text=${encodeURIComponent(text)}` : ''}">Tap here</a></p>
+   <script>${waJs(text)}</script>`;
 
 /*
  * THE WAY OUT OF A DEAD END (user, 2026-09-22).
@@ -244,9 +253,14 @@ router.get('/pay/:token', safe(async (req, res) => {
      customer to WhatsApp would hand them to a different product than the one
      they were using. The channel was recorded when the order was created. */
   // ?paid=1 so the page they land on can say what has just been emailed to them.
-  const backUrl = web
+  //
+  // WHATSAPP-FIRST (user, 2026-09-25): while GaadiPe is on WhatsApp the site has
+  // no account area to go back to, so every payment ends in the chat — even one
+  // started on the web. That one opens with "Report" typed (see waJs).
+  const backUrl = web && !WA_ON()
     ? `${site}/app/${pay.reg_no ? `vehicle/${encodeURIComponent(pay.reg_no)}` : 'reports'}?paid=1`
     : null;
+  const chatText = web ? 'Report' : '';
   const validDays = await settings.num('report_valid_days', 7);
   const planLine = isReport
     ? 'Full vehicle report'
@@ -269,8 +283,10 @@ router.get('/pay/:token', safe(async (req, res) => {
   res.send(page('Checkout', `
 <div id="done" class="card" style="display:none">
   <h1>Payment successful ✅</h1>
-  <p class="muted" style="margin:0 0 14px">${web
+  <p class="muted" style="margin:0 0 14px">${backUrl
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready in your GaadiPe account.`
+    : web
+    ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready. WhatsApp opens with <b>Report</b> typed — press Send and it arrives in the chat.`
     : isReport
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is on its way to your WhatsApp chat.`
     : 'Your confirmation is on its way to your WhatsApp chat.'}</p>
@@ -278,7 +294,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   <p class="muted" style="margin:0 0 14px">${backUrl ? 'Taking you back to it…' : 'Opening WhatsApp…'}</p>
   ${backUrl
     ? `<button onclick="location.href=${JSON.stringify(backUrl)}">See my report</button>`
-    : waButton('Open WhatsApp')}
+    : waButton('Open WhatsApp', chatText)}
 </div>
 
 <div id="main">
