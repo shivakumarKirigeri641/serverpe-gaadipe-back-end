@@ -230,6 +230,9 @@ app.listen(config.port, () => {
   require('./jobs/alerts').start(Number(process.env.ALERTS_TICK_SECONDS) || 60);
   // Payments against Razorpay, once a day after 03:00 IST (operations module).
   require('./jobs/reconDaily').start(Number(process.env.RECON_TICK_SECONDS) || 3600);
+  // Scheduled backup (when switched on) and job-history trimming (operations module).
+  require('./jobs/maintenance').start(Number(process.env.MAINTENANCE_TICK_SECONDS) || 3600);
+
 
   // Page, click and action history is kept activity_retention_days, then deleted.
   const pruneActivity = () => require('./site/activity').prune().catch((e) => console.warn('[activity] prune:', e.message));

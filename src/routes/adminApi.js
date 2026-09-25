@@ -239,6 +239,43 @@ router.get('/data-quality', needs('api.view'), safe(async (req, res) => res.json
 router.get('/api-providers', needs('api.view'), safe(async (req, res) => res.json(await require('../admin/apiProviders').overview({
   ...periodOf(req.query), operation: req.query.operation, state: req.query.state, vclass: req.query.vclass }))));
 
+/* ------------------------------------------ jobs, infrastructure, backups */
+
+/*
+ * Operations module phase 5 (user, 2026-09-25). Running a job now, pausing
+ * one and taking a backup on the server are confirmed on screen, need
+ * system.manage (a backup: the owner), and are audited with before / after.
+ */
+const jobDesk = require('../admin/jobs');
+router.get('/jobs', needs('system.view'), safe(async (_req, res) => res.json(await jobDesk.list())));
+router.get('/jobs/:name/runs', needs('system.view'), safe(async (req, res) => res.json(await jobDesk.runs(req.params.name, req.query))));
+router.post('/jobs/:name/run', needs('system.manage'), safe(async (req, res) => {
+  if (req.body?.confirm !== true) return res.status(400).json({ error: 'confirm', message: 'Confirm the run first.' });
+  const out = await jobDesk.runNow(req.params.name, req.admin.id);
+  await auth.audit({ adminId: req.admin.id, action: 'job_run_now', ip: ipOf(req),
+                     detail: { job: req.params.name, result: out.ok ? 'success' : 'failed', message: out.message || null, processed: out.processed ?? null } });
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.post('/jobs/:name/pause', needs('system.manage'), safe(async (req, res) => {
+  const paused = req.body?.paused !== false;
+  if (req.body?.confirm !== true) return res.status(400).json({ error: 'confirm', message: 'Confirm first.' });
+  const out = await jobDesk.setPaused(req.params.name, paused);
+  if (out.ok) {
+    await auth.audit({ adminId: req.admin.id, action: paused ? 'job_paused' : 'job_resumed', ip: ipOf(req),
+                       detail: { job: req.params.name, before: out.before.join(',') || '(none)', after: out.paused.join(',') || '(none)' } });
+  }
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.get('/infrastructure', needs('system.view'), safe(async (_req, res) => res.json(await require('../admin/infra').snapshot())));
+router.get('/backups', needs('system.view'), safe(async (_req, res) => res.json(await require('../admin/backups').status())));
+router.post('/backups/run', needs('admins'), safe(async (req, res) => {
+  if (req.body?.confirm !== true) return res.status(400).json({ error: 'confirm', message: 'Confirm the backup first.' });
+  const out = await require('../admin/backups').runScheduled({ trigger: 'manual', adminId: req.admin.id });
+  await auth.audit({ adminId: req.admin.id, action: 'backup_run', ip: ipOf(req),
+                     detail: { result: out.ok ? 'success' : out.skipped ? 'switched_off' : 'failed', size_bytes: out.size_bytes || null } });
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+
 /* WhatsApp and vehicle lookups (phase 4): src/admin/whatsappStats.js and
    src/admin/lookups.js, for the same periods as the command center. */
 router.get('/whatsapp/stats', safe(async (req, res) => res.json(

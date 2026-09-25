@@ -9,3 +9,6 @@ gaadipe_full.sql
 # server-docs.js: the server database copy and the documents rebuilt from it
 # (customer data, never committed)
 server-docs/
+
+# Scheduled database backups (src/admin/backups.js) — never committed.
+/backups/

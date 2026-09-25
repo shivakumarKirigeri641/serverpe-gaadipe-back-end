@@ -136,7 +136,44 @@ async function services() {
       message: `${mail.admin_sent || 0} admin emails sent in 24 h${mail.admin_failed ? `, ${mail.admin_failed} failed` : ''}`,
       metrics: { sent: mail.admin_sent || 0, failed: mail.admin_failed || 0 }, last_ok: mail.last_ok, last_error: mail.last_error },
   ];
-  return { overall: worst(...list.map((s) => s.level)), services: list, at: new Date().toISOString() };
+  // The server, certificates and queues (operations module phase 5).
+  const infra = await require('./infra').alertFacts().catch(() => ({}));
+  const lim = { disk: await settings.num('alert_disk_pct', 80), ssl: await settings.num('alert_ssl_days', 14), dom: await settings.num('alert_domain_days', 30) };
+  const q = await db.one(
+    `SELECT (SELECT count(*) FROM admin_notifications WHERE status = 'pending')::int AS admin_notices,
+            (SELECT count(*) FROM whatsapp_broadcast_targets WHERE status = 'pending')::int AS broadcast,
+            (SELECT count(*) FROM pending_alerts)::int AS vehicle_alerts,
+            (SELECT min(created_at) FROM admin_notifications WHERE status = 'pending') AS oldest`).catch(() => null);
+  const queued = q ? q.admin_notices + q.broadcast + q.vehicle_alerts : null;
+  const oldestMin = q?.oldest ? Math.round((Date.now() - new Date(q.oldest)) / 60000) : null;
+  const backend = list.find((x) => x.key === 'backend');
+  if (backend && infra.memory) {
+    backend.metrics.server_memory_pct = infra.memory.used_pct;
+    const la = require('os').loadavg()[0]; const cores = require('os').cpus().length || 1;
+    backend.metrics.cpu_load_pct = process.platform === 'win32' ? null : Math.round((la / cores) * 100);
+  }
+  list.push(
+    { key: 'storage', name: 'Storage (disk)',
+      level: !infra.disk ? 'warning' : infra.disk.used_pct >= 95 ? 'down' : infra.disk.used_pct >= lim.disk ? 'degraded' : 'operational',
+      message: infra.disk ? `${infra.disk.used_pct}% used · ${infra.disk.free_gb} GB free` : 'Not available on this server',
+      metrics: infra.disk || {} },
+    { key: 'ssl', name: 'SSL certificate',
+      level: !infra.ssl ? 'warning' : infra.ssl.days_left <= 3 ? 'down' : infra.ssl.days_left <= lim.ssl ? 'degraded' : 'operational',
+      message: infra.ssl ? `${infra.ssl.host}: expires in ${infra.ssl.days_left} days (${infra.ssl.issuer || 'issuer unknown'})` : 'Could not read the certificate',
+      metrics: infra.ssl ? { days_left: infra.ssl.days_left } : {} },
+    { key: 'domain', name: 'Domain',
+      level: !infra.domain ? 'warning' : infra.domain.days_left <= lim.dom ? 'degraded' : 'operational',
+      message: infra.domain ? `${infra.domain.domain}: registered until ${new Date(infra.domain.expires).toISOString().slice(0, 10)} (${infra.domain.days_left} days)` : 'Registration date not available',
+      metrics: infra.domain ? { days_left: infra.domain.days_left } : {} },
+    { key: 'payment_webhook', name: 'Payment webhook (Razorpay)', level: 'operational',
+      message: pay.last_webhook ? `Last received ${Math.round((Date.now() - new Date(pay.last_webhook)) / 60000)} min ago` : 'None received yet',
+      metrics: {}, last_ok: pay.last_webhook },
+    { key: 'queue', name: 'Queues',
+      level: queued == null ? 'warning' : oldestMin != null && oldestMin > 60 ? 'degraded' : 'operational',
+      message: queued == null ? 'Not available' : `${queued} waiting (admin notices ${q.admin_notices}, broadcast ${q.broadcast}, vehicle alerts ${q.vehicle_alerts})${oldestMin != null ? ` · oldest ${oldestMin} min` : ''}`,
+      metrics: q ? { size: queued, admin_notices: q.admin_notices, broadcast: q.broadcast, vehicle_alerts: q.vehicle_alerts } : {} },
+  );
+  return { overall: worst(...list.map((x) => x.level)), services: list, at: new Date().toISOString() };
 }
 
 module.exports = { services, worst };

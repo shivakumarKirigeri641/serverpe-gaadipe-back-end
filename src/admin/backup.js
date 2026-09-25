@@ -97,4 +97,4 @@ function stream(res, { adminId, ip }) {
   });
 }
 
-module.exports = { stream, waitMinutes, filename };
+module.exports = { stream, waitMinutes, filename, pgDump };

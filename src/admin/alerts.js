@@ -112,6 +112,33 @@ async function check() {
       detail: { every_s: j.every_s, seconds_since: j.seconds_since, last_error: j.last_error } });
   }
 
+  // The server and the backups (operations module phase 5). Thresholds in Settings.
+  const infra = await require('./infra').alertFacts().catch(() => ({}));
+  const lim = { disk: await settings.num('alert_disk_pct', 80), mem: await settings.num('alert_memory_pct', 90),
+                ssl: await settings.num('alert_ssl_days', 14), dom: await settings.num('alert_domain_days', 30) };
+  await toggle((infra.disk?.used_pct ?? 0) >= lim.disk, {
+    key: 'disk_high', severity: (infra.disk?.used_pct ?? 0) >= 95 ? 'critical' : 'warning', source: 'infrastructure', title: 'Disk usage high',
+    description: `Disk ${infra.disk?.used_pct}% used (${infra.disk?.free_gb} GB free) — threshold ${lim.disk}%.`, detail: infra.disk || {} });
+  await toggle((infra.memory?.used_pct ?? 0) >= lim.mem, {
+    key: 'memory_high', severity: 'warning', source: 'infrastructure', title: 'Server memory high',
+    description: `Memory ${infra.memory?.used_pct}% used — threshold ${lim.mem}%.`, detail: infra.memory || {} });
+  await toggle(infra.ssl?.days_left != null && infra.ssl.days_left <= lim.ssl, {
+    key: 'ssl_expiring', severity: (infra.ssl?.days_left ?? 99) <= 3 ? 'critical' : 'warning', source: 'infrastructure', title: 'SSL certificate expiring',
+    description: `The certificate for ${infra.ssl?.host} expires in ${infra.ssl?.days_left} days.`, detail: infra.ssl || {} });
+  await toggle(infra.domain?.days_left != null && infra.domain.days_left <= lim.dom, {
+    key: 'domain_expiring', severity: 'warning', source: 'infrastructure', title: 'Domain registration expiring',
+    description: `${infra.domain?.domain} expires in ${infra.domain?.days_left} days.`, detail: infra.domain || {} });
+  const bk = await require('./backups').status().catch(() => null);
+  if (bk) {
+    await toggle(bk.state === 'failed', {
+      key: 'backup_failed', severity: 'critical', source: 'backups', title: 'Database backup failed',
+      description: `The last backup attempt failed${bk.last_attempt?.error ? `: ${bk.last_attempt.error}` : ''}.`, detail: { at: bk.last_attempt?.at } });
+    await toggle(bk.state === 'stale' || bk.state === 'none', {
+      key: 'backup_stale', severity: 'warning', source: 'backups', title: bk.state === 'none' ? 'No database backup on record' : 'Database backup is stale',
+      description: bk.state === 'none' ? 'No backup has been taken — download one from Maintenance, or switch on scheduled backups.'
+        : `The last backup is ${bk.age_hours} hours old (threshold ${bk.stale_after_hours} h).`, detail: { age_hours: bk.age_hours } });
+  }
+
   // Once per hour and per day: these are news, not faults.
   const hourKey = istNow().toISOString().slice(0, 13);
   const avg = Number(traffic.avg_hour || 0);
