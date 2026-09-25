@@ -515,56 +515,6 @@ async function askToConfirm(mobile, parsed) {
 }
 
 /**
- * Offer the vehicles this person has already checked, as a list.
- *
- * WHY: someone eight vehicles into a trial should not be retyping plates off a
- * registration book on a phone keyboard. The list costs no lookup — every plate
- * and every expiry date shown is already in our database — and the description
- * line carries the reason to tap, which a bare list of numbers does not.
- *
- * Returns false when there is nothing worth showing, so the caller can fall
- * back to asking them to type.
- */
-async function offerKnownVehicles(mobile, userId, { body, button } = {}) {
-  const known = await store.checkedBy(userId, 9);
-  if (known.length < 2) return false;
-
-  const rows = known.map(v => {
-    const docs = report.documentsOf({
-      insurance_upto: v.insurance_upto, pucc_upto: v.pucc_upto,
-      fitness_upto: v.fitness_upto, tax_upto: v.tax_upto, permit_upto: v.permit_upto,
-      vehicle_class: v.vehicle_class,
-    });
-
-    // The most urgent thing about this vehicle: anything expired, else anything
-    // close, else simply whatever runs out next. A manufacturer's name tells
-    // someone nothing they do not already know about their own vehicle.
-    const expired = docs.filter(d => d.days < 0).sort((a, b) => a.days - b.days)[0];
-    const soon = docs.filter(d => d.days >= 0 && d.days <= 30).sort((a, b) => a.days - b.days)[0];
-    const next = docs.filter(d => d.days > 30).sort((a, b) => a.days - b.days)[0];
-
-    const status = expired ? `${expired.label} expired ${report.human(expired.days)}`
-      : soon ? `${soon.label} expires ${report.human(soon.days)}`
-      : next ? `${next.label} valid ${report.human(next.days).replace('in ', 'for ')}`
-      : 'Tap to check';
-    return {
-      id: `veh:${v.reg_no}`,
-      title: v.reg_no,
-      description: v.watched ? `Watching · ${status}` : status,
-    };
-  });
-
-  await send.list(mobile, {
-    body: body || 'Which vehicle would you like to check?',
-    button: button || 'Choose vehicle',
-    sectionTitle: 'Recently checked',
-    rows,
-    footer: 'Or just send a different vehicle number.',
-  });
-  return true;
-}
-
-/**
  * "Which of these should I keep an eye on?"
  *
  * Checking is casual and high-volume — someone at a dealer's yard runs through
@@ -1183,16 +1133,13 @@ async function handle(session, message, mobile) {
         return;
       }
 
-      case BTN.CHECK_ANOTHER: {
+      // "Check vehicle" means a number they have not given yet (user,
+      // 2026-09-25). The vehicles they already have live behind "My vehicle
+      // reports"; offering them here answered a question nobody asked.
+      case BTN.CHECK_ANOTHER:
         await setState(mobile, 'owner_start', 'checking another');
-        const user = await store.upsertUser(mobile);
-        const offered = await offerKnownVehicles(mobile, user.id, {
-          body: 'Which vehicle would you like to check?',
-          button: 'Choose vehicle',
-        });
-        if (!offered) await send.text(mobile, 'Sure — send me the next vehicle number.');
+        await send.text(mobile, 'Send me the vehicle number — like *KA31N8147*.');
         return;
-      }
 
       /**
        * The order summary — everything they are agreeing to, before any
