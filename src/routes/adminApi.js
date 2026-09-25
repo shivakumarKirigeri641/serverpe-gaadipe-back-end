@@ -178,6 +178,41 @@ router.get('/profitability/transactions/:id', needs('finance.view'), safe(async 
   res.json(out);
 }));
 
+/* ------------------------------------------------ payments: failures, recon */
+
+/*
+ * Operations module phase 2 (user, 2026-09-25): the payment funnel and its
+ * failure reasons, abandoned payments (looking only — nothing is sent from
+ * here), refunds, and reconciliation against Razorpay (comparing only — no
+ * payment is changed). src/admin/payflow.js and src/admin/recon.js.
+ */
+const payflow = require('../admin/payflow');
+const recon = require('../admin/recon');
+router.get('/payments/funnel', needs('payments.view'), safe(async (req, res) => res.json(await payflow.funnel(periodOf(req.query)))));
+router.get('/payments/abandoned', needs('payments.view'), safe(async (req, res) => res.json(await payflow.abandoned(req.query))));
+router.get('/payments/refunds', needs('payments.view'), safe(async (req, res) => res.json(await payflow.refunds(periodOf(req.query)))));
+router.get('/recon/runs', needs('payments.view'), safe(async (_req, res) => res.json(await recon.runs())));
+router.get('/recon/items', needs('payments.view'), safe(async (req, res) => res.json(await recon.items(req.query))));
+router.post('/recon/run', needs('payments.view'), safe(async (req, res) => {
+  const busy = await db.one(`SELECT id FROM recon_runs WHERE status = 'running' AND started_at > now() - interval '15 minutes' LIMIT 1`);
+  if (busy) return res.status(409).json({ error: 'running', message: 'A reconciliation is already running.' });
+  const days = Math.min(90, Math.max(1, Number(req.body?.days) || 7));
+  const to = new Date(); const from = new Date(to.getTime() - days * 86400000);
+  await auth.audit({ adminId: req.admin.id, action: 'recon_run', ip: ipOf(req), detail: { days } });
+  // Server-side and in the background: a run reads Razorpay one payment at a time.
+  recon.run({ from, to, adminId: req.admin.id }).catch((e) => console.error('[recon] run failed:', e.message));
+  res.status(202).json({ ok: true, started: true, days });
+}));
+router.post('/recon/items/:id/review', needs('payments.view'), safe(async (req, res) => {
+  const out = await recon.review({ id: req.params.id, note: req.body?.note, adminId: req.admin.id });
+  if (out.ok) {
+    await auth.audit({ adminId: req.admin.id, action: 'recon_reviewed', ip: ipOf(req),
+                       detail: { item_id: String(req.params.id), payment_id: out.item.payment_row_id ? String(out.item.payment_row_id) : null,
+                                 result: out.item.result, note: req.body?.note || null } });
+  }
+  res.status(out.ok ? 200 : 404).json(out);
+}));
+
 /* WhatsApp and vehicle lookups (phase 4): src/admin/whatsappStats.js and
    src/admin/lookups.js, for the same periods as the command center. */
 router.get('/whatsapp/stats', safe(async (req, res) => res.json(

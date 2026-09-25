@@ -65,7 +65,28 @@ async function handle(body) {
                       link_id: link?.id || null,
                       reference_id: link?.reference_id || payment?.notes?.reference_id || null,
                       amount: payment?.amount ?? link?.amount ?? null,
-                      status: payment?.status || link?.status || null })]);
+                      status: payment?.status || link?.status || null,
+                      // Why an attempt failed, as Razorpay says it (operations
+                      // module, 2026-09-25): failure analytics read these.
+                      method: payment?.method || null,
+                      error_code: payment?.error_code || null,
+                      error_reason: payment?.error_reason || null,
+                      error_source: payment?.error_source || null,
+                      error_step: payment?.error_step || null,
+                      error_description: payment?.error_description ? String(payment.error_description).slice(0, 200) : null })]);
+
+  // A failed attempt is an event of its own, once per Razorpay payment, on the
+  // payment row it was for — so the payment funnel can count it.
+  if (event === 'payment.failed' && payment?.id) {
+    const ref = String(payment?.notes?.reference_id || '');
+    const rowId = Number(ref.startsWith('gp-') ? ref.split('-')[1] : ref) || null;
+    require('../events/track').fire({
+      key: `pfail:${payment.id}`, name: 'payment_failed', channel: 'system', paymentId: rowId,
+      status: payment.error_reason || 'failed', errorCode: payment.error_code || null, amountPaise: payment.amount ?? null,
+      meta: { method: payment.method || null, reason: payment.error_reason || null, source: payment.error_source || null,
+              step: payment.error_step || null, description: payment.error_description ? String(payment.error_description).slice(0, 200) : null },
+    });
+  }
 
   if (!ACTED.has(event)) {
     console.log('[pay] %s (recorded, no action)', event);
