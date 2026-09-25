@@ -1089,7 +1089,7 @@ async function handle(session, message, mobile) {
       const agreed = await agreedVersion(mobile);
       if (agreed && agreed === await policyVersion()) {
         await setState(mobile, 'owner_start', 'template: check a vehicle');
-        await send.text(mobile, 'Send me the vehicle number — like *KA31N8147*.');
+        await send.text(mobile, 'Send me the vehicle number — like *KA01XX1234*.');
       } else {
         await start(mobile);
       }
@@ -1116,7 +1116,7 @@ async function handle(session, message, mobile) {
         await doors(mobile,
           'Thank you. ✅\n\n'
           + 'What would you like to do?\n\n'
-          + '_To check a vehicle you can also just send its number, like *KA31N8147*._');
+          + '_To check a vehicle you can also just send its number, like *KA01XX1234*._');
         return;
 
       case BTN.AGREE_PARTNER:
@@ -1199,7 +1199,7 @@ async function handle(session, message, mobile) {
       // reports"; offering them here answered a question nobody asked.
       case BTN.CHECK_ANOTHER:
         await setState(mobile, 'owner_start', 'checking another');
-        await send.text(mobile, 'Send me the vehicle number — like *KA31N8147*.');
+        await send.text(mobile, 'Send me the vehicle number — like *KA01XX1234*.');
         return;
 
       /**

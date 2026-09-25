@@ -4,9 +4,9 @@
 -- beside it. That is wrong for this product, and wrong in a way that gives
 -- service away:
 --
---   day 0   pay Rs.49 for KA31N8147   -> subscription ends day 28
+--   day 0   pay Rs.49 for KA01XX1234   -> subscription ends day 28
 --   day 10  pay Rs.49 for KA02EX1480  -> the SAME subscription is extended,
---                                        so KA31N8147 silently gains 28 days
+--                                        so KA01XX1234 silently gains 28 days
 --
 -- Every extra vehicle would hand the earlier ones a free month, compounding
 -- with each purchase.

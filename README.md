@@ -20,8 +20,8 @@ including a local development machine — calls this instead, with an API key, f
 **Auth:** `x-api-key: <VEHICLE_LOOKUP_KEY>` — or `Authorization: Bearer <key>`.
 Every route under `/api/v1` requires it; there is no unauthenticated surface.
 
-Registration numbers are normalised before use, so `KA-31 n 8147`, `ka31n8147` and
-`KA31N8147` are the same vehicle. Anything failing ULIP's `^[A-Z0-9]{5,11}$` is
+Registration numbers are normalised before use, so `KA-01 xx 1234`, `ka01xx1234` and
+`KA01XX1234` are the same vehicle. Anything failing ULIP's `^[A-Z0-9]{5,11}$` is
 rejected with a 400 **before** a call is spent.
 
 ---

@@ -146,7 +146,7 @@ async function watchedBy(userId) {
  * Vehicles this person has checked before, most recent first.
  *
  * The expiry columns come along because they are what makes a picker worth
- * showing: "KA31N8147 — Insurance expired 5 years ago" is a reason to tap,
+ * showing: "KA01XX1234 — Insurance expired 5 years ago" is a reason to tap,
  * where a bare list of plates is just a list of plates. None of it costs a
  * lookup; it is all already stored.
  */

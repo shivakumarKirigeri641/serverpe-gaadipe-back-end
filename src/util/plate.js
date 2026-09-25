@@ -41,7 +41,7 @@ const STATE_CODES = new Set([
 /**
  * The shapes a registration actually takes.
  *
- * standard  KA02EX1480, KA31N8147, DL8CAF5031, MH12VT7537
+ * standard  KA02EX1480, KA01XX1234, DL8CAF5031, MH12VT7537
  *           state(2) + district(1-2) + series(0-3 letters) + number(1-4)
  * bh        22BH1234AB — the newer series, no state code at all
  * defence   Army and paramilitary, e.g. 08A123456 / 21BX456789A
@@ -62,7 +62,7 @@ const FORMATS = [
 const NOISE = /\b(IND|INDIA|VEHICLE|VAHAN|NUMBER|NUMBR|NO|NUM|REG|REGN|GAADI|CAR|BIKE|MY|IS|CHECK)\b/gi;
 
 /**
- * "ka-31 n 8147" -> "KA31N8147". Never throws.
+ * "ka-01 xx 1234" -> "KA01XX1234". Never throws.
  * Strips every separator people use: spaces, hyphens, dots, slashes, and the
  * invisible characters that arrive when text is pasted from another app.
  */
@@ -147,7 +147,7 @@ function repair(regNo) {
 /**
  * What makes a well-shaped number impossible, per kind — or null.
  *
- *   standard  KA01AB1234 · KA31N8147 · KA010001 — a real State/UT code, an RTO
+ *   standard  KA01AB1234 · KA01XX1234 · KA010001 — a real State/UT code, an RTO
  *             code of 01–99, up to three series letters, a serial of 1–9999.
  *   Delhi     DL3CAB1234 · DL10CA1234 — the same, but the RTO code is 1–2
  *             digits as issued, and a series is required: Delhi numbers always
