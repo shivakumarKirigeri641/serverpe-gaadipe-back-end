@@ -213,6 +213,20 @@ router.post('/recon/items/:id/review', needs('payments.view'), safe(async (req, 
   res.status(out.ok ? 200 : 404).json(out);
 }));
 
+/* ------------------------------------------ customers, retention, attribution */
+
+/*
+ * Operations module phase 3 (user, 2026-09-25): Customer Intelligence,
+ * retention and cohorts, Campaigns & Attribution. Drop-off is the Command
+ * Center's own funnel (/command/overview), so its stages have one definition.
+ */
+const customerIntel = require('../admin/customerIntel');
+const attribution = require('../admin/attribution');
+router.get('/customer-intel', needs('customers.view'), safe(async (req, res) => res.json(await customerIntel.list(req.query))));
+router.get('/retention', needs('customers.view'), safe(async (req, res) => res.json(await customerIntel.retention(periodOf(req.query)))));
+router.get('/attribution', needs('customers.view'), safe(async (req, res) => res.json(await attribution.overview({ ...periodOf(req.query), model: req.query.model, source: req.query.source }))));
+router.get('/attribution/people', needs('customers.view'), safe(async (req, res) => res.json(await attribution.people(req.query))));
+
 /* WhatsApp and vehicle lookups (phase 4): src/admin/whatsappStats.js and
    src/admin/lookups.js, for the same periods as the command center. */
 router.get('/whatsapp/stats', safe(async (req, res) => res.json(

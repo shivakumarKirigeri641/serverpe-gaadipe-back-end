@@ -85,7 +85,15 @@ async function journey(q) {
               count(*) FILTER (WHERE status = 'paid')::int AS payments,
               count(*) FILTER (WHERE status = 'created' AND created_at < now() - interval '30 minutes')::int AS unfinished,
               (SELECT count(*)::int FROM vehicle_reports r WHERE r.user_id = $1) AS reports,
-              (SELECT count(*)::int FROM user_vehicles uv WHERE uv.user_id = $1) AS vehicles
+              (SELECT count(*)::int FROM user_vehicles uv WHERE uv.user_id = $1) AS vehicles,
+              -- Lifetime (operations module, 2026-09-25).
+              (SELECT count(*)::int FROM events e WHERE e.user_id = $1 AND e.name IN ('vehicle_search_success', 'vehicle_search_failed')) AS searches,
+              (SELECT count(DISTINCT e.reg_no)::int FROM events e WHERE e.user_id = $1 AND e.name IN ('vehicle_search_success', 'vehicle_search_failed')) AS unique_vehicles,
+              (SELECT count(*)::int FROM event_log l WHERE l.kind = 'razorpay_webhook' AND l.detail->>'event' = 'payment.failed'
+                  AND split_part(l.detail->>'reference_id', '-', 2) IN (SELECT p2.id::text FROM payments p2 WHERE p2.user_id = $1)) AS payment_failures,
+              (SELECT e.reg_no FROM events e WHERE e.user_id = $1 AND e.reg_no IS NOT NULL ORDER BY e.occurred_at DESC LIMIT 1) AS last_vehicle,
+              (SELECT e.channel FROM events e WHERE e.user_id = $1 AND e.channel IN ('web', 'whatsapp') ORDER BY e.occurred_at DESC LIMIT 1) AS last_channel,
+              (SELECT count(DISTINCT (e.occurred_at AT TIME ZONE 'Asia/Kolkata')::date)::int FROM events e WHERE e.user_id = $1) AS days_active
          FROM payments WHERE user_id = $1`, [who.userId]) : null,
   ]);
 
