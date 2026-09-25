@@ -87,8 +87,30 @@ router.use(safe(async (req, res, next) => {
       message: 'Your session has ended. Please sign in again.' });
   }
   req.admin = session;
+  // Mask customers' mobile numbers for roles without 'pii' (phase 7) — in
+  // every JSON answer, whichever screen asked.
+  if (!auth.can(session.role, 'pii')) {
+    const json = res.json.bind(res);
+    res.json = (body) => json(maskDeep(body));
+  }
   next();
 }));
+
+/* 9886122415 -> 98******15, in any field that holds a customer's mobile. */
+const MOBILE_KEYS = /^(mobile|user_mobile|phone|wa_id|requested_by|person_mobile)$/;
+const maskMobile = (v) => {
+  const d = String(v ?? '').replace(/\D/g, '');
+  return d.length >= 10 ? `${d.slice(-10, -8)}******${d.slice(-2)}` : v;
+};
+function maskDeep(v, depth = 0) {
+  if (depth > 8 || v == null || typeof v !== 'object' || v instanceof Date) return v;
+  if (Array.isArray(v)) return v.map((x) => maskDeep(x, depth + 1));
+  const out = {};
+  for (const [k, x] of Object.entries(v)) {
+    out[k] = MOBILE_KEYS.test(k) && (typeof x === 'string' || typeof x === 'number') ? maskMobile(x) : maskDeep(x, depth + 1);
+  }
+  return out;
+}
 
 /** Guard by what a role may do, never by the role's name. */
 const needs = (capability) => (req, res, next) => {
@@ -186,6 +208,11 @@ router.post('/alerts/:id/resolve', safe(async (req, res) => {
 router.get('/feed', safe(async (req, res) => res.json(await alertCenter.feed(req.query.since))));
 router.get('/badges', safe(async (_req, res) => res.json(await alertCenter.badges())));
 
+/* Where the vehicles are: by state, then by RTO (phase 7, src/admin/geo.js). */
+router.get('/geo/states', safe(async (req, res) => res.json(await require('../admin/geo').states(periodOf(req.query)))));
+router.get('/geo/states/:code', safe(async (req, res) => res.json(
+  await require('../admin/geo').rtos(req.params.code, periodOf(req.query)))));
+
 /* One person, start to finish, and the CSV exports (phase 3,
    src/admin/journey.js). Both show personal data, so both are audited. */
 const journeys = require('../admin/journey');
@@ -199,7 +226,8 @@ router.get('/journey', safe(async (req, res) => {
 }));
 router.get('/export/:kind', safe(async (req, res) => {
   const kind = String(req.params.kind || '').replace(/\.csv$/, '');
-  const out = await journeys.exportCsv(kind, { from: req.query.from, to: req.query.to });
+  const out = await journeys.exportCsv(kind, { from: req.query.from, to: req.query.to,
+                                               mask: !auth.can(req.admin.role, 'pii') });
   if (!out) return res.status(404).json({ error: 'unknown_export', message: `Exports: ${journeys.EXPORT_KINDS.join(', ')}.` });
   await auth.audit({ adminId: req.admin.id, action: 'export_csv', ip: ipOf(req),
                      detail: { kind, from: req.query.from || null, to: req.query.to || null, rows: out.rows } });

@@ -201,7 +201,7 @@ const EXPORTS = {
                FROM whatsapp_messages WHERE created_at >= $1 AND created_at < $2 ORDER BY id`,
 };
 
-async function exportCsv(kind, { from, to } = {}) {
+async function exportCsv(kind, { from, to, mask = false } = {}) {
   const sql = EXPORTS[kind];
   if (!sql) return null;
   const day = (s, end) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || ''))
@@ -209,7 +209,9 @@ async function exportCsv(kind, { from, to } = {}) {
   const a = day(from) || new Date(0);
   const b = day(to, true) || new Date(Date.now() + 60000);
   const { rows } = await db.query(sql, [a, b]);
-  return { csv: toCsv(rows), rows: rows.length };
+  // Roles without 'pii' get masked mobiles here too, not just on screen.
+  const out = mask ? rows.map((r) => (r.mobile ? { ...r, mobile: `${String(r.mobile).slice(0, 2)}******${String(r.mobile).slice(-2)}` } : r)) : rows;
+  return { csv: toCsv(out), rows: rows.length };
 }
 
 module.exports = { journey, exportCsv, EXPORT_KINDS: Object.keys(EXPORTS) };

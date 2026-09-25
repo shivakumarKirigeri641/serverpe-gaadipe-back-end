@@ -35,11 +35,21 @@ const sha256 = (v) => crypto.createHash('sha256').update(String(v)).digest('hex'
  * "is this person finance?" does not.
  */
 const ROLES = {
-  owner:   ['read', 'money', 'settings', 'block', 'lookup', 'admins'],
-  admin:   ['read', 'money', 'settings', 'block', 'lookup'],
-  finance: ['read', 'money'],
-  viewer:  ['read'],
+  owner:      ['read', 'money', 'settings', 'block', 'lookup', 'admins', 'pii'],
+  admin:      ['read', 'money', 'settings', 'block', 'lookup', 'pii'],
+  // Command center phase 7 (user, 2026-09-25): the day-to-day running of the
+  // service without the money, and helping customers without changing it.
+  operations: ['read', 'settings', 'block', 'lookup', 'pii'],
+  finance:    ['read', 'money'],
+  support:    ['read', 'lookup', 'pii'],
+  viewer:     ['read'],
 };
+/*
+ * 'pii' — may see customers' full mobile numbers. Without it, every mobile the
+ * admin API returns is masked (98******15) by the server itself, in screens
+ * and in CSV exports alike: Finance and Read-only work with the money and the
+ * shape of things, not with who.
+ */
 
 const can = (role, capability) => (ROLES[role] || []).includes(capability);
 
