@@ -75,7 +75,9 @@ const cors = (allowedOrigins) => (req, res, next) => {
    routes. PDF downloads stay plain — they are files, not JSON. */
 const { gate, loopGuard } = require('./security/guard');
 const { tunnel } = require('./security/tunnel');
-const fileRoute = (req) => /^\/((reports|invoices)\/[^/]+\/file|maintenance\/backup)$/.test(req.path);
+// Files come back as files, not through the encrypted tunnel: report and
+// invoice PDFs, the backup, and the CSV exports (command center phase 3).
+const fileRoute = (req) => /^\/((reports|invoices)\/[^/]+\/file|maintenance\/backup|export\/[a-z_]+(\.csv)?)$/.test(req.path);
 
 app.use('/admin/api', cors(config.admin.origins), gate('admin'), tunnel('admin', { exempt: fileRoute }),
   loopGuard('admin'), adminRoutes);

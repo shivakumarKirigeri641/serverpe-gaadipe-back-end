@@ -55,8 +55,27 @@ const SORTS = {
  * `q` matches a mobile number, a name or any registration they have checked —
  * the three things anyone actually searches by.
  */
+/*
+ * WHO TO LOOK AT (user, 2026-09-25, command center phase 3). Each segment is a
+ * named condition, never SQL from the request.
+ */
+const SEGMENTS = {
+  new:          `u.created_at > now() - interval '7 days'`,
+  returning:    `u.created_at <= now() - interval '7 days' AND u.last_seen_at > now() - interval '7 days'`,
+  paid:         `coalesce(m.paid_paise, 0) > 0`,
+  unpaid:       `coalesce(m.paid_paise, 0) = 0`,
+  wa_active:    `ws.last_inbound_at > now() - interval '24 hours'`,
+  wa_inactive:  `(ws.last_inbound_at IS NULL OR ws.last_inbound_at <= now() - interval '24 hours')`,
+  pay_failed:   `EXISTS (SELECT 1 FROM payments pf WHERE pf.user_id = u.id AND pf.status = 'created'
+                          AND pf.created_at < now() - interval '30 minutes')`,
+  // Worth a look, never an automatic verdict: blocked, or checking far more
+  // vehicles than a person does.
+  suspicious:   `(EXISTS (SELECT 1 FROM blocks b2 WHERE b2.kind = 'mobile' AND b2.value = u.mobile AND b2.released_at IS NULL)
+                  OR coalesce(pu.vehicles_checked, 0) >= 25)`,
+};
+
 async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
-                      blocked = null, paying = null } = {}) {
+                      blocked = null, paying = null, segment = null } = {}) {
   const order = SORTS[sort] || SORTS.last_seen;
   const term = String(q || '').trim();
   const digits = term.replace(/\D/g, '');
@@ -112,8 +131,20 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
               WHERE w.mobile = u.mobile)                            AS last_message_at,
             (SELECT count(*) FROM whatsapp_messages w
               WHERE w.mobile = u.mobile)                            AS messages,
+            -- WhatsApp status and where they first came from (phase 3).
+            CASE WHEN ws.wa_opt_out_at IS NOT NULL THEN 'stopped'
+                 WHEN ws.last_inbound_at > now() - interval '24 hours' THEN 'active'
+                 WHEN ws.id IS NOT NULL THEN 'inactive'
+                 ELSE 'none' END                                    AS wa_status,
+            coalesce((SELECT v.first_touch->>'source' FROM visitors v
+                       WHERE v.mobile = u.mobile ORDER BY v.first_seen_at LIMIT 1),
+                     CASE WHEN ws.attribution->>'channel' = 'whatsapp_ad' THEN 'meta_ads' END,
+                     CASE WHEN u.signup_channel = 'web' THEN 'website' ELSE 'whatsapp_direct' END) AS first_source,
+            EXISTS (SELECT 1 FROM payments pf WHERE pf.user_id = u.id AND pf.status = 'created'
+                      AND pf.created_at < now() - interval '30 minutes') AS pay_failed,
             count(*) OVER ()                                        AS total_rows
        FROM users u
+       LEFT JOIN whatsapp_sessions ws ON ws.mobile = u.mobile
        LEFT JOIN per_user pu ON pu.id = u.id
        LEFT JOIN money m     ON m.user_id = u.id
        LEFT JOIN docs d      ON d.user_id = u.id
@@ -129,6 +160,7 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
         AND ($5::boolean IS NULL OR $5 = EXISTS (
               SELECT 1 FROM subscriptions s WHERE s.user_id = u.id AND s.is_active
                  AND s.ends_on >= CURRENT_DATE))
+        AND (${SEGMENTS[segment] || 'true'})
       ORDER BY ${order}
       LIMIT $6 OFFSET $7`,
     [term, digits, plate, blocked, paying, Math.min(200, limit), offset]);

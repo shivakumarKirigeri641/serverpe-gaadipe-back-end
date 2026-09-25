@@ -133,6 +133,29 @@ router.get('/command/events', safe(async (req, res) => res.json(await command.dr
   limit: Number(req.query.limit) || 200,
 }))));
 
+/* One person, start to finish, and the CSV exports (phase 3,
+   src/admin/journey.js). Both show personal data, so both are audited. */
+const journeys = require('../admin/journey');
+router.get('/journey', safe(async (req, res) => {
+  const out = await journeys.journey({ mobile: req.query.mobile, userId: req.query.user, visitorId: req.query.visitor });
+  if (out.found) {
+    await auth.audit({ adminId: req.admin.id, action: 'view_journey', ip: ipOf(req),
+                       detail: { mobile: out.profile.mobile, user_id: out.profile.user_id } });
+  }
+  res.json(out);
+}));
+router.get('/export/:kind', safe(async (req, res) => {
+  const kind = String(req.params.kind || '').replace(/\.csv$/, '');
+  const out = await journeys.exportCsv(kind, { from: req.query.from, to: req.query.to });
+  if (!out) return res.status(404).json({ error: 'unknown_export', message: `Exports: ${journeys.EXPORT_KINDS.join(', ')}.` });
+  await auth.audit({ adminId: req.admin.id, action: 'export_csv', ip: ipOf(req),
+                     detail: { kind, from: req.query.from || null, to: req.query.to || null, rows: out.rows } });
+  const stamp = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="gaadipe-${kind}-${stamp}.csv"`);
+  res.send(`﻿${out.csv}`);   // BOM, so Excel reads ₹ and names correctly
+}));
+
 router.get('/dashboard', safe(async (_req, res) => res.json(await stats.dashboard())));
 
 router.get('/series', safe(async (req, res) => res.json(
@@ -238,6 +261,7 @@ router.get('/customers', safe(async (req, res) => {
     offset: Number(req.query.offset) || 0,
     blocked: bool(req.query.blocked),
     paying: bool(req.query.paying),
+    segment: req.query.segment || null,
   }));
 }));
 
