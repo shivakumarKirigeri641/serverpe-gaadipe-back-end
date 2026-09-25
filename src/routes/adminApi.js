@@ -155,6 +155,29 @@ router.get('/command/events', safe(async (req, res) => res.json(await command.dr
   limit: Number(req.query.limit) || 200,
 }))));
 
+/* ------------------------------------------------ business and profitability */
+
+/*
+ * The operations module, phase 1 (user, 2026-09-25): Business Health, Today's
+ * Summary, Profitability, the transaction ledger and the finance export. The
+ * money is src/finance/ledger.js's; the routes check the module's permissions.
+ */
+const business = require('../admin/business');
+const profitability = require('../admin/profitability');
+router.get('/business/health', needs('dashboard.view'), safe(async (req, res) => res.json(await business.health(periodOf(req.query)))));
+router.get('/business/summary', needs('dashboard.view'), safe(async (_req, res) => res.json(await business.summary())));
+router.get('/profitability', needs('finance.view'), safe(async (req, res) => res.json(await profitability.overview({ ...periodOf(req.query), grain: req.query.grain }))));
+router.get('/profitability/transactions', needs('finance.view'), safe(async (req, res) => res.json(await profitability.transactions(req.query))));
+router.get('/profitability/transactions/:id', needs('finance.view'), safe(async (req, res) => {
+  const out = await profitability.transaction(req.params.id);
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'No such transaction.' });
+  if (!refreshing(req)) {
+    await auth.audit({ adminId: req.admin.id, action: 'view_transaction', ip: ipOf(req),
+                       detail: { payment_id: String(req.params.id), reg_no: out.ledger.reg_no || null } });
+  }
+  res.json(out);
+}));
+
 /* WhatsApp and vehicle lookups (phase 4): src/admin/whatsappStats.js and
    src/admin/lookups.js, for the same periods as the command center. */
 router.get('/whatsapp/stats', safe(async (req, res) => res.json(
@@ -223,6 +246,17 @@ router.get('/journey', safe(async (req, res) => {
                        detail: { mobile: out.profile.mobile, user_id: out.profile.user_id } });
   }
   res.json(out);
+}));
+/* The finance / GST export (operations module): the ledger's own rows and
+   figures, with a TOTAL line, so it always matches the transaction table. */
+router.get('/export/ledger.csv', needs('finance.export'), safe(async (req, res) => {
+  const out = await require('../admin/profitability').exportCsv(periodOf(req.query), { mask: !auth.can(req.admin.role, 'pii') });
+  await auth.audit({ adminId: req.admin.id, action: 'export_ledger', ip: ipOf(req),
+                     detail: { range: out.range, filter: periodOf(req.query), rows: out.rows } });
+  const stamp = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="gaadipe-ledger-' + stamp + '.csv"');
+  res.send('﻿' + out.csv);
 }));
 /* Vehicle records as CSV (the Vehicles module): the explorer's filters and the
    fields chosen, logged with both. Customers' numbers are always masked here. */

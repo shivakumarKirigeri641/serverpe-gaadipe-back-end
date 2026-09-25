@@ -36,15 +36,41 @@ const sha256 = (v) => crypto.createHash('sha256').update(String(v)).digest('hex'
  */
 const V_ALL = ['vehicles.view', 'vehicles.view_sensitive', 'vehicles.export', 'vehicles.refresh',
                'vehicles.notes', 'vehicles.tags', 'vehicles.api_logs'];
+/*
+ * The operations module's permissions (user, 2026-09-25), beside the older
+ * names they grew from — both are checked, so nothing that worked stops:
+ *   dashboard.view        Business Health, Command Center, analytics
+ *   customers.view        customers, journeys, retention, attribution
+ *   customers.view_sensitive  full mobile numbers ('pii' is the same thing)
+ *   payments.view         payments, reconciliation, abandoned payments
+ *   payments.refund       reserved: GaadiPe does not refund from the panel
+ *   finance.view / .export  profitability, ledger, GST export
+ *   api.view / api.manage   API monitor, providers, request log / their settings
+ *   system.view / .manage   health, jobs, infrastructure, backups / run a job, a backup
+ *   settings.manage       configuration and feature flags ('settings')
+ *   audit.view            the audit log
+ * Referral permissions are not defined: GaadiPe has no referral programme for now.
+ */
+const EVERYONE = ['read', 'dashboard.view', 'customers.view', 'vehicles.view'];
 const ROLES = {
-  owner:      ['read', 'money', 'settings', 'block', 'lookup', 'admins', 'pii', ...V_ALL],
-  admin:      ['read', 'money', 'settings', 'block', 'lookup', 'pii', ...V_ALL],
+  // Super admin.
+  owner:      [...EVERYONE, 'money', 'settings', 'block', 'lookup', 'admins', 'pii', ...V_ALL,
+               'customers.view_sensitive', 'payments.view', 'payments.refund', 'finance.view', 'finance.export',
+               'api.view', 'api.manage', 'system.view', 'system.manage', 'settings.manage', 'audit.view'],
+  admin:      [...EVERYONE, 'money', 'settings', 'block', 'lookup', 'pii', ...V_ALL,
+               'customers.view_sensitive', 'payments.view', 'finance.view', 'finance.export',
+               'api.view', 'api.manage', 'system.view', 'system.manage', 'settings.manage', 'audit.view'],
   // Command center phase 7 (user, 2026-09-25): the day-to-day running of the
   // service without the money, and helping customers without changing it.
-  operations: ['read', 'settings', 'block', 'lookup', 'pii', ...V_ALL],
-  finance:    ['read', 'money', 'vehicles.view', 'vehicles.export'],
-  support:    ['read', 'lookup', 'pii', 'vehicles.view', 'vehicles.view_sensitive', 'vehicles.notes', 'vehicles.tags'],
-  viewer:     ['read', 'vehicles.view'],
+  operations: [...EVERYONE, 'settings', 'block', 'lookup', 'pii', ...V_ALL,
+               'customers.view_sensitive', 'api.view', 'system.view', 'settings.manage', 'audit.view'],
+  finance:    [...EVERYONE, 'money', 'vehicles.export', 'payments.view', 'finance.view', 'finance.export'],
+  support:    [...EVERYONE, 'lookup', 'pii', 'vehicles.view_sensitive', 'vehicles.notes', 'vehicles.tags',
+               'customers.view_sensitive'],
+  // The servers, the records API and the jobs — not customers, not money.
+  technical:  [...EVERYONE, 'lookup', 'vehicles.refresh', 'vehicles.api_logs', 'api.view', 'api.manage',
+               'system.view', 'system.manage', 'audit.view'],
+  viewer:     [...EVERYONE],
 };
 /*
  * The Vehicles module (user, 2026-09-25) checks its own capabilities, route by

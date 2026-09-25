@@ -31,7 +31,9 @@ async function splitOf(grossPaise, { whatsapp = 0, sms = 0 } = {}) {
   const feeGstPct = await settings.num('razorpay_fee_gst_percent', 18);
 
   const gross = Number(grossPaise || 0);
-  const taxable = Math.round(gross / 1.18);
+  // The active GST rate, not a constant (operations module, 2026-09-25).
+  const { gst_percent: gstPct } = await require('../finance/ledger').rates();
+  const taxable = Math.round((gross * 100) / (100 + gstPct));
   const gst = gross - taxable;
   const fee = Math.round(gross * (feePct / 100));
   const feeGst = Math.round(fee * (feeGstPct / 100));
@@ -271,6 +273,19 @@ async function finance({ from = null, to = null } = {}) {
                AND ($2::date IS NULL OR o.created_at ${IST} < ($2::date + 1))) AS sms`, [from, to]);
   const split = await splitOf(row.gross_paise, { whatsapp: msgs.wa, sms: msgs.sms });
   const cost = Number(ulip.cost_paise || 0);
+  // The ledger's figures replace the estimate: actual gateway fees where
+  // Razorpay gave them, invoice GST, refunds (src/finance/ledger.js).
+  const IST_MS = 330 * 60000;
+  const fromAt = from ? new Date(new Date(`${from}T00:00:00Z`).getTime() - IST_MS) : new Date(0);
+  const toAt = to ? new Date(new Date(`${to}T00:00:00Z`).getTime() - IST_MS + 86400000) : new Date();
+  const lm = await require('../finance/ledger').periodMoney(fromAt, toAt);
+  Object.assign(split, {
+    gross_paise: lm.gross_paise, gst_paise: lm.gst_paise, taxable_paise: lm.net_sales_paise,
+    gateway_fee_paise: lm.gateway_fee_paise, gateway_fee_gst_paise: lm.gateway_gst_paise,
+    whatsapp_cost_paise: lm.whatsapp_cost_total_paise, sms_cost_paise: lm.sms_cost_paise,
+    take_home_paise: lm.net_revenue_paise - lm.gateway_paise - lm.messaging_paise,
+    fees_estimated: lm.fees_estimated,
+  });
 
   return {
     range: { from, to },
@@ -280,7 +295,8 @@ async function finance({ from = null, to = null } = {}) {
     ...split,
     ulip: { calls: Number(ulip.calls), cache_hits: Number(ulip.cache_hits), cost_paise: cost },
     // After tax, gateway and data costs. The only figure that is really income.
-    net_paise: split.take_home_paise - cost - Number(row.refunded_paise),
+    // The ledger's business net: refunds are already out of take-home above.
+    net_paise: split.take_home_paise - cost,
     by_plan: byPlan.rows.map(r => ({ ...r, payments: Number(r.payments),
                                      gross_paise: Number(r.gross_paise) })),
     gst_by_state: gst.rows,

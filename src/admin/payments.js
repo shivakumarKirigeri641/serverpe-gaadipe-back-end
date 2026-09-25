@@ -20,7 +20,7 @@
 
 const db = require('../db');
 const command = require('./command');
-const { splitOf } = require('./stats');
+const ledger = require('../finance/ledger');
 
 /* Where the paying customer first came from — the same reading as Customers. */
 const SOURCE = `coalesce(
@@ -73,7 +73,8 @@ async function summary(q = {}) {
     db.one(`SELECT count(*)::int AS n FROM whatsapp_messages WHERE direction = 'out' AND message_type = 'template'
              AND created_at >= $1 AND created_at < $2`, [r.from, r.to]),
   ]);
-  const money = await splitOf(n.gross_paise, { whatsapp: wa.n });
+  void wa;
+  const money = await ledger.periodMoney(r.from, r.to);
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : null);
   return {
     range: { label: r.label, from: r.from, to: r.to },
@@ -83,10 +84,11 @@ async function summary(q = {}) {
       failure_pct: pct(n.failed, n.started),
       arpu_paise: n.payers ? Math.round(n.gross_paise / n.payers) : null,
       gst_paise: money.gst_paise,
-      gateway_paise: money.gateway_fee_paise + money.gateway_fee_gst_paise,
-      messaging_paise: money.whatsapp_cost_paise + money.sms_cost_paise,
-      api_cost_paise: api.c,
-      net_paise: money.take_home_paise - api.c,
+      gateway_paise: money.gateway_paise,
+      messaging_paise: money.messaging_paise,
+      api_cost_paise: Math.max(api.c, money.api_cost_total_paise),
+      refund_paise: money.refund_paise,
+      net_paise: money.net_paise,
     },
     series: series.rows, grain: q.grain in GRAINS ? q.grain : 'day',
     by_source: bySource.rows, by_method: byMethod.rows,
@@ -101,15 +103,17 @@ const STATUS = {
   refunded: `p.status = 'refunded'`,
 };
 
-/** A payment's own money: GST, gateway, and the records calls behind it. */
+/** A payment's own money — the ledger's row for it (src/finance/ledger.js). */
 async function split(p) {
-  const m = await splitOf(p.status === 'paid' ? p.amount_paise : 0);
-  const api = Number(p.api_cost_paise || 0);
+  const { rows } = await ledger.entries({ ids: [p.id], all: true });
+  const e = rows[0];
+  if (!e || !['paid', 'refunded'].includes(p.status)) {
+    return { gst_paise: 0, gateway_paise: 0, api_cost_paise: Number(p.api_cost_paise || 0), net_paise: 0, fee_source: 'none' };
+  }
   return {
-    gst_paise: m.gst_paise,
-    gateway_paise: m.gateway_fee_paise + m.gateway_fee_gst_paise,
-    api_cost_paise: api,
-    net_paise: p.status === 'paid' ? p.amount_paise - m.gst_paise - m.gateway_fee_paise - m.gateway_fee_gst_paise - api : 0,
+    gst_paise: e.gst_paise, gateway_paise: e.gateway_fee_paise + e.gateway_gst_paise, fee_source: e.fee_source,
+    api_cost_paise: e.api_cost_paise, whatsapp_cost_paise: e.whatsapp_cost_paise, refund_paise: e.refund_paise,
+    net_paise: e.net_paise,
   };
 }
 

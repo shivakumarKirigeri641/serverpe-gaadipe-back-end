@@ -17,7 +17,7 @@
  */
 
 const db = require('../db');
-const { splitOf } = require('./stats');
+const ledger = require('../finance/ledger');
 
 const IST_MIN = 330;                       // India is UTC+5:30, all year
 const DAY = 24 * 3600 * 1000;
@@ -36,7 +36,19 @@ function istMonthStart(t, add = 0) {
 const parseDay = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || ''))
   ? new Date(Date.parse(`${s}T00:00:00Z`) - IST_MIN * 60000) : null);
 
-const PRESETS = ['today', 'yesterday', '7d', '30d', 'this_month', 'last_month', 'custom'];
+/* Quarters and India's financial year (April–March) — for finance and GST (operations module). */
+function istQuarterStart(t, add = 0) {
+  const ist = new Date(t.getTime() + IST_MIN * 60000);
+  const q = Math.floor(ist.getUTCMonth() / 3) + add;
+  return new Date(Date.UTC(ist.getUTCFullYear(), q * 3, 1) - IST_MIN * 60000);
+}
+function istFyStart(t, add = 0) {
+  const ist = new Date(t.getTime() + IST_MIN * 60000);
+  const y = ist.getUTCMonth() >= 3 ? ist.getUTCFullYear() : ist.getUTCFullYear() - 1;
+  return new Date(Date.UTC(y + add, 3, 1) - IST_MIN * 60000);
+}
+
+const PRESETS = ['today', 'yesterday', '7d', '30d', 'this_month', 'last_month', 'this_quarter', 'last_quarter', 'this_fy', 'last_fy', 'custom'];
 const COMPARES = ['previous', 'yesterday', 'last_week', 'last_month', 'none'];
 
 /**
@@ -54,6 +66,10 @@ function resolve({ range = 'today', from, to, compare = 'previous' } = {}) {
     case '30d': a = new Date(today - 29 * DAY); b = now; label = 'Last 30 days'; break;
     case 'this_month': a = istMonthStart(now); b = now; label = 'This month'; break;
     case 'last_month': a = istMonthStart(now, -1); b = istMonthStart(now); label = 'Last month'; break;
+    case 'this_quarter': a = istQuarterStart(now); b = now; label = 'This quarter'; break;
+    case 'last_quarter': a = istQuarterStart(now, -1); b = istQuarterStart(now); label = 'Last quarter'; break;
+    case 'this_fy': a = istFyStart(now); b = now; label = 'This financial year'; break;
+    case 'last_fy': a = istFyStart(now, -1); b = istFyStart(now); label = 'Last financial year'; break;
     case 'custom': {
       const f = parseDay(from); const t = parseDay(to);
       if (f && t && t >= f) { a = f; b = new Date(Math.min(t.getTime() + DAY, now.getTime())); label = `${from} → ${to}`; break; }
@@ -117,16 +133,19 @@ async function totals(from, to) {
              WHERE direction = 'out' AND message_type = 'template' AND created_at >= $1 AND created_at < $2`, [from, to]),
   ]);
   const n = Object.fromEntries(Object.entries(ev).map(([k, v]) => [k, Number(v || 0)]));
-  const money = await splitOf(n.revenue_paise, { whatsapp: wa.billed });
+  // The money is the ledger's (src/finance/ledger.js): actual gateway fees
+  // where Razorpay gave them, invoice GST, every cost in the period.
+  void wa;
+  const money = await ledger.periodMoney(from, to);
   return {
     ...n,
-    api_cost_paise: api.api_cost_paise,
+    api_cost_paise: money.api_cost_total_paise,
     api_calls: api.api_calls,
     gst_paise: money.gst_paise,
-    gateway_paise: money.gateway_fee_paise + money.gateway_fee_gst_paise,
-    messaging_paise: money.whatsapp_cost_paise + money.sms_cost_paise,
-    // After GST, the gateway and its GST, messaging — and the records API.
-    net_paise: money.take_home_paise - api.api_cost_paise,
+    gateway_paise: money.gateway_paise,
+    messaging_paise: money.messaging_paise,
+    refund_paise: money.refund_paise,
+    net_paise: money.net_paise,
   };
 }
 
@@ -139,15 +158,22 @@ async function series(from, to, step) {
      SELECT b.t,
             to_char(b.t AT TIME ZONE 'Asia/Kolkata', $4) AS label,
             ${COUNTS},
-            (SELECT coalesce(sum(cost_paise), 0) FROM api_calls a WHERE a.created_at >= b.t AND a.created_at < b.t2) AS api_cost_paise
+            (SELECT coalesce(sum(cost_paise), 0) FROM api_calls a WHERE a.created_at >= b.t AND a.created_at < b.t2) AS api_cost_paise,
+            (SELECT count(*) FROM whatsapp_messages m WHERE m.direction = 'out' AND m.message_type = 'template'
+                AND m.created_at >= b.t AND m.created_at < b.t2) AS wa_templates
        FROM b LEFT JOIN events e ON e.occurred_at >= b.t AND e.occurred_at < b.t2
       GROUP BY b.t, b.t2 ORDER BY b.t`,
     [from, to, step === 'hour' ? '1 hour' : '1 day', step === 'hour' ? 'HH24:00' : 'DD Mon']);
+  // Each bucket's net from the ledger's own payments, less that bucket's API
+  // calls and business messages — the same arithmetic as the period's total.
+  const { rows: pays, rates } = await ledger.entries({ from, to });
   const out = [];
   for (const r of rows) {
     const n = Object.fromEntries(Object.entries(r).map(([k, v]) => [k, k === 'label' || k === 't' ? v : Number(v || 0)]));
-    const m = await splitOf(n.revenue_paise);
-    out.push({ ...n, net_paise: m.take_home_paise - n.api_cost_paise });
+    const t0 = new Date(r.t).getTime(); const t1 = t0 + (step === 'hour' ? 3600e3 : 86400e3);
+    const mine = pays.filter((p) => { const at = new Date(p.paid_at || p.created_at).getTime(); return at >= t0 && at < t1; });
+    const kept = mine.reduce((a, p) => a + p.net_revenue_paise - p.gateway_fee_paise - p.gateway_gst_paise, 0);
+    out.push({ ...n, net_paise: kept - n.api_cost_paise - n.wa_templates * rates.wa_rate_paise });
   }
   return out;
 }
@@ -365,4 +391,4 @@ async function drill({ what, range, from, to, compare, previous = false, limit =
   };
 }
 
-module.exports = { overview, live, drill, resolve, PRESETS, COMPARES };
+module.exports = { overview, live, drill, resolve, totals, PRESETS, COMPARES };

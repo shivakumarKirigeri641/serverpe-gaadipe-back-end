@@ -32,7 +32,7 @@ const db = require('../db');
 const plate = require('../util/plate');
 const settings = require('../util/settings');
 const command = require('./command');
-const { splitOf } = require('./stats');
+const ledger = require('../finance/ledger');
 
 const LOOKUP_NAMES = `('vehicle_search_success', 'vehicle_search_failed')`;
 const IST_TODAY = `(now() AT TIME ZONE 'Asia/Kolkata')::date`;
@@ -640,14 +640,18 @@ async function profile(input, { admin, canSensitive, canApi } = {}) {
   /* Payments, with what GST and the gateway took out of each. */
   const delivered = new Set(events.rows.filter((e) => e.name === 'report_delivered').map((e) => String(e.payment_id || e.metadata?.report_number)));
   const payments = [];
+  const money = Object.fromEntries((await ledger.entries({ ids: pays.rows.map((x) => x.id), all: true })).rows.map((e) => [e.id, e]));
   for (const x of pays.rows) {
-    const s = await splitOf(x.status === 'paid' ? x.amount_paise : 0);
+    const e = money[String(x.id)] || {};
+    const settled = ['paid', 'refunded'].includes(x.status);
+    const s = { gst_paise: e.gst_paise, gateway_fee_paise: e.gateway_fee_paise || 0, gateway_fee_gst_paise: e.gateway_gst_paise || 0 };
     payments.push({
       id: String(x.id), payment_id: x.payment_id, order_id: x.order_id, gateway: x.gateway || x.raw?.gateway || null,
       customer: maskMobile(x.user_mobile), user_id: x.user_id ? String(x.user_id) : null,
-      amount_paise: x.amount_paise, gst_paise: x.status === 'paid' ? s.gst_paise : null,
-      gateway_fee_paise: x.status === 'paid' ? s.gateway_fee_paise + s.gateway_fee_gst_paise : null,
-      status: x.status, method: x.raw?.method || null, created_at: x.created_at, paid_at: x.paid_at,
+      amount_paise: x.amount_paise, gst_paise: settled ? s.gst_paise : null,
+      gateway_fee_paise: settled ? s.gateway_fee_paise + s.gateway_fee_gst_paise : null, fee_source: e.fee_source || null,
+      net_paise: settled ? e.net_paise : null,
+      status: x.status, method: e.method || x.raw?.method || null, created_at: x.created_at, paid_at: x.paid_at,
       refunded_at: x.refunded_at, refund_id: x.refund_id, buyer_state: x.raw?.buyer_state_code || null,
       report: reports.rows.find((r) => String(r.payment_id) === String(x.id))?.report_number || null,
     });
