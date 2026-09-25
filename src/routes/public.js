@@ -38,6 +38,17 @@ const POLICIES = {
   email: 'email_policy',
 };
 
+/** "4.0" vs "1.10": compared as numbers, part by part — never as text. */
+const cmpVersion = (a, b) => {
+  const pa = String(a || '0').split('.').map(Number);
+  const pb = String(b || '0').split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+};
+
 // Legal text changes rarely and every visitor loads it, so it is read once and
 // held in memory. Cleared by restarting, which is what a policy edit needs
 // anyway.
@@ -64,8 +75,12 @@ async function loadPolicies() {
         display_order: r.display_order,
       }));
       // Every clause carries a version; the document's version is the newest.
-      versions[slug] = rows.length
-        ? { version: rows[rows.length - 1].version, effective_from: rows[rows.length - 1].effective_from }
+      // Found by comparing versions, not by taking the last clause on the page:
+      // a clause rewritten in the middle (Terms 22 → 4.0) is still the newest,
+      // and the bot and checkout already treat it so (policyVersions()).
+      const newest = rows.reduce((best, r) => (!best || cmpVersion(r.version, best.version) > 0 ? r : best), null);
+      versions[slug] = newest
+        ? { version: newest.version, effective_from: newest.effective_from }
         : null;
     } catch (e) {
       // A missing table must not take the whole page down — the others are
