@@ -278,14 +278,27 @@ async function feedback() {
    funnel step (flow.js funnel()); these read those rows, so the chat is never
    slowed by mail. One email per event, guaranteed once by admin_notifications. */
 
+/*
+ * TEST MODE (user, 2026-09-25): while notify_wa_only_from lists numbers, the
+ * WhatsApp emails are sent only for activity from those numbers, so testing
+ * does not bury the inbox. Empty = every number. Same shape as
+ * customer_email_only_to.
+ */
+async function onlyFrom() {
+  return String(await settings.get('notify_wa_only_from', '') || '')
+    .split(',').map((m) => m.replace(/\D/g, '').slice(-10)).filter((m) => m.length === 10);
+}
+
 /** The funnel events of one step from the last hour that have not been emailed. */
 async function funnelEvents(step, kind) {
+  const only = await onlyFrom();
   const { rows } = await db.query(
     `SELECT e.id, e.created_at, e.detail FROM event_log e
       WHERE e.kind = 'funnel' AND e.detail->>'step' = $1
         AND e.created_at > now() - interval '1 hour'
+        AND (cardinality($2::text[]) = 0 OR e.detail->>'mobile' = ANY($2::text[]))
         AND ${notDone(kind, 'e.id::text')}
-      ORDER BY e.id LIMIT 30`, [step]);
+      ORDER BY e.id LIMIT 30`, [step, only]);
   return rows;
 }
 
@@ -411,6 +424,7 @@ async function waOptOut() {
    lead there is. Sent once per payment link, and only while it is still unpaid. */
 async function leftAtPayment() {
   if (!(await on('notify_left_at_payment'))) return 0;
+  const only = await onlyFrom();
   const { rows } = await db.query(
     `SELECT e.id, e.created_at, e.detail, p.amount_paise
        FROM event_log e
@@ -419,8 +433,9 @@ async function leftAtPayment() {
         AND e.created_at < now() - interval '30 minutes'
         AND e.created_at > now() - interval '6 hours'
         AND p.status = 'created'
+        AND (cardinality($1::text[]) = 0 OR e.detail->>'mobile' = ANY($1::text[]))
         AND ${notDone('left_at_pay', 'e.id::text')}
-      ORDER BY e.id LIMIT 20`);
+      ORDER BY e.id LIMIT 20`, [only]);
   let n = 0;
   for (const e of rows) {
     const d = e.detail || {};
