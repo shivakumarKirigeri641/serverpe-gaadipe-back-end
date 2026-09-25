@@ -276,8 +276,10 @@ const OWNER_TERMS =
   + `🔒 Privacy Policy\n${SITE}/privacy\n\n`
   + `💳 Refund Policy\n${SITE}/refund\n\n`
   + 'In short: GaadiPe shows Government-sourced vehicle records as they are. '
-  + 'We do not show owner name, chassis or engine number. We never message you '
-  + 'unless you message us first, or you have subscribed to alerts.\n\n'
+  + 'We do not show owner name, chassis or engine number.\n\n'
+  // The same line as the Terms clause (migration 062) — the one people
+  // actually read before they tap.
+  + 'By tapping *Agree & continue* you agree to receive GaadiPe messages on WhatsApp.\n\n'
   + 'Tap below to continue.';
 
 const PARTNER_TERMS =
