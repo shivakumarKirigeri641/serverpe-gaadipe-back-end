@@ -45,12 +45,23 @@ let cache = { at: 0, rows: null };
  * a template Meta knows about keeps Meta's approval status, because only Meta
  * can say whether a message will actually deliver.
  */
+/*
+ * ONLY GAADIPE'S OWN TEMPLATES (user, 2026-09-25).
+ *
+ * The WhatsApp Business account is shared: QuizPe's qp_*, Pravesha's pv_* and
+ * Meta's sample hello_world all come back from the same list. Listing them here
+ * invited sending a school quiz reminder to a scooter owner, so only gp_* is
+ * shown — and since preview and queue look the template up in this same list,
+ * anything else cannot be sent from GaadiPe at all.
+ */
+const OURS = (name) => /^gp_/i.test(String(name || ''));
+
 async function stored() {
   const { rows } = await db.query(
     `SELECT template_name, language, category, variables,
             header_text, body_text, footer_text, approval_status
        FROM wa_templates WHERE is_active ORDER BY category, template_name`);
-  return rows.map((t) => ({
+  return rows.filter((t) => OURS(t.template_name)).map((t) => ({
     name: t.template_name,
     language: t.language,
     status: t.approval_status || 'PENDING',
@@ -105,7 +116,7 @@ async function templates({ refresh = false } = {}) {
                + ' Showing the templates GaadiPe has recorded — none can be sent until Meta approves them.' };
   }
 
-  const rows = (json?.data || []).map((t) => {
+  const rows = (json?.data || []).filter((t) => OURS(t.name)).map((t) => {
     const body = (t.components || []).find((c) => c.type === 'BODY')?.text || '';
     const footer = (t.components || []).find((c) => c.type === 'FOOTER')?.text || '';
     const buttons = (t.components || []).find((c) => c.type === 'BUTTONS')?.buttons || [];
