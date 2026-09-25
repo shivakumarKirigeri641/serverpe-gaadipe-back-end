@@ -133,6 +133,17 @@ router.get('/command/events', safe(async (req, res) => res.json(await command.dr
   limit: Number(req.query.limit) || 200,
 }))));
 
+/* WhatsApp and vehicle lookups (phase 4): src/admin/whatsappStats.js and
+   src/admin/lookups.js, for the same periods as the command center. */
+router.get('/whatsapp/stats', safe(async (req, res) => res.json(
+  await require('../admin/whatsappStats').stats(periodOf(req.query)))));
+router.get('/lookups/summary', safe(async (req, res) => res.json(
+  await require('../admin/lookups').summary(periodOf(req.query)))));
+router.get('/lookups', safe(async (req, res) => res.json(await require('../admin/lookups').list({
+  ...periodOf(req.query), q: req.query.q || '', result: req.query.result || null,
+  limit: Number(req.query.limit) || 50, offset: Number(req.query.offset) || 0,
+}))));
+
 /* One person, start to finish, and the CSV exports (phase 3,
    src/admin/journey.js). Both show personal data, so both are audited. */
 const journeys = require('../admin/journey');
