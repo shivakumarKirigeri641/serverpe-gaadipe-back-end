@@ -146,51 +146,123 @@ async function templates({ refresh = false } = {}) {
 
 /* ────────────────────────────────────────── who there is to send to ── */
 
+/*
+ * AUDIENCES, SEVERAL AT ONCE (user, 2026-09-25).
+ *
+ * GaadiPe lives on WhatsApp now, so "everyone" is not just the people with a
+ * web account: someone who said Hi and stopped has a WhatsApp session and no
+ * users row at all, and is exactly who a nudge is for. The pool is both — every
+ * account, plus every WhatsApp number that never became one.
+ *
+ * Audiences are ticked together and combined with OR: "said Hi only" + "lapsed"
+ * is everyone in either. Each row says which audiences it is in, so the list
+ * explains itself.
+ */
 const FILTERS = {
-  all: 'Everyone who has signed in',
-  not_paying: 'Signed in, never paid',
-  checked: 'Checked a vehicle, never paid',
-  paying: 'Has paid at least once',
+  all:      'Everyone',
+  hi_only:  'Said Hi, never checked a vehicle',
+  checked:  'Checked a vehicle, never paid',
+  lapsed:   'Paid before, nothing active now',
+  active:   'Paying now (report or watch active)',
+  paying:   'Has paid at least once',
+};
+// Older links and saved screens asked for this one; it still means what it meant.
+const LEGACY = { not_paying: 'NOT paid' };
+
+const PREDICATE = {
+  all:     'true',
+  hi_only: 'has_chat AND NOT checked',
+  checked: 'checked AND NOT paid',
+  lapsed:  'paid AND NOT active',
+  active:  'active',
+  paying:  'paid',
+  ...LEGACY,
 };
 
+/** The chosen audiences as one SQL condition over the flags below. */
 function filterWhere(filter) {
-  const PAID = `EXISTS (SELECT 1 FROM payments p WHERE p.user_id = u.id
-                          AND p.status = 'paid' AND p.amount_paise > 0)`;
-  const CHECKED = `EXISTS (SELECT 1 FROM user_vehicles uv WHERE uv.user_id = u.id)`;
-  switch (filter) {
-    case 'not_paying': return `NOT ${PAID}`;
-    case 'checked': return `${CHECKED} AND NOT ${PAID}`;
-    case 'paying': return PAID;
-    default: return 'true';
-  }
+  const keys = String(filter || 'all').split(',').map((k) => k.trim()).filter((k) => PREDICATE[k]);
+  if (!keys.length || keys.includes('all')) return 'true';
+  return keys.map((k) => `(${PREDICATE[k]})`).join(' OR ');
 }
 
+/*
+ * Everyone who could be written to, with the facts the audiences are built
+ * from. An account's mobile and a WhatsApp session's mobile are the same
+ * person; the session is only counted on its own when there is no account.
+ */
+const PEOPLE = `
+  WITH pool AS (
+    SELECT u.id AS user_id, u.mobile, u.display_name, u.wa_profile_name, u.created_at
+      FROM users u
+     WHERE u.deactivated_at IS NULL
+    UNION ALL
+    SELECT NULL, s.mobile, NULL, s.profile_name, s.created_at
+      FROM whatsapp_sessions s
+     WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.mobile = s.mobile)
+  ),
+  people AS (
+    SELECT p.*,
+           (SELECT v.reg_no FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
+             WHERE uv.user_id = p.user_id ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 1) AS last_vehicle,
+           (SELECT max(uv.last_checked_at) FROM user_vehicles uv WHERE uv.user_id = p.user_id) AS last_checked,
+           (SELECT count(*)::int FROM user_vehicles uv WHERE uv.user_id = p.user_id) AS vehicles,
+           (SELECT max(s.last_inbound_at) FROM whatsapp_sessions s WHERE s.mobile = p.mobile) AS last_message,
+           EXISTS (SELECT 1 FROM whatsapp_sessions s WHERE s.mobile = p.mobile) AS has_chat,
+           EXISTS (SELECT 1 FROM user_vehicles uv WHERE uv.user_id = p.user_id) AS checked,
+           EXISTS (SELECT 1 FROM payments x WHERE x.user_id = p.user_id
+                     AND x.status = 'paid' AND x.amount_paise > 0) AS paid,
+           (EXISTS (SELECT 1 FROM vehicle_reports r WHERE r.user_id = p.user_id AND r.valid_until > now())
+            OR EXISTS (SELECT 1 FROM subscriptions sb WHERE sb.user_id = p.user_id
+                         AND sb.is_active AND sb.ends_on >= CURRENT_DATE)) AS active,
+           EXISTS (SELECT 1 FROM blocks b
+                    WHERE b.kind = 'mobile' AND b.value = p.mobile AND b.released_at IS NULL) AS blocked
+      FROM pool p
+  )`;
+
+/** Which audiences a row is in — shown beside it, so the list explains itself. */
+const segmentsOf = (r) => Object.keys(FILTERS)
+  .filter((k) => k !== 'all' && k !== 'paying')
+  .filter((k) => ({
+    hi_only: r.has_chat && !r.checked,
+    checked: r.checked && !r.paid,
+    lapsed: r.paid && !r.active,
+    active: r.active,
+  })[k]);
+
 /**
- * The people who can be broadcast to, newest activity first.
- *
- * From the sign-in data — every account, whether or not they ever bought
- * anything — with the one fact a template usually needs about them: the vehicle
- * they last checked.
+ * The people who can be broadcast to, most recently active first, with a
+ * count for every audience so the choice is made knowing its size.
  */
 async function recipients({ filter = 'all', q = '', limit = 500 } = {}) {
   const where = filterWhere(filter);
   const term = String(q || '').trim().toLowerCase();
   const { rows } = await db.query(
-    `SELECT u.id, u.mobile, u.display_name, u.wa_profile_name, u.created_at,
-            (SELECT v.reg_no FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
-              WHERE uv.user_id = u.id ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 1) AS last_vehicle,
-            (SELECT max(uv.last_checked_at) FROM user_vehicles uv WHERE uv.user_id = u.id) AS last_checked,
-            (SELECT count(*)::int FROM user_vehicles uv WHERE uv.user_id = u.id) AS vehicles,
-            EXISTS (SELECT 1 FROM payments p WHERE p.user_id = u.id
-                      AND p.status = 'paid' AND p.amount_paise > 0) AS paid,
-            EXISTS (SELECT 1 FROM blocks b
-                     WHERE b.kind = 'mobile' AND b.value = u.mobile AND b.released_at IS NULL) AS blocked
-       FROM users u
-      WHERE u.deactivated_at IS NULL AND ${where}
-        AND ($1 = '' OR lower(coalesce(u.display_name, '')) LIKE '%' || $1 || '%' OR u.mobile LIKE '%' || $1 || '%')
-      ORDER BY last_checked DESC NULLS LAST, u.id DESC
+    `${PEOPLE}
+     SELECT * FROM people
+      WHERE (${where})
+        AND ($1 = '' OR lower(coalesce(display_name, wa_profile_name, '')) LIKE '%' || $1 || '%'
+                     OR mobile LIKE '%' || $1 || '%')
+      ORDER BY greatest(last_checked, last_message) DESC NULLS LAST, created_at DESC
       LIMIT $2`, [term, Math.min(2000, limit)]);
-  return { filters: FILTERS, fields: FIELDS, rows: rows.map((r) => ({ ...r, id: String(r.id) })) };
+
+  const counts = await db.one(
+    `${PEOPLE}
+     SELECT ${Object.entries(PREDICATE).filter(([k]) => FILTERS[k])
+       .map(([k, p]) => `count(*) FILTER (WHERE ${p})::int AS "${k}"`).join(', ')}
+       FROM people`);
+
+  return {
+    filters: FILTERS,
+    counts,
+    fields: FIELDS,
+    rows: rows.map((r) => ({
+      ...r,
+      id: r.user_id ? String(r.user_id) : `wa:${r.mobile}`,
+      user_id: r.user_id ? String(r.user_id) : null,
+      segments: segmentsOf(r),
+    })),
+  };
 }
 
 /* ──────────────────────────────────── what fills a template's blanks ── */
@@ -295,18 +367,20 @@ async function preview({ template_name, language = 'en', variables = [], mobiles
   };
 }
 
-/** The chosen customers, as the sign-in data has them. */
+/**
+ * The chosen customers — accounts and WhatsApp-only numbers alike, since a
+ * template can reach either. `id` is the account, or null for a number that
+ * only ever chatted.
+ */
 async function peopleByMobile(mobiles) {
   const clean = [...new Set((mobiles || [])
-    .map((m) => String(m).replace(/\D/g, '').slice(-10)).filter((m) => m.length === 10))];
+    .map((m) => String(m).replace(/D/g, '').slice(-10)).filter((m) => m.length === 10))];
   if (!clean.length) return [];
   const { rows } = await db.query(
-    `SELECT u.id, u.mobile, u.display_name, u.wa_profile_name,
-            (SELECT v.reg_no FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
-              WHERE uv.user_id = u.id ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 1) AS last_vehicle
-       FROM users u
-      WHERE u.deactivated_at IS NULL AND u.mobile = ANY($1::text[])
-      ORDER BY u.id`, [clean]);
+    `${PEOPLE}
+     SELECT user_id AS id, mobile, display_name, wa_profile_name, last_vehicle
+       FROM people WHERE mobile = ANY($1::text[])
+      ORDER BY user_id NULLS LAST`, [clean]);
   return rows;
 }
 
