@@ -101,7 +101,8 @@ function start(everySeconds = 60) {
     try { await runOnce(); } catch (e) { console.error('[broadcast] pass failed:', e.message); }
     finally { running = false; }
   };
-  setInterval(tick, everySeconds * 1000).unref();
+  // Heartbeat: System health and the alert checker see when this last ran.
+  setInterval(require('../util/heartbeat').wrap('broadcast', tick, everySeconds), everySeconds * 1000).unref();
   setTimeout(tick, 8000).unref();
   console.log(`  whatsapp broadcast job: every ${everySeconds}s`);
 }

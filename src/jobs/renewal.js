@@ -173,7 +173,8 @@ function start(everySeconds = 6 * 3600) {
     try { await runOnce(); } catch (e) { console.error('[renewal] pass failed:', e.message); }
     finally { running = false; }
   };
-  setInterval(tick, everySeconds * 1000).unref();
+  // Heartbeat: System health and the alert checker see when this last ran.
+  setInterval(require('../util/heartbeat').wrap('renewal', tick, everySeconds), everySeconds * 1000).unref();
   setTimeout(tick, 30000).unref();
   console.log(`  renewal notice job: every ${everySeconds}s`);
 }

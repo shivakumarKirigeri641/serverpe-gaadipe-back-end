@@ -165,6 +165,27 @@ router.get('/api-monitor/log', safe(async (req, res) => res.json(await require('
   limit: Number(req.query.limit) || 50, offset: Number(req.query.offset) || 0,
 }))));
 
+/* Health, alerts, pop-ups and menu badges (phase 6): src/admin/health.js and
+   src/admin/alerts.js. Acknowledging and resolving are audited. */
+const alertCenter = require('../admin/alerts');
+router.get('/health/services', safe(async (_req, res) => res.json(await require('../admin/health').services())));
+router.get('/alerts', safe(async (req, res) => res.json({ rows: await alertCenter.list({
+  status: ['active', 'resolved', 'all'].includes(req.query.status) ? req.query.status : 'active',
+  severity: req.query.severity || null,
+}) })));
+router.post('/alerts/:id/ack', safe(async (req, res) => {
+  const ok = await alertCenter.ack(req.params.id, req.admin.id);
+  if (ok) await auth.audit({ adminId: req.admin.id, action: 'alert_acknowledged', ip: ipOf(req), detail: { alert_id: req.params.id } });
+  res.json({ ok });
+}));
+router.post('/alerts/:id/resolve', safe(async (req, res) => {
+  const ok = await alertCenter.resolve(req.params.id, req.admin.id, req.body?.note);
+  if (ok) await auth.audit({ adminId: req.admin.id, action: 'alert_resolved', ip: ipOf(req), detail: { alert_id: req.params.id, note: req.body?.note || null } });
+  res.json({ ok });
+}));
+router.get('/feed', safe(async (req, res) => res.json(await alertCenter.feed(req.query.since))));
+router.get('/badges', safe(async (_req, res) => res.json(await alertCenter.badges())));
+
 /* One person, start to finish, and the CSV exports (phase 3,
    src/admin/journey.js). Both show personal data, so both are audited. */
 const journeys = require('../admin/journey');

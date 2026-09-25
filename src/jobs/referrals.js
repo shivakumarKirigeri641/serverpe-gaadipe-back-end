@@ -20,7 +20,7 @@ function start() {
     try { await referrals.check(); } catch (e) { console.error('[referrals] pass failed:', e.message); }
     finally { running = false; }
   };
-  setInterval(tick, 60 * 1000).unref();
+  setInterval(require('../util/heartbeat').wrap('referrals', tick, 60), 60 * 1000).unref();
   setTimeout(tick, 15000).unref();
   console.log('  referral check: every few minutes (QuizPe read-only %s)',
     require('../quizpe/readonly').configured() ? 'configured' : 'NOT configured — referrals wait');

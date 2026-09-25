@@ -372,7 +372,8 @@ function start(everySeconds = 3600) {
     try { await runOnce(); } catch (e) { console.error('[expiry] pass failed:', e.message); }
     finally { running = false; }
   };
-  setInterval(tick, everySeconds * 1000).unref();
+  // Heartbeat: System health and the alert checker see when this last ran.
+  setInterval(require('../util/heartbeat').wrap('expiryWatch', tick, everySeconds), everySeconds * 1000).unref();
   setTimeout(tick, 20000).unref();
   console.log(`  expiry warning job: every ${everySeconds}s`);
 }

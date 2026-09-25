@@ -329,7 +329,8 @@ function start(everySeconds = 60) {
     try { await runOnce(); } catch (e) { console.error('[customer-mail] pass failed:', e.message); }
     finally { running = false; }
   };
-  setInterval(tick, everySeconds * 1000).unref();
+  // Heartbeat: System health and the alert checker see when this last ran.
+  setInterval(require('../util/heartbeat').wrap('customerMail', tick, everySeconds), everySeconds * 1000).unref();
   setTimeout(tick, 5000).unref();
   console.log(`  customer email job: every ${everySeconds}s`);
 }

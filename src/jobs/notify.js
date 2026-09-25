@@ -462,6 +462,33 @@ async function leftAtPayment() {
   return n;
 }
 
+/* ────────────────────────────────────────────────────────────── alerts ──
+   A critical or warning alert from the alert center (phase 6), emailed once
+   when it opens. Info and success alerts stay on the panel. */
+async function alertMails() {
+  if (!(await on('notify_alerts'))) return 0;
+  const { rows } = await db.query(
+    `SELECT a.* FROM admin_alerts a
+      WHERE a.severity IN ('critical', 'warning') AND a.created_at > now() - interval '2 hours'
+        AND ${notDone('alert', 'a.id::text')}
+      ORDER BY a.id LIMIT 20`);
+  let n = 0;
+  for (const a of rows) {
+    n += await deliver('alert', a.id, async () => ({
+      subject: `${a.severity === 'critical' ? '🔴' : '🟠'} ${a.title}`,
+      ...T.layout({
+        badge: { text: a.severity === 'critical' ? 'Critical' : 'Warning', tone: a.severity === 'critical' ? 'wrong' : 'watch' },
+        title: a.title,
+        lead: `${T.ist(a.created_at)} · ${String(a.source).replace(/_/g, ' ')}`,
+        note: a.description,
+        cta: { label: 'Open the alert center', path: '/alerts' },
+        footer: 'You will not be emailed again while this alert stays open. Switch these off under Settings → Emails to you (notify_alerts).',
+      }),
+    })) ? 1 : 0;
+  }
+  return n;
+}
+
 /* ─────────────────────────────────────────────────────────── security ──
    Misbehaviour, batched (user, 2026-09-18): every event since the last security
    email, grouped by what happened and from where, at most one email per
@@ -603,7 +630,7 @@ async function runOnce() {
   if (!mailer.configured()) return { skipped: 'mail not configured' };
   const out = {};
   for (const [k, fn] of Object.entries({ signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
-                                            leftAtPayment, security, dailySummary })) {
+                                            leftAtPayment, alertMails, security, dailySummary })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
   const total = Object.values(out).reduce((t, v) => t + (Number(v) || 0), 0);
@@ -622,7 +649,8 @@ function start(everySeconds = 30) {
     running = true;
     try { await runOnce(); } catch (e) { console.error('[notify] pass failed:', e.message); } finally { running = false; }
   };
-  setInterval(tick, everySeconds * 1000).unref();
+  // Heartbeat: System health and the alert checker see when this last ran.
+  setInterval(require('../util/heartbeat').wrap('notify', tick, everySeconds), everySeconds * 1000).unref();
   setTimeout(tick, 5000).unref();
   console.log(`  admin email: every ${everySeconds}s from ${process.env.NOREPLYMAIL}`);
 }

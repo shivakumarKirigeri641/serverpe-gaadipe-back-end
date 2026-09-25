@@ -226,6 +226,8 @@ app.listen(config.port, () => {
   require('./jobs/renewal').start(Number(process.env.RENEWAL_TICK_SECONDS) || 6 * 3600);
   // Broadcasts the panel has queued, a few template messages a minute.
   require('./jobs/broadcast').start(Number(process.env.BROADCAST_TICK_SECONDS) || 60);
+  // The command center's alert rules (records API, WhatsApp, payments, jobs…).
+  require('./jobs/alerts').start(Number(process.env.ALERTS_TICK_SECONDS) || 60);
   // Page, click and action history is kept activity_retention_days, then deleted.
   const pruneActivity = () => require('./site/activity').prune().catch((e) => console.warn('[activity] prune:', e.message));
   setInterval(pruneActivity, 6 * 60 * 60 * 1000).unref();
