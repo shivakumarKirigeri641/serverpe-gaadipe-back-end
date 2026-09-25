@@ -1078,6 +1078,24 @@ async function handle(session, message, mobile) {
       return;
     }
 
+    /*
+     * "Check a vehicle" on a TEMPLATE (user, 2026-09-25) — the announcement's
+     * quick reply. Its payload is the button's own text, not one of our ids,
+     * so it would fall to the default and show the terms again even to
+     * someone who agreed yesterday. Someone who has accepted the Terms in force
+     * is asked for the number straight away; anyone else sees the terms first.
+     */
+    if (!Object.values(BTN).includes(intent.id) && /^check (a |my )?vehicle$/i.test(intent.text)) {
+      const agreed = await agreedVersion(mobile);
+      if (agreed && agreed === await policyVersion()) {
+        await setState(mobile, 'owner_start', 'template: check a vehicle');
+        await send.text(mobile, 'Send me the vehicle number — like *KA31N8147*.');
+      } else {
+        await start(mobile);
+      }
+      return;
+    }
+
     switch (intent.id) {
       case BTN.OWNER:
         await setState(mobile, 'owner_consent', 'chose owner');
