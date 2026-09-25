@@ -32,7 +32,15 @@ async function conversations({ limit = 60, activeMinutes = null, q = '' } = {}) 
             (SELECT max(m.id) FROM whatsapp_messages m WHERE m.mobile = s.mobile) AS last_message_id,
             EXISTS (SELECT 1 FROM blocks b WHERE b.kind = 'mobile'
                       AND b.value = s.mobile AND b.released_at IS NULL) AS blocked,
-            EXISTS (SELECT 1 FROM payments p WHERE p.user_id = u.id AND p.status = 'paid') AS has_paid
+            EXISTS (SELECT 1 FROM payments p WHERE p.user_id = u.id AND p.status = 'paid') AS has_paid,
+            -- What the Live list needs to say who someone is at a glance
+            -- (user, 2026-09-25): new today, said STOP, what they last checked.
+            s.created_at AS first_seen,
+            (s.created_at > now() - interval '24 hours') AS is_new,
+            (s.wa_opt_out_at IS NOT NULL) AS opted_out,
+            (SELECT v.reg_no FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
+              WHERE uv.user_id = u.id ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 1) AS last_vehicle,
+            (SELECT count(*) FROM user_vehicles uv WHERE uv.user_id = u.id)::int AS vehicles
        FROM whatsapp_sessions s
        LEFT JOIN users u ON u.mobile = s.mobile
       WHERE ($1 = '' OR s.mobile LIKE '%' || $2 || '%' OR s.profile_name ILIKE '%' || $1 || '%')
