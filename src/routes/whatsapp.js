@@ -26,6 +26,7 @@
  */
 
 const express = require('express');
+const flags = require('../util/flags');
 const { config } = require('../config');
 const sig = require('../whatsapp/signature');
 const store = require('../whatsapp/store');
@@ -143,6 +144,19 @@ async function handle(body) {
           console.log('[wa] %s not in allowed recipients — recorded, not answered', rec.mobile);
           continue;
         }
+        if (rec && wa.replyEnabled && !(await flags.on('whatsapp_flow'))) {
+          // Switched off (Feature Flags / maintenance). STOP and START are
+          // honoured whatever the switch says — the Terms promise that.
+          const text = String(m?.text?.body || m?.button?.text || m?.interactive?.button_reply?.title || '').trim();
+          if (!/^(stop|start|unstop|subscribe|unsubscribe)$/i.test(text)) {
+            const last = pausedNotice.get(rec.mobile) || 0;
+            if (Date.now() - last > 30 * 60000) {
+              pausedNotice.set(rec.mobile, Date.now());
+              await send.text(rec.mobile, flags.MESSAGE).catch(() => {});
+            }
+            continue;
+          }
+        }
         if (rec && wa.replyEnabled) {
           // One person's bad message must not stop the rest of the batch.
           await flow.handle(rec.session, m, rec.mobile)
@@ -152,5 +166,8 @@ async function handle(body) {
     }
   }
 }
+
+/* Who was last told the bot is paused, so they are told once per half hour. */
+const pausedNotice = new Map();
 
 module.exports = router;

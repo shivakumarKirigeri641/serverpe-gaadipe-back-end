@@ -78,6 +78,9 @@ async function nextNumber(c) {
  */
 async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data, requester = {},
                        validUntil = null, consent = null }) {
+  if (!(await require('../util/flags').on('report_generation'))) {
+    throw Object.assign(new Error('Report generation is switched off.'), { code: 'reports_paused' });
+  }
   const business = await db.one(
     `SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
 

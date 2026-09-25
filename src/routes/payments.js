@@ -300,6 +300,9 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
 
   let doc = await db.one(`SELECT * FROM vehicle_reports WHERE payment_id = $1`, [pay.id]);
 
+  // Feature Flags: reports switched off — the customer is told it is coming.
+  if (!doc && !(await require('../util/flags').on('report_generation'))) return { ok: false, reason: 'reports_paused' };
+
   if (!doc) {
     const validDays = await settings.num('report_valid_days', 7);
     const validUntil = new Date(new Date(pay.paid_at || Date.now()).getTime()

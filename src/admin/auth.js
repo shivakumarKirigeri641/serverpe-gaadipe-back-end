@@ -49,26 +49,27 @@ const V_ALL = ['vehicles.view', 'vehicles.view_sensitive', 'vehicles.export', 'v
  *   system.view / .manage   health, jobs, infrastructure, backups / run a job, a backup
  *   settings.manage       configuration and feature flags ('settings')
  *   audit.view            the audit log
+ *   tasks.manage          create and update tasks, write and withdraw notes
  * Referral permissions are not defined: GaadiPe has no referral programme for now.
  */
 const EVERYONE = ['read', 'dashboard.view', 'customers.view', 'vehicles.view'];
 const ROLES = {
   // Super admin.
-  owner:      [...EVERYONE, 'money', 'settings', 'block', 'lookup', 'admins', 'pii', ...V_ALL,
+  owner:      [...EVERYONE, 'tasks.manage','money', 'settings', 'block', 'lookup', 'admins', 'pii', ...V_ALL,
                'customers.view_sensitive', 'payments.view', 'payments.refund', 'finance.view', 'finance.export',
                'api.view', 'api.manage', 'system.view', 'system.manage', 'settings.manage', 'audit.view'],
-  admin:      [...EVERYONE, 'money', 'settings', 'block', 'lookup', 'pii', ...V_ALL,
+  admin:      [...EVERYONE, 'tasks.manage','money', 'settings', 'block', 'lookup', 'pii', ...V_ALL,
                'customers.view_sensitive', 'payments.view', 'finance.view', 'finance.export',
                'api.view', 'api.manage', 'system.view', 'system.manage', 'settings.manage', 'audit.view'],
   // Command center phase 7 (user, 2026-09-25): the day-to-day running of the
   // service without the money, and helping customers without changing it.
-  operations: [...EVERYONE, 'settings', 'block', 'lookup', 'pii', ...V_ALL,
+  operations: [...EVERYONE, 'tasks.manage','settings', 'block', 'lookup', 'pii', ...V_ALL,
                'customers.view_sensitive', 'api.view', 'system.view', 'settings.manage', 'audit.view'],
-  finance:    [...EVERYONE, 'money', 'vehicles.export', 'payments.view', 'finance.view', 'finance.export'],
-  support:    [...EVERYONE, 'lookup', 'pii', 'vehicles.view_sensitive', 'vehicles.notes', 'vehicles.tags',
+  finance:    [...EVERYONE, 'tasks.manage','money', 'vehicles.export', 'payments.view', 'finance.view', 'finance.export'],
+  support:    [...EVERYONE, 'tasks.manage','lookup', 'pii', 'vehicles.view_sensitive', 'vehicles.notes', 'vehicles.tags',
                'customers.view_sensitive'],
   // The servers, the records API and the jobs — not customers, not money.
-  technical:  [...EVERYONE, 'lookup', 'vehicles.refresh', 'vehicles.api_logs', 'api.view', 'api.manage',
+  technical:  [...EVERYONE, 'tasks.manage','lookup', 'vehicles.refresh', 'vehicles.api_logs', 'api.view', 'api.manage',
                'system.view', 'system.manage', 'audit.view'],
   viewer:     [...EVERYONE],
 };

@@ -23,6 +23,10 @@ const { config } = require('../config');
 
 /** One call to the deployed gateway. Never throws on a 404 — that is an answer. */
 async function fetchRemote(path) {
+  // Feature Flags: the records switched off answer like an unavailable service.
+  if (!/\/health$/.test(path) && !(await require('../util/flags').on('vehicle_api'))) {
+    return { success: false, error: 'records_paused', message: 'Vehicle service is temporarily unavailable.' };
+  }
   const url = `${config.gateway.baseUrl}${path}`;
   const started = Date.now();
 

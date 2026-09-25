@@ -1315,7 +1315,7 @@ async function handle(session, message, mobile) {
           await send.text(mobile, 'Please send the vehicle number again.');
           return;
         }
-        if (!razorpay.configured()) {
+        if (!razorpay.configured() || !(await require('../util/flags').on('payments'))) {
           await send.text(mobile,
             'Payment is not available right now. Please try again shortly.');
           console.error('[pay] asked to charge but Razorpay is not configured');
@@ -1455,7 +1455,7 @@ async function handle(session, message, mobile) {
         // Every precondition is checked BEFORE an order exists, so a missing
         // setting never leaves an orphan order behind.
         const plan = await billing.reportPlan();
-        if (!plan || !razorpay.configured() || !baseUrl()) {
+        if (!plan || !razorpay.configured() || !baseUrl() || !(await require('../util/flags').on('payments'))) {
           console.error('[pay] cannot sell a report: plan=%s razorpay=%s PUBLIC_BASE_URL=%s',
             Boolean(plan), razorpay.configured(), Boolean(baseUrl()));
           await send.text(mobile, 'Payment is not available right now. Please try again shortly.');

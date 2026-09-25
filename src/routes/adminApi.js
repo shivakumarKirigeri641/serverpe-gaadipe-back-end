@@ -276,6 +276,86 @@ router.post('/backups/run', needs('admins'), safe(async (req, res) => {
   res.status(out.ok ? 200 : 400).json(out);
 }));
 
+/* ------------------------------ configuration, flags, rules, tasks, notes */
+
+/*
+ * Operations module phase 6 (user, 2026-09-25). Every change here is audited
+ * with before and after. Values themselves are changed through PUT /settings
+ * and PUT /plans/:code (already audited); the GST rate, the switches and
+ * alert mutes have their own routes below.
+ */
+const configDesk = require('../admin/config');
+const taskDesk = require('../admin/tasks');
+router.get('/config', needs('settings.manage'), safe(async (_req, res) => res.json(await configDesk.overview())));
+router.put('/config/gst', needs('admins'), safe(async (req, res) => {
+  const out = await configDesk.setGst({ percent: req.body?.percent, from: req.body?.from });
+  if (out.ok) {
+    await auth.audit({ adminId: req.admin.id, action: 'gst_rate_changed', ip: ipOf(req),
+                       detail: { before: out.before, after: out.after, from: out.from } });
+  }
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.get('/flags', needs('dashboard.view'), safe(async (_req, res) => res.json(await configDesk.flags())));
+router.put('/flags/:name', needs('settings.manage'), safe(async (req, res) => {
+  if (req.body?.confirm !== true) return res.status(400).json({ error: 'confirm', message: 'Confirm the change first.' });
+  const out = await configDesk.setFlag(req.params.name, req.body?.on === true);
+  if (out.ok) {
+    await auth.audit({ adminId: req.admin.id, action: 'flag_changed', ip: ipOf(req),
+                       detail: { flag: req.params.name, label: out.label, before: out.before ? 'on' : 'off', after: out.after ? 'on' : 'off' } });
+  }
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.get('/alert-rules', needs('dashboard.view'), safe(async (_req, res) => res.json(await configDesk.rules())));
+router.post('/alert-rules/:key/mute', needs('settings.manage'), safe(async (req, res) => {
+  const hours = Math.max(0, Number(req.body?.hours) || 0);
+  const out = await configDesk.mute(req.params.key, hours);
+  if (out.ok) {
+    await auth.audit({ adminId: req.admin.id, action: hours ? 'alert_muted' : 'alert_unmuted', ip: ipOf(req),
+                       detail: { rule: req.params.key, before: out.before || 'not muted', after: out.after || 'not muted' } });
+  }
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+
+router.get('/tasks', needs('dashboard.view'), safe(async (req, res) => res.json(await taskDesk.list(req.query, req.admin))));
+router.post('/tasks', needs('tasks.manage'), safe(async (req, res) => {
+  const out = await taskDesk.create(req.body, req.admin);
+  if (out.ok) {
+    await auth.audit({ adminId: req.admin.id, action: 'task_created', ip: ipOf(req),
+                       detail: { task_id: out.task.id, title: out.task.title, entity: out.task.entity_type ? `${out.task.entity_type}:${out.task.entity_id}` : null,
+                                 ...(out.task.entity_type === 'vehicle' ? { reg_no: out.task.entity_id } : {}) } });
+  }
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.put('/tasks/:id', needs('tasks.manage'), safe(async (req, res) => {
+  const out = await taskDesk.update(req.params.id, req.body);
+  if (out.ok && Object.keys(out.after || {}).length) {
+    await auth.audit({ adminId: req.admin.id, action: 'task_updated', ip: ipOf(req),
+                       detail: { task_id: String(req.params.id), before: out.before, after: out.after } });
+  }
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.get('/notes', needs('dashboard.view'), safe(async (req, res) => res.json(await taskDesk.allNotes(req.query))));
+router.get('/notes/:type/:id', needs('dashboard.view'), safe(async (req, res) => res.json(await taskDesk.notes(req.params.type, req.params.id))));
+router.post('/notes/:type/:id', needs('tasks.manage'), safe(async (req, res) => {
+  const out = await taskDesk.addNote(req.params.type, req.params.id, req.body?.body, req.admin);
+  if (out.ok) {
+    await auth.audit({ adminId: req.admin.id, action: 'note_added', ip: ipOf(req),
+                       detail: { note_id: out.id, entity: `${req.params.type}:${req.params.id}` } });
+  }
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.delete('/notes/:id', needs('tasks.manage'), safe(async (req, res) => {
+  const out = await taskDesk.withdrawNote(req.params.id, req.admin, auth.can(req.admin.role, 'admins'));
+  if (out.ok) {
+    await auth.audit({ adminId: req.admin.id, action: 'note_withdrawn', ip: ipOf(req),
+                       detail: { note_id: String(req.params.id), entity: `${out.note.entity_type}:${out.note.entity_id}` } });
+  }
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+
+/* Who may do what — read-only, from the same table the server enforces. */
+router.get('/permissions', needs('audit.view'), safe(async (_req, res) => res.json({ roles: auth.ROLES })));
+
 /* WhatsApp and vehicle lookups (phase 4): src/admin/whatsappStats.js and
    src/admin/lookups.js, for the same periods as the command center. */
 router.get('/whatsapp/stats', safe(async (req, res) => res.json(
@@ -1039,15 +1119,23 @@ router.post('/admins/:id/active', needs('admins'), safe(async (req, res) => {
   res.json({ ok: true, user });
 }));
 
-router.get('/audit', safe(async (req, res) => {
+/* The audit log (operations module: audit.view, and filters by admin, action,
+   entity and date). Append-only in the database itself (migration 074). */
+router.get('/audit', needs('audit.view'), safe(async (req, res) => {
+  const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
   const { rows } = await db.query(
     `SELECT a.id, a.action, a.detail, a.ip, a.created_at, u.name, u.mobile,
             count(*) OVER () AS total_rows
        FROM admin_audit a LEFT JOIN admin_users u ON u.id = a.admin_id
       WHERE ($1 = '' OR a.action = $1)
+        AND ($4::bigint IS NULL OR a.admin_id = $4)
+        AND ($5 = '' OR a.detail::text ILIKE '%' || $5 || '%')
+        AND ($6::date IS NULL OR a.created_at >= ($6::date::timestamp AT TIME ZONE 'Asia/Kolkata'))
+        AND ($7::date IS NULL OR a.created_at < (($7::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata'))
       ORDER BY a.id DESC LIMIT $2 OFFSET $3`,
     [String(req.query.action || ''), Math.min(200, Number(req.query.limit) || 100),
-     Number(req.query.offset) || 0]);
+     Number(req.query.offset) || 0, Number(req.query.admin) > 0 ? Number(req.query.admin) : null,
+     String(req.query.q || '').replace(/[%_\\]/g, '').slice(0, 60), day(req.query.from), day(req.query.to)]);
   res.json({ total: rows[0] ? Number(rows[0].total_rows) : 0,
              rows: rows.map(({ total_rows, ...r }) => ({ ...r, id: String(r.id) })) });
 }));

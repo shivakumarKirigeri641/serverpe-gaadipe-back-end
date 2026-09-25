@@ -84,6 +84,10 @@ async function priceFor(userId, vehicleId) {
 
 /** Record a payment we are about to ask for. Nothing is active yet. */
 async function createPending({ userId, planId, amountPaise, vehicleId }) {
+  // Feature Flags: the last line of defence — callers check first and say so kindly.
+  if (!(await require('../util/flags').on('payments'))) {
+    throw Object.assign(new Error('Payments are switched off.'), { code: 'payments_paused' });
+  }
   const { rows } = await db.query(
     `INSERT INTO payments (user_id, plan_id, amount_paise, status, gateway, raw)
           VALUES ($1, $2, $3, 'created', 'razorpay', $4)

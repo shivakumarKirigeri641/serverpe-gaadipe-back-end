@@ -48,6 +48,21 @@ const refer = require('../referrals/gaadipe');
 
 const router = express.Router();
 
+/*
+ * FEATURE SWITCHES (operations module, 2026-09-25). With the website flow off
+ * or maintenance on, pages still load (reading), but actions — a vehicle
+ * check, sign-in, buying — are refused with a "back soon" message.
+ */
+router.use(async (req, res, next) => {
+  try {
+    const flags = require('../util/flags');
+    if (await flags.on('website_flow')) return next();
+    const action = req.method !== 'GET' || /check|vehicle|lookup|report|buy|order|pay/i.test(req.path);
+    if (!action) return next();
+    return res.status(503).json({ error: 'paused', message: flags.MESSAGE });
+  } catch { return next(); }
+});
+
 const safe = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch((e) => {
   console.error('[siteApi] %s %s: %s', req.method, req.path, e.stack || e.message);
   if (!res.headersSent) {
@@ -660,6 +675,9 @@ router.post('/buy', safe(async (req, res) => {
   const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
   // The site opens checkout through its own origin, so a public base URL (a
   // tunnel, the API domain) is not needed for a website purchase.
+  if (!(await require('../util/flags').on('payments'))) {
+    return res.status(503).json({ error: 'unavailable', message: 'Payments are not available right now. Please try again shortly.' });
+  }
   if (!plan || !razorpay.configured()) {
     console.error('[site] cannot sell a report: plan=%s razorpay=%s',
       Boolean(plan), razorpay.configured());

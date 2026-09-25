@@ -20,6 +20,8 @@ const heartbeat = require('../util/heartbeat');
 
 /** Raise, or refresh, the one open alert for this rule. True if it is new. */
 async function raise({ key, severity, source, title, description, detail = {} }) {
+  // A muted rule (Alert rules screen) raises nothing until the mute ends.
+  if (await require('./config').isMuted(key).catch(() => false)) return false;
   const r = await db.one(
     `INSERT INTO admin_alerts (rule_key, severity, source, title, description, detail)
      VALUES ($1, $2, $3, $4, $5, $6)
