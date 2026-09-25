@@ -835,9 +835,13 @@ async function deliverReport(mobile, regNo, message) {
       WHERE mobile = $1`, [mobile, JSON.stringify({ pending_reg: regNo })]);
 
   // Someone who has already bought the report for this vehicle sees the full
-  // detail again while it is valid; everyone else sees the basic record.
+  // detail again while it is valid; everyone else sees what the vehicle is and
+  // how many things need attention — not which.
   const bought = await reports.validFor(user.id, regNo);
-  await send.text(mobile, await report.buildFor(data, { detailed: Boolean(bought) }));
+  const plan = bought ? null : await billing.reportPlan();
+  await send.text(mobile, bought
+    ? await report.buildFor(data, { detailed: true })
+    : report.basic(data, plan ? { price: `₹${Math.round(plan.price_paise / 100)}` } : {}));
   await setState(mobile, 'owner_menu', 'basic details sent');
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
   await reportMenu(mobile, regNo, data, bought);
