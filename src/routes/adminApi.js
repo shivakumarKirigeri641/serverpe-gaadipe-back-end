@@ -121,6 +121,18 @@ router.delete('/session', safe(async (req, res) => {
  */
 router.get('/home', safe(async (_req, res) => res.json(await require('../admin/home').everything())));
 
+/* The Live Command Center (user, 2026-09-25): every KPI for a period against
+   the one before, the whole journey as a funnel, what is happening now, and
+   the rows behind any number. src/admin/command.js. */
+const command = require('../admin/command');
+const periodOf = (q) => ({ range: q.range, from: q.from, to: q.to, compare: q.compare });
+router.get('/command/overview', safe(async (req, res) => res.json(await command.overview(periodOf(req.query)))));
+router.get('/command/live', safe(async (req, res) => res.json(await command.live({ since: req.query.since }))));
+router.get('/command/events', safe(async (req, res) => res.json(await command.drill({
+  ...periodOf(req.query), what: String(req.query.what || ''), previous: req.query.previous === '1',
+  limit: Number(req.query.limit) || 200,
+}))));
+
 router.get('/dashboard', safe(async (_req, res) => res.json(await stats.dashboard())));
 
 router.get('/series', safe(async (req, res) => res.json(

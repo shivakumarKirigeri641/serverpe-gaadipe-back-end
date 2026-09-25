@@ -209,6 +209,17 @@ router.get('/pay/:token', safe(async (req, res) => {
   const web = pay.raw?.channel === 'web';
   const site = siteOrigin(req);
 
+  // The command center's "payment page viewed" (user, 2026-09-25): the first
+  // time this checkout is opened while still unpaid — reopening it is not a
+  // second view.
+  if (pay.status !== 'paid') {
+    require('../events/track').fire({
+      key: `pay_view:${pay.id}`, name: 'payment_page_viewed', channel: web ? 'web' : 'whatsapp',
+      userId: pay.user_id, mobile: pay.mobile, regNo: pay.reg_no, paymentId: pay.id,
+      amountPaise: pay.amount_paise,
+    });
+  }
+
   if (pay.status === 'paid') {
     return res.send(page('Already paid', web ? `<div class="card">
       <h1>This payment is already complete ✅</h1>
