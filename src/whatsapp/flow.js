@@ -130,8 +130,13 @@ async function sendSupportLink(mobile) {
  * anyone with more is told they can type the number — which is quicker than
  * paging through a list anyway. Each row says whether the full report is
  * already theirs, so the choice is informed before it is made.
+ *
+ * ONE VEHICLE IS NOT A CHOICE (user, 2026-09-25). Most owners have checked
+ * exactly one plate — their own — and a dropdown with a single row is a tap
+ * that asks nothing. So one vehicle goes straight to its report, basic or
+ * paid, exactly as if they had picked it from the list.
  */
-async function myVehicles(mobile) {
+async function myVehicles(mobile, message) {
   const user = await store.upsertUser(mobile);
   const { rows } = await db.query(
     `SELECT v.reg_no, v.maker, v.model, uv.last_checked_at,
@@ -151,6 +156,11 @@ async function myVehicles(mobile) {
     await doors(mobile,
       'You have not checked any vehicle yet.\n\n'
       + 'Send me a vehicle number and I will look it up — the basics are free.');
+    return;
+  }
+
+  if (rows.length === 1) {
+    await openVehicle(mobile, rows[0].reg_no, message, 'only vehicle');
     return;
   }
 
@@ -180,6 +190,20 @@ async function myVehicles(mobile) {
       + shown.map((r) => `• *${r.reg_no}* — ${r.has_report ? 'full report ready' : 'basic only'}`).join('\n')
       + '\n\nSend me the number of the one you want.');
   }
+}
+
+/**
+ * Open one of their vehicles: remember it as the one in hand, then fetch and
+ * send its report. The same path whether it was picked from the list or was
+ * the only one there was.
+ */
+async function openVehicle(mobile, reg, message, why) {
+  await db.query(
+    `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now()
+      WHERE mobile = $1`, [mobile, JSON.stringify({ pending_reg: reg })]);
+  await setState(mobile, 'owner_lookup', why);
+  await send.text(mobile, `Checking *${reg}* … ⏳`);
+  await deliverReport(mobile, reg, message);
 }
 
 async function mainMenu(mobile, body = 'What would you like to do?') {
@@ -1041,13 +1065,7 @@ async function handle(session, message, mobile) {
     }
 
     if (String(intent.id || '').startsWith('veh:')) {
-      const reg = intent.id.slice(4);
-      await db.query(
-        `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now()
-          WHERE mobile = $1`, [mobile, JSON.stringify({ pending_reg: reg })]);
-      await setState(mobile, 'owner_lookup', 'chosen from list');
-      await send.text(mobile, `Checking *${reg}* … ⏳`);
-      await deliverReport(mobile, reg, message);
+      await openVehicle(mobile, intent.id.slice(4), message, 'chosen from list');
       return;
     }
 
@@ -1445,7 +1463,7 @@ async function handle(session, message, mobile) {
       }
 
       case BTN.MY_REPORTS:
-        await myVehicles(mobile);
+        await myVehicles(mobile, message);
         return;
 
       case BTN.SUPPORT:
