@@ -284,6 +284,15 @@ async function document(mobile, filePath, { filename, caption } = {}) {
 async function template(mobile, name, params = [], { language = 'en' } = {}) {
   const clean = params.map(p => String(p ?? '').replace(/\s*\n\s*/g, ' · ').trim());
 
+  // STOP (user, 2026-09-25). The Terms say that after STOP we stop messaging
+  // them, other than to reply. A template is how GaadiPe starts a message —
+  // broadcast, reminder, alert — so it is refused here, at the one door every
+  // one of them leaves through. Replies are not templates and still go.
+  if (await optedOut(mobile)) {
+    console.log('[wa] %s replied STOP — not sending template %s', mobile, name);
+    return { ok: false, error: 'opted_out' };
+  }
+
   return post({
     messaging_product: 'whatsapp',
     to: toWaId(mobile),
@@ -298,4 +307,13 @@ async function template(mobile, name, params = [], { language = 'en' } = {}) {
   }, { mobile, type: 'template', body: `${name}(${clean.join(' | ')})`, templateName: name });
 }
 
-module.exports = { text, buttons, list, document, template, windowOpen, toWaId, allowed };
+/** Replied STOP, and has not replied START since. */
+async function optedOut(mobile) {
+  const row = await db.one(
+    `SELECT 1 AS yes FROM whatsapp_sessions
+      WHERE mobile = $1 AND wa_opt_out_at IS NOT NULL LIMIT 1`,
+    [String(mobile).replace(/\D/g, '').slice(-10)]).catch(() => null);
+  return Boolean(row);
+}
+
+module.exports = { text, buttons, list, document, template, windowOpen, toWaId, allowed, optedOut };
