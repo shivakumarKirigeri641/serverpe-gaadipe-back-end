@@ -227,6 +227,18 @@ router.get('/retention', needs('customers.view'), safe(async (req, res) => res.j
 router.get('/attribution', needs('customers.view'), safe(async (req, res) => res.json(await attribution.overview({ ...periodOf(req.query), model: req.query.model, source: req.query.source }))));
 router.get('/attribution/people', needs('customers.view'), safe(async (req, res) => res.json(await attribution.people(req.query))));
 
+/* ------------------------------------ WhatsApp money, data quality, providers */
+
+/*
+ * Operations module phase 4 (user, 2026-09-25): WhatsApp's cost and
+ * contribution, vehicle-data quality, and records-API providers side by side.
+ * The API request log is the Vehicles module's (/vehicles/api-logs).
+ */
+router.get('/whatsapp/economics', needs('dashboard.view'), safe(async (_req, res) => res.json(await require('../admin/whatsappOps').economics())));
+router.get('/data-quality', needs('api.view'), safe(async (req, res) => res.json(await require('../admin/dataQuality').overview(periodOf(req.query)))));
+router.get('/api-providers', needs('api.view'), safe(async (req, res) => res.json(await require('../admin/apiProviders').overview({
+  ...periodOf(req.query), operation: req.query.operation, state: req.query.state, vclass: req.query.vclass }))));
+
 /* WhatsApp and vehicle lookups (phase 4): src/admin/whatsappStats.js and
    src/admin/lookups.js, for the same periods as the command center. */
 router.get('/whatsapp/stats', safe(async (req, res) => res.json(
@@ -540,7 +552,7 @@ router.get('/vehicles/meta', needs('vehicles.view'), safe(async (_req, res) => r
 router.get('/vehicles/intel', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleOps.intel(req.query))));
 router.get('/vehicles/signals', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleOps.signals(req.query))));
 router.get('/vehicles/live', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleOps.live({ since: req.query.since }))));
-router.get('/vehicles/api-logs', needs('vehicles.api_logs'), safe(async (req, res) => res.json(await vehicleOps.apiLogs(req.query))));
+router.get('/vehicles/api-logs', (req, res, next) => (auth.can(req.admin.role, 'vehicles.api_logs') || auth.can(req.admin.role, 'api.view') ? next() : needs('vehicles.api_logs')(req, res, next)), safe(async (req, res) => res.json(await vehicleOps.apiLogs(req.query))));
 
 // Preferences: the explorer's columns and saved filters, per admin.
 router.get('/prefs/:key', safe(async (req, res) => res.json(await vehicleOps.getPref(req.admin, req.params.key))));

@@ -49,11 +49,36 @@ async function rates() {
     fee_percent: await settings.num('razorpay_fee_percent', 2),
     fee_gst_percent: await settings.num('razorpay_fee_gst_percent', 18),
     wa_rate_paise: await settings.num('whatsapp_message_cost_paise', 11),
+    // Per Meta category (operations module phase 4); each falls back to the flat rate.
+    wa_marketing_paise: await settings.num('whatsapp_cost_paise_marketing', await settings.num('whatsapp_message_cost_paise', 11)),
+    wa_utility_paise: await settings.num('whatsapp_cost_paise_utility', await settings.num('whatsapp_message_cost_paise', 11)),
+    wa_auth_paise: await settings.num('whatsapp_cost_paise_authentication', await settings.num('whatsapp_message_cost_paise', 11)),
     sms_rate_paise: await settings.num('sms_otp_cost_paise', 25),
   };
 }
 
-const ENTRY_SQL = (where) => `
+/*
+ * What a set of template messages costs, priced by each one's Meta category.
+ * The rates are numbers from Settings, checked, then written into the SQL.
+ */
+function waCostSql(alias, R) {
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  return `coalesce(sum(CASE upper(coalesce((SELECT t.category FROM wa_templates t WHERE t.template_name = ${alias}.template_name LIMIT 1), ''))
+            WHEN 'MARKETING' THEN ${n(R.wa_marketing_paise)} WHEN 'UTILITY' THEN ${n(R.wa_utility_paise)}
+            WHEN 'AUTHENTICATION' THEN ${n(R.wa_auth_paise)} ELSE ${n(R.wa_rate_paise)} END), 0)`;
+}
+
+/*
+ * A cost belongs to ONE payment: when the same customer paid more than once
+ * within the window, a message or an API call goes to the payment nearest to
+ * it in time (the earlier payment on a tie) — never to both.
+ */
+const NEAREST = (at, extra = '') => `NOT EXISTS (
+  SELECT 1 FROM payments p3 WHERE p3.user_id = p.user_id AND p3.id <> p.id AND p3.status IN ('paid', 'refunded') ${extra}
+     AND (abs(extract(epoch FROM coalesce(p3.paid_at, p3.created_at) - ${at})) < abs(extract(epoch FROM coalesce(p.paid_at, p.created_at) - ${at}))
+       OR (abs(extract(epoch FROM coalesce(p3.paid_at, p3.created_at) - ${at})) = abs(extract(epoch FROM coalesce(p.paid_at, p.created_at) - ${at})) AND p3.id < p.id)))`;
+
+const ENTRY_SQL = (where, R) => `
   SELECT p.id, p.payment_id, p.order_id, p.status, p.gateway, p.amount_paise, p.created_at, p.paid_at,
          p.refunded_at, p.refund_id, p.user_id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS person_name,
          v.id AS vehicle_id, v.reg_no,
@@ -63,7 +88,7 @@ const ENTRY_SQL = (where) => `
          coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel') AS pay_channel,
          i.invoice_number, i.base_paise, i.total_paise,
          coalesce(api.cost, 0)::int AS api_cost_paise, coalesce(api.calls, 0)::int AS api_calls,
-         coalesce(wa.n, 0)::int AS wa_templates,
+         coalesce(wa.n, 0)::int AS wa_templates, coalesce(wa.cost, 0)::int AS wa_cost,
          ws.attribution, vis.first_touch AS v_first, vis.last_touch AS v_last
     FROM payments p
     LEFT JOIN users u ON u.id = p.user_id
@@ -75,11 +100,13 @@ const ENTRY_SQL = (where) => `
          AND ((a.user_id = p.user_id
                AND a.created_at BETWEEN p.created_at - interval '24 hours' AND coalesce(p.paid_at, p.created_at) + interval '1 hour')
            OR (a.user_id IS NULL
-               AND a.created_at BETWEEN coalesce(p.paid_at, p.created_at) - interval '5 minutes' AND coalesce(p.paid_at, p.created_at) + interval '1 hour'))) api ON true
+               AND a.created_at BETWEEN coalesce(p.paid_at, p.created_at) - interval '5 minutes' AND coalesce(p.paid_at, p.created_at) + interval '1 hour'))
+         AND ${NEAREST('a.created_at', "AND p3.raw->>'vehicle_id' IS NOT DISTINCT FROM p.raw->>'vehicle_id'")}) api ON true
     LEFT JOIN LATERAL (
-      SELECT count(*) AS n FROM whatsapp_messages m
+      SELECT count(*) AS n, ${waCostSql('m', R)} AS cost FROM whatsapp_messages m
        WHERE m.direction = 'out' AND m.message_type = 'template' AND m.mobile = u.mobile
-         AND m.created_at BETWEEN p.created_at - interval '24 hours' AND coalesce(p.paid_at, p.created_at) + interval '1 hour') wa ON true
+         AND m.created_at BETWEEN p.created_at - interval '24 hours' AND coalesce(p.paid_at, p.created_at) + interval '1 hour'
+         AND ${NEAREST('m.created_at')}) wa ON true
     LEFT JOIN LATERAL (SELECT attribution FROM whatsapp_sessions s WHERE s.user_id = p.user_id ORDER BY s.id DESC LIMIT 1) ws ON true
     LEFT JOIN LATERAL (SELECT first_touch, last_touch FROM visitors x
                         WHERE x.user_id = p.user_id OR (u.mobile IS NOT NULL AND x.mobile = u.mobile)
@@ -114,7 +141,7 @@ function compute(r, R) {
   const netSales = g - gst;
   const netRevenue = netSales - refundNet;
   const api = Number(r.api_cost_paise || 0);
-  const wa = Number(r.wa_templates || 0) * R.wa_rate_paise;
+  const wa = Number(r.wa_cost || 0);
   const costs = fee + feeGst + api + wa;
   const net = netRevenue - costs;
   const attribution = r.attribution || {};
@@ -153,7 +180,7 @@ async function entries({ from, to, ids, all = false } = {}) {
   if (to) w.push(`coalesce(p.paid_at, p.created_at) < ${bind(to)}`);
   if (!all) w.push(`p.status IN ('paid', 'refunded')`);
   const R = await rates();
-  const { rows } = await db.query(`${ENTRY_SQL(w.join(' AND ') || 'true')} ORDER BY coalesce(p.paid_at, p.created_at) DESC, p.id DESC`, args);
+  const { rows } = await db.query(`${ENTRY_SQL(w.join(' AND ') || 'true', R)} ORDER BY coalesce(p.paid_at, p.created_at) DESC, p.id DESC`, args);
   return { rates: R, rows: rows.map((r) => compute(r, R)) };
 }
 
@@ -185,12 +212,12 @@ async function periodMoney(from, to, prefetched) {
   const t = total(rows);
   const [api, wa, sms] = await Promise.all([
     db.one(`SELECT coalesce(sum(cost_paise), 0)::int AS c, count(*)::int AS n FROM api_calls WHERE created_at >= $1 AND created_at < $2`, [from, to]),
-    db.one(`SELECT count(*)::int AS n FROM whatsapp_messages WHERE direction = 'out' AND message_type = 'template'
-             AND created_at >= $1 AND created_at < $2`, [from, to]),
+    db.one(`SELECT count(*)::int AS n, ${waCostSql('m', R)}::int AS cost FROM whatsapp_messages m WHERE m.direction = 'out' AND m.message_type = 'template'
+             AND m.created_at >= $1 AND m.created_at < $2`, [from, to]),
     db.one(`SELECT count(*)::int AS n FROM site_otps WHERE created_at >= $1 AND created_at < $2`, [from, to]).catch(() => ({ n: 0 })),
   ]);
   const apiAll = api.c;
-  const waAll = wa.n * R.wa_rate_paise;
+  const waAll = Number(wa.cost || 0);
   const smsAll = sms.n * R.sms_rate_paise;
   const unattributed = Math.max(0, apiAll - t.api_cost_paise) + Math.max(0, waAll - t.whatsapp_cost_paise) + smsAll;
   const net = t.net_revenue_paise - t.gateway_paise - Math.max(apiAll, t.api_cost_paise)
@@ -208,4 +235,4 @@ async function periodMoney(from, to, prefetched) {
   };
 }
 
-module.exports = { entries, total, periodMoney, rates, compute };
+module.exports = { entries, total, periodMoney, rates, compute, waCostSql };

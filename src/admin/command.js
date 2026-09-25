@@ -151,6 +151,7 @@ async function totals(from, to) {
 
 /** The same counts per hour or per day, for the sparklines. */
 async function series(from, to, step) {
+  const rates = await ledger.rates();
   const { rows } = await db.query(
     `WITH b AS (
        SELECT t, t + $3::interval AS t2 FROM generate_series($1::timestamptz, $2::timestamptz - interval '1 second', $3::interval) t
@@ -159,21 +160,21 @@ async function series(from, to, step) {
             to_char(b.t AT TIME ZONE 'Asia/Kolkata', $4) AS label,
             ${COUNTS},
             (SELECT coalesce(sum(cost_paise), 0) FROM api_calls a WHERE a.created_at >= b.t AND a.created_at < b.t2) AS api_cost_paise,
-            (SELECT count(*) FROM whatsapp_messages m WHERE m.direction = 'out' AND m.message_type = 'template'
-                AND m.created_at >= b.t AND m.created_at < b.t2) AS wa_templates
+            (SELECT ${ledger.waCostSql('m', rates)} FROM whatsapp_messages m WHERE m.direction = 'out' AND m.message_type = 'template'
+                AND m.created_at >= b.t AND m.created_at < b.t2) AS wa_cost
        FROM b LEFT JOIN events e ON e.occurred_at >= b.t AND e.occurred_at < b.t2
       GROUP BY b.t, b.t2 ORDER BY b.t`,
     [from, to, step === 'hour' ? '1 hour' : '1 day', step === 'hour' ? 'HH24:00' : 'DD Mon']);
   // Each bucket's net from the ledger's own payments, less that bucket's API
   // calls and business messages — the same arithmetic as the period's total.
-  const { rows: pays, rates } = await ledger.entries({ from, to });
+  const { rows: pays } = await ledger.entries({ from, to });
   const out = [];
   for (const r of rows) {
     const n = Object.fromEntries(Object.entries(r).map(([k, v]) => [k, k === 'label' || k === 't' ? v : Number(v || 0)]));
     const t0 = new Date(r.t).getTime(); const t1 = t0 + (step === 'hour' ? 3600e3 : 86400e3);
     const mine = pays.filter((p) => { const at = new Date(p.paid_at || p.created_at).getTime(); return at >= t0 && at < t1; });
     const kept = mine.reduce((a, p) => a + p.net_revenue_paise - p.gateway_fee_paise - p.gateway_gst_paise, 0);
-    out.push({ ...n, net_paise: kept - n.api_cost_paise - n.wa_templates * rates.wa_rate_paise });
+    out.push({ ...n, net_paise: kept - n.api_cost_paise - n.wa_cost });
   }
   return out;
 }
