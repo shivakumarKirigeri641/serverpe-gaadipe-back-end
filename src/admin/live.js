@@ -45,8 +45,11 @@ async function conversations({ limit = 60, activeMinutes = null, q = '' } = {}) 
        LEFT JOIN users u ON u.mobile = s.mobile
       WHERE ($1 = '' OR s.mobile LIKE '%' || $2 || '%' OR s.profile_name ILIKE '%' || $1 || '%')
         AND ($3::int IS NULL OR s.last_inbound_at > now() - ($3 || ' minutes')::interval)
-      ORDER BY greatest(coalesce(s.last_inbound_at, s.created_at),
-                        coalesce(s.last_outbound_at, s.created_at)) DESC
+      -- Newest customer message first (user, 2026-09-25): the list answers
+      -- "who is messaging", and each row shows when they last wrote. Sorting
+      -- by our own sends too (alerts, broadcasts) put people we messaged above
+      -- people who had just written, and the times looked out of order.
+      ORDER BY coalesce(s.last_inbound_at, s.created_at) DESC, s.id DESC
       LIMIT $4`,
     [term, digits, activeMinutes, Math.min(200, limit)]);
 
