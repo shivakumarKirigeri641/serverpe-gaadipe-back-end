@@ -9,6 +9,10 @@
  *                  with the invoice PDF attached
  *   contact        a message from the "Contact us" form
  *   feedback       a feedback note
+ *   wa_hi          someone said Hi on WhatsApp
+ *   wa_check       a vehicle checked on WhatsApp — found, or not
+ *   wa_opt_out     someone replied STOP
+ *   left_at_pay    a ₹19 payment link opened and not paid within 30 minutes
  *   daily_summary  the day's figures, once, from 9 pm IST
  *
  * WHY A JOB AND NOT A CALL IN EACH FLOW: a payment is confirmed in four places
@@ -18,7 +22,8 @@
  * later tick (up to five times). admin_notifications is what guarantees once.
  *
  * Each kind can be switched off in Settings (notify_sign_ins, notify_payments,
- * notify_contact, notify_feedback, daily_summary_email).
+ * notify_contact, notify_feedback, notify_wa_hi, notify_wa_checks,
+ * notify_wa_opt_out, notify_left_at_payment, daily_summary_email).
  */
 
 const fs = require('fs');
@@ -266,6 +271,182 @@ async function feedback() {
   return n;
 }
 
+
+/* ─────────────────────────────────────────────────────── WhatsApp chat ──
+   GaadiPe lives on WhatsApp now (user, 2026-09-25), so the moments worth an
+   email happen in the chat. The bot already writes each one to event_log as a
+   funnel step (flow.js funnel()); these read those rows, so the chat is never
+   slowed by mail. One email per event, guaranteed once by admin_notifications. */
+
+/** The funnel events of one step from the last hour that have not been emailed. */
+async function funnelEvents(step, kind) {
+  const { rows } = await db.query(
+    `SELECT e.id, e.created_at, e.detail FROM event_log e
+      WHERE e.kind = 'funnel' AND e.detail->>'step' = $1
+        AND e.created_at > now() - interval '1 hour'
+        AND ${notDone(kind, 'e.id::text')}
+      ORDER BY e.id LIMIT 30`, [step]);
+  return rows;
+}
+
+/** Who a mobile is, as far as GaadiPe knows — for the "Who" rows. */
+async function whoIs(mobile) {
+  return db.one(
+    `SELECT s.profile_name, s.created_at AS first_seen,
+            u.id AS user_id, u.display_name,
+            (SELECT count(*)::int FROM user_vehicles uv WHERE uv.user_id = u.id) AS vehicles,
+            (SELECT count(*)::int FROM payments p WHERE p.user_id = u.id
+                AND p.status = 'paid' AND p.amount_paise > 0) AS paid
+       FROM (SELECT $1::text AS mobile) m
+       LEFT JOIN whatsapp_sessions s ON s.mobile = m.mobile
+       LEFT JOIN users u ON u.mobile = m.mobile`, [mobile]);
+}
+const nameOf = (w, mobile) => w?.display_name || w?.profile_name || T.mobile(mobile);
+
+async function waHi() {
+  if (!(await on('notify_wa_hi'))) return 0;
+  let n = 0;
+  for (const e of await funnelEvents('hi', 'wa_hi')) {
+    const mobile = e.detail?.mobile;
+    n += await deliver('wa_hi', e.id, async () => {
+      const w = await whoIs(mobile);
+      // New = their chat began within a minute of this Hi.
+      const isNew = !w?.first_seen || Math.abs(new Date(e.created_at) - new Date(w.first_seen)) < 60 * 1000;
+      return {
+        subject: `👋 ${isNew ? 'New on WhatsApp' : 'Said Hi'} · ${nameOf(w, mobile)}`,
+        ...T.layout({
+          badge: { text: isNew ? 'New contact' : 'Said Hi again', tone: isNew ? 'good' : 'info' },
+          title: `${nameOf(w, mobile)} said Hi on WhatsApp`,
+          lead: `${T.ist(e.created_at)}. ${isNew ? 'First time they have written to GaadiPe.' : 'They have written before.'}`,
+          sections: [{ heading: 'Who', rows: [
+            ['WhatsApp name', w?.profile_name || 'Not shown'],
+            ['Mobile', T.mobile(mobile)],
+            ['Vehicles checked before', String(w?.vehicles ?? 0)],
+            ['Paid before', w?.paid ? `Yes (${w.paid})` : 'No'],
+          ] }],
+          cta: { label: 'Open Live', path: '/live' },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
+async function waChecks() {
+  if (!(await on('notify_wa_checks'))) return 0;
+  let n = 0;
+  for (const step of ['basic_shown', 'lookup_failed']) {
+    for (const e of await funnelEvents(step, 'wa_check')) {
+      const d = e.detail || {};
+      const failed = step === 'lookup_failed';
+      n += await deliver('wa_check', e.id, async () => {
+        const w = await whoIs(d.mobile);
+        const v = d.reg_no ? await db.one(
+          `SELECT maker, model, fuel, vehicle_class FROM vehicles WHERE reg_no = $1`, [d.reg_no]) : null;
+        const today = await db.one(
+          `SELECT count(*)::int AS n FROM event_log
+            WHERE kind = 'funnel' AND detail->>'step' = 'basic_shown' AND detail->>'mobile' = $1
+              AND created_at >= (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`,
+          [d.mobile]);
+        const outcome = failed
+          ? (d.reason === 'not_found' ? 'Not found in Government records' : 'Lookup failed — records service error')
+          : (d.bought ? 'Full report (already bought)' : 'Basic details shown');
+        return {
+          subject: `${failed ? '⚠️' : '🔎'} ${d.reg_no || 'Vehicle'} checked · ${nameOf(w, d.mobile)}`,
+          ...T.layout({
+            badge: { text: failed ? 'Check failed' : 'Vehicle checked', tone: failed ? 'watch' : 'info' },
+            title: `${nameOf(w, d.mobile)} checked ${d.reg_no || 'a vehicle'}`,
+            lead: `${T.ist(e.created_at)} · ${outcome}.`,
+            sections: [
+              { heading: 'Vehicle', rows: [
+                ['Number', d.reg_no],
+                ['Make · model', v ? [v.maker, v.model].filter(Boolean).join(' · ') : '—'],
+                ['Fuel · type', v ? [v.fuel, v.vehicle_class].filter(Boolean).join(' · ') : '—'],
+                ['Result', outcome],
+              ] },
+              { heading: 'Who', rows: [
+                ['WhatsApp name', w?.profile_name || 'Not shown'],
+                ['Mobile', T.mobile(d.mobile)],
+                ['Checks today', String(today?.n ?? 0)],
+                ['Paid before', w?.paid ? `Yes (${w.paid})` : 'No'],
+              ] },
+            ],
+            cta: { label: 'Open vehicles', path: '/vehicles' },
+          }),
+        };
+      }) ? 1 : 0;
+    }
+  }
+  return n;
+}
+
+async function waOptOut() {
+  if (!(await on('notify_wa_opt_out'))) return 0;
+  let n = 0;
+  for (const e of await funnelEvents('opt_out', 'wa_opt_out')) {
+    const mobile = e.detail?.mobile;
+    n += await deliver('wa_opt_out', e.id, async () => {
+      const w = await whoIs(mobile);
+      return {
+        subject: `🛑 Replied STOP · ${nameOf(w, mobile)}`,
+        ...T.layout({
+          badge: { text: 'Replied STOP', tone: 'wrong' },
+          title: `${nameOf(w, mobile)} replied STOP`,
+          lead: `${T.ist(e.created_at)}. GaadiPe will not message them until they reply START; they are left out of every broadcast.`,
+          sections: [{ heading: 'Who', rows: [
+            ['WhatsApp name', w?.profile_name || 'Not shown'],
+            ['Mobile', T.mobile(mobile)],
+            ['Vehicles checked', String(w?.vehicles ?? 0)],
+            ['Paid before', w?.paid ? `Yes (${w.paid})` : 'No'],
+          ] }],
+          cta: { label: 'Open Live', path: '/live' },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
+/* Opened the ₹19 payment link and did not pay within 30 minutes: the warmest
+   lead there is. Sent once per payment link, and only while it is still unpaid. */
+async function leftAtPayment() {
+  if (!(await on('notify_left_at_payment'))) return 0;
+  const { rows } = await db.query(
+    `SELECT e.id, e.created_at, e.detail, p.amount_paise
+       FROM event_log e
+       JOIN payments p ON p.id = (e.detail->>'payment_row')::bigint
+      WHERE e.kind = 'funnel' AND e.detail->>'step' = 'link_sent'
+        AND e.created_at < now() - interval '30 minutes'
+        AND e.created_at > now() - interval '6 hours'
+        AND p.status = 'created'
+        AND ${notDone('left_at_pay', 'e.id::text')}
+      ORDER BY e.id LIMIT 20`);
+  let n = 0;
+  for (const e of rows) {
+    const d = e.detail || {};
+    n += await deliver('left_at_pay', e.id, async () => {
+      const w = await whoIs(d.mobile);
+      return {
+        subject: `⏳ Left at payment · ${d.reg_no || ''} · ${nameOf(w, d.mobile)}`,
+        ...T.layout({
+          badge: { text: 'Did not pay', tone: 'watch' },
+          title: `${nameOf(w, d.mobile)} opened the payment link and did not pay`,
+          lead: `Link sent ${T.ist(e.created_at)} for ${T.rupees(e.amount_paise)} — still unpaid after 30 minutes.`,
+          sections: [{ heading: 'Details', rows: [
+            ['Vehicle', d.reg_no],
+            ['Amount', T.rupees(e.amount_paise)],
+            ['WhatsApp name', w?.profile_name || 'Not shown'],
+            ['Mobile', T.mobile(d.mobile)],
+          ] }],
+          note: 'They can still pay on the same link. A reply from you in the chat within 24 hours of their last message is free.',
+          cta: { label: 'Open Live', path: '/live' },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
 /* ─────────────────────────────────────────────────────────── security ──
    Misbehaviour, batched (user, 2026-09-18): every event since the last security
    email, grouped by what happened and from where, at most one email per
@@ -400,7 +581,8 @@ async function dailySummary() {
 async function runOnce() {
   if (!mailer.configured()) return { skipped: 'mail not configured' };
   const out = {};
-  for (const [k, fn] of Object.entries({ signIns, payments, contacts, feedback, security, dailySummary })) {
+  for (const [k, fn] of Object.entries({ signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
+                                            leftAtPayment, security, dailySummary })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
   const total = Object.values(out).reduce((t, v) => t + (Number(v) || 0), 0);
@@ -424,4 +606,5 @@ function start(everySeconds = 30) {
   console.log(`  admin email: every ${everySeconds}s from ${process.env.NOREPLYMAIL}`);
 }
 
-module.exports = { start, runOnce, signIns, payments, contacts, feedback, security, dailySummary };
+module.exports = { start, runOnce, signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
+                   leftAtPayment, security, dailySummary };

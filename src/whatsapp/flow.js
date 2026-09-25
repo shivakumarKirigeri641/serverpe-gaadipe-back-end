@@ -782,6 +782,9 @@ async function deliverReport(mobile, regNo, message) {
 
   if (!data || data.success !== true) {
     const notFound = data?.error === 'vehicle_not_found';
+    // Recorded like a successful check, so the admin hears about it too
+    // (jobs/notify.js) — a lookup that fails is a customer who got nothing.
+    await funnel(mobile, 'lookup_failed', { reg_no: regNo, reason: notFound ? 'not_found' : 'service_error' });
     await setState(mobile, 'owner_start', notFound ? 'vehicle not found' : 'lookup failed');
     await send.text(mobile, notFound
       ? `I could not find any Government record for *${regNo}*.\n\n`
