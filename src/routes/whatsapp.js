@@ -32,6 +32,8 @@ const store = require('../whatsapp/store');
 const flow = require('../whatsapp/flow');
 const send = require('../whatsapp/send');
 const blocks = require('../admin/blocks');
+const customers = require('../vehicle/store');
+const db = require('../db');
 
 const router = express.Router();
 const wa = config.whatsapp;
@@ -90,6 +92,17 @@ async function handle(body) {
         const rec = await store.recordInbound(m, contact);
         if (rec) {
           console.log(`[wa] in  ${rec.mobile}  ${m.type}  ${JSON.stringify(rec.body).slice(0, 80)}`);
+          // EVERYONE WHO WRITES IS A CUSTOMER (user, 2026-09-25). A users row
+          // used to appear only at a vehicle check or a payment, so the admin
+          // panel — Customers, Home, counts — could not see someone who said
+          // Hi and stopped. Now the first message creates it (channel
+          // whatsapp) and every message moves last_seen_at, and the session is
+          // tied to it. Failure here must never cost the reply.
+          await customers.upsertUser(rec.mobile, { name: contact?.profile?.name, waId: m.from })
+            .then((u) => u && db.query(
+              `UPDATE whatsapp_sessions SET user_id = $2 WHERE mobile = $1 AND user_id IS DISTINCT FROM $2`,
+              [rec.mobile, u.id]))
+            .catch((e) => console.error('[wa] could not record customer %s: %s', rec.mobile, e.message));
         }
         // Testing guard: a number outside WHATSAPP_ALLOWED_RECIPIENTS is recorded
         // above but never moved through the flow, so its session state stays

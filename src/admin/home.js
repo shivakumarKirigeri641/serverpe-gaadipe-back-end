@@ -158,25 +158,27 @@ async function today() {
  * point here is the shape, not the analysis.
  */
 async function funnelToday() {
+  // WhatsApp-first (user, 2026-09-25): the day's journey is the chat's, read
+  // from the funnel steps the bot records (flow.js funnel()), one person per
+  // mobile. It used to be built from website sessions, which are empty now.
+  const step = (name) => `(SELECT count(DISTINCT e.detail->>'mobile')::int FROM event_log e, b
+         WHERE e.kind = 'funnel' AND e.detail->>'step' = '${name}' AND e.created_at ${IST} >= b.today)`;
   const row = await db.one(
     `WITH b AS (SELECT date_trunc('day', now() ${IST}) AS today)
      SELECT
-       (SELECT count(DISTINCT s.user_id)::int FROM site_sessions s, b
-         WHERE s.created_at ${IST} >= b.today)                                   AS arrived,
-       (SELECT count(DISTINCT a.user_id)::int FROM site_activity a, b
-         WHERE a.created_at ${IST} >= b.today
-           AND a.action IN ('check', 'view_vehicle', 'view_vehicle_paid'))       AS checked,
-       (SELECT count(DISTINCT a.user_id)::int FROM site_activity a, b
-         WHERE a.created_at ${IST} >= b.today AND a.action = 'buy_open')         AS opened_buy,
-       (SELECT count(DISTINCT a.user_id)::int FROM site_activity a, b
-         WHERE a.created_at ${IST} >= b.today AND a.action = 'pay_start')        AS tapped_pay,
+       ${step('hi')}          AS said_hi,
+       ${step('agreed')}      AS agreed,
+       ${step('basic_shown')} AS checked,
+       ${step('buy_tapped')}  AS tapped_buy,
+       ${step('link_sent')}   AS got_link,
        (SELECT count(DISTINCT p.user_id)::int FROM payments p, b
          WHERE p.status = 'paid' AND p.amount_paise > 0 AND p.paid_at ${IST} >= b.today) AS paid`);
   return [
-    { step: 'Arrived', n: row.arrived },
+    { step: 'Said Hi', n: row.said_hi },
+    { step: 'Agreed to terms', n: row.agreed },
     { step: 'Checked a vehicle', n: row.checked },
-    { step: 'Opened Buy', n: row.opened_buy },
-    { step: 'Tapped Pay', n: row.tapped_pay },
+    { step: 'Tapped full report', n: row.tapped_buy },
+    { step: 'Got payment link', n: row.got_link },
     { step: 'Paid', n: row.paid },
   ];
 }

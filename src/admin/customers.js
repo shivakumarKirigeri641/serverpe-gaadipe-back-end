@@ -45,6 +45,8 @@ const SORTS = {
   reports: 'reports_bought DESC',
   sign_ins: 'sign_ins DESC NULLS LAST',
   time: 'seconds_on_site DESC NULLS LAST',
+  // WhatsApp-first (user, 2026-09-25): the chat is where customers are.
+  messages: 'messages DESC NULLS LAST, last_message_at DESC NULLS LAST',
 };
 
 /**

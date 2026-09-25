@@ -28,6 +28,9 @@ const METRICS_SQL = `
         AND created_at >= $1 AND created_at < $2)                                         AS active_users,
     (SELECT count(*) FROM vehicles WHERE first_seen_at >= $1 AND first_seen_at < $2)     AS new_vehicles,
     (SELECT count(*) FROM site_sessions WHERE created_at >= $1 AND created_at < $2)      AS sign_ins,
+    -- WhatsApp-first (user, 2026-09-25): people who wrote in the period.
+    (SELECT count(DISTINCT mobile) FROM whatsapp_messages
+      WHERE direction = 'in' AND created_at >= $1 AND created_at < $2)                  AS wa_chats,
     (SELECT count(*) FROM payments WHERE status = 'paid'
         AND paid_at >= $1 AND paid_at < $2)                                               AS payments,
     (SELECT coalesce(sum(amount_paise), 0) FROM payments WHERE status = 'paid'

@@ -542,12 +542,17 @@ async function dailySummary() {
     const { compare } = require('../admin/insights');
     const c = (await compare()).day;
     const d = c.current; const y = c.previous_full;
+    // WhatsApp-first (user, 2026-09-25): the chat's day, not the website's.
     const extra = await db.one(
-      `SELECT (SELECT count(*) FROM site_sign_ins WHERE event IN ('sign_in_failed','code_refused')
-                 AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS failed,
+      `SELECT (SELECT count(*) FROM whatsapp_messages WHERE direction = 'in'
+                 AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS wa_in,
+              (SELECT count(DISTINCT mobile) FROM whatsapp_messages WHERE direction = 'in'
+                 AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS wa_people,
+              (SELECT count(*) FROM event_log WHERE kind = 'funnel' AND detail->>'step' = 'opt_out'
+                 AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS stops,
               (SELECT count(*) FROM event_log WHERE kind = 'watch_digest' AND detail->>'ist_date' = $1)::int AS alerts,
               (SELECT count(*) FROM contact_messages WHERE created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS contacts,
-              (SELECT count(*) FROM site_sessions WHERE ended_at IS NULL AND last_used_at > now() - interval '15 minutes')::int AS online`, [today]);
+              (SELECT count(*) FROM whatsapp_sessions WHERE last_inbound_at > now() - interval '15 minutes')::int AS online`, [today]);
     const { rows: paid } = await db.query(
       `SELECT p.amount_paise, p.paid_at, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
               (SELECT reg_no FROM vehicle_reports r WHERE r.payment_id = p.id LIMIT 1) AS reg_no
@@ -570,14 +575,15 @@ async function dailySummary() {
             ['Revenue', vs(d.gross_paise, y.gross_paise, true)], ['Take-home', vs(d.take_home_paise, y.take_home_paise, true)],
             ['Payments', vs(d.payments, y.payments)], ['Vehicle checks', vs(d.checks, y.checks)],
             ['People checking', vs(d.active_users, y.active_users)], ['New customers', vs(d.new_users, y.new_users)],
-            ['New vehicles', vs(d.new_vehicles, y.new_vehicles)], ['Sign-ins', vs(d.sign_ins, y.sign_ins)],
+            ['New vehicles', vs(d.new_vehicles, y.new_vehicles)],
             ['Conversion', `${d.conversion}%  (yesterday ${y.conversion}%)`],
             ['Abandoned payments', vs(d.abandoned, y.abandoned)],
           ] },
           { heading: 'Also today', rows: [
             ['Reports issued', String(d.reports)], ['Evening alerts sent', String(extra.alerts)],
-            ['Failed or refused sign-ins', String(extra.failed)], ['Contact messages', String(extra.contacts)],
-            ['Feedback', String(d.feedback)], ['Online right now', String(extra.online)],
+            ['WhatsApp messages received', `${extra.wa_in} from ${extra.wa_people} people`],
+            ['Replied STOP', String(extra.stops)], ['Contact messages', String(extra.contacts)],
+            ['Feedback', String(d.feedback)], ['Chatting right now', String(extra.online)],
             ['Messaging cost', T.rupees(d.messaging_paise)],
           ] },
           paid.length ? { heading: 'Payments today', rows: paid.map((r) => [
