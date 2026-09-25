@@ -822,10 +822,15 @@ function lockedLines(data) {
   const c = data.challans || {};
   const present = (v) => v && !/^(NA|N\/A|NONE|NULL|-|—)$/i.test(String(v).trim());
 
-  const lines = [
+  const lines = [];
+  // The count itself is in the report, not here (user, 2026-09-25). Only
+  // offered when the record has it — the PDF prints "—" otherwise, and a
+  // promise the report cannot keep is worse than no line.
+  if (Number(rc.owner_serial) > 0) lines.push('• Number of owners — *on record*');
+  lines.push(
     `• Loan / hypothecation — ${present(rc.financer) ? '*record found*' : 'checked'}`,
     `• Blacklist & NOC — ${present(rc.blacklist_status) || present(rc.noc_details) ? '*record found*' : 'checked'}`,
-  ];
+  );
   if ((c.pending_count || 0) > 0) {
     lines.push(`• Challan numbers & offences — *${c.pending_count} pending*`);
   } else {
