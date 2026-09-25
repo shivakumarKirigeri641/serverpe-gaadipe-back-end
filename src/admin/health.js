@@ -173,7 +173,10 @@ async function services() {
       message: queued == null ? 'Not available' : `${queued} waiting (admin notices ${q.admin_notices}, broadcast ${q.broadcast}, vehicle alerts ${q.vehicle_alerts})${oldestMin != null ? ` · oldest ${oldestMin} min` : ''}`,
       metrics: q ? { size: queued, admin_notices: q.admin_notices, broadcast: q.broadcast, vehicle_alerts: q.vehicle_alerts } : {} },
   );
-  return { overall: worst(...list.map((x) => x.level)), services: list, at: new Date().toISOString() };
+  // The thresholds the screen's dials are coloured by — the alert settings themselves.
+  const thresholds = { api_error_pct: apiErrPct, api_p95_ms: apiP95, wa_failure_pct: waPct, disk_pct: lim.disk,
+                       memory_pct: await settings.num('alert_memory_pct', 90) };
+  return { overall: worst(...list.map((x) => x.level)), services: list, thresholds, at: new Date().toISOString() };
 }
 
 module.exports = { services, worst };

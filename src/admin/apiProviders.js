@@ -13,6 +13,7 @@
 
 const db = require('../db');
 const command = require('./command');
+const settings = require('../util/settings');
 
 async function overview(q = {}) {
   const r = command.resolve({ range: q.range || '7d', from: q.from, to: q.to, compare: 'none' });
@@ -44,6 +45,8 @@ async function overview(q = {}) {
   });
   return {
     range: { label: r.label },
+    // Latency dials turn amber past the same threshold the alert uses.
+    threshold_ms: await settings.num('alert_api_p95_ms', 8000),
     providers: byProvider.rows.map(shape), operations: byOperation.rows.map(shape),
     filters: { operations: ops.rows.map((o) => o.provider_path) },
     notes: {
