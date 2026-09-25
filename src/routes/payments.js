@@ -217,7 +217,7 @@ async function notifyPaid(result) {
 async function notifyReportPaid(result, user, veh, { ends, amount }) {
   const send = require('../whatsapp/send');
 
-  await send.buttons(user.mobile,
+  await send.text(user.mobile,
     'Payment received ✅\n\n'
     + `₹${amount} · full report${veh ? ` for *${veh.reg_no}*` : ''}`);
 

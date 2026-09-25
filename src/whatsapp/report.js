@@ -310,6 +310,58 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
 }
 
 /**
+ * The free check (user, 2026-09-25): what the vehicle IS, and how many things
+ * about it need attention — never which ones. The dates, challans and flags
+ * are what the ₹19 report is for; naming them here gave the answer away and
+ * left nothing to buy.
+ *
+ * The record has no variant field: ULIP's model is the model and the variant in
+ * one string ("SELTOS D1.5 6AT HTX PLUS"), so the first word is the model and
+ * the rest is the variant. Imperfect for two-word models, but the whole string
+ * is still shown, just split across two lines.
+ */
+function basic(data, { price = '₹19', soonDays = 30 } = {}) {
+  const rc = data.rc || {};
+  const make = String(rc.maker || '')
+    .replace(/\(P\)|\bPVT\.?|\bPRIVATE\b|\bLTD\.?|\bLIMITED\b|\bINDIA\b|\bCO\.?$/gi, '')
+    .replace(/[\s.,]+$/, '').replace(/\s+/g, ' ').trim();
+  const [model, ...rest] = String(rc.model || '').trim().split(/\s+/);
+
+  const lines = [`🚗 *${data.vehicle_number}*`, ''];
+  const row = (label, v) => { if (v) lines.push(`${label}: *${v}*`); };
+  row('Make', make && titleCase(make));
+  row('Model', model && titleCase(model));
+  row('Variant', rest.join(' '));
+  row('Fuel', rc.fuel && titleCase(rc.fuel));
+  row('Vehicle type', rc.vehicle_class && titleCase(rc.vehicle_class));
+
+  const n = attentionCount(data, { soonDays });
+  lines.push('', n
+    ? `⚠️ *${n} thing${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} attention.*\n`
+      + `Get the full report for *${price}* to see what, and what to do about it.`
+    : '✅ Nothing needs attention right now.\n'
+      + `The full report for *${price}* has every date, challan and record behind that.`);
+
+  lines.push('', `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · Government records_`);
+  return lines.join('\n');
+}
+
+/**
+ * How many things need acting on: each document expired or expiring within
+ * soonDays, pending challans (as one thing, however many), a blacklist entry,
+ * and an RC that is not active. Counted, not listed — see basic().
+ */
+function attentionCount(data, { soonDays = 30 } = {}) {
+  const rc = data.rc || {};
+  let n = documentsOf(rc).filter(d => d.days <= soonDays).length;
+  if ((data.challans?.pending_count || 0) > 0) n++;
+  if (/^T|BLACK/i.test(String(rc.blacklist_status || '')) &&
+      !/^NA|NONE|^$/i.test(String(rc.blacklist_status))) n++;
+  if (rc.status && !/^ACTIVE/i.test(String(rc.status))) n++;
+  return n;
+}
+
+/**
  * One line summarising what needs attention, for the alert template — which
  * cannot contain newlines inside a variable, so items are joined with " · ".
  */
@@ -343,5 +395,5 @@ async function buildFor(data, opts = {}) {
   });
 }
 
-module.exports = { build, buildFor, attentionSummary, safeRc, documentsOf, human,
+module.exports = { build, buildFor, basic, attentionCount, attentionSummary, safeRc, documentsOf, human,
                    maskName, maskNumber, titleCase, NEVER_SHOW };

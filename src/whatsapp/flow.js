@@ -130,8 +130,14 @@ async function sendSupportLink(mobile) {
  * anyone with more is told they can type the number — which is quicker than
  * paging through a list anyway. Each row says whether the full report is
  * already theirs, so the choice is informed before it is made.
+ *
+ * ONE VEHICLE IS NOT A CHOICE (user, 2026-09-25). Most owners have checked
+ * exactly one plate — their own — and a dropdown with a single row is a tap
+ * that asks nothing. So one vehicle goes straight to its report, basic or
+ * paid, exactly as if they had picked it from the list. What each sends is
+ * openVehicle()'s decision: the PDF if bought, the basic details if not.
  */
-async function myVehicles(mobile) {
+async function myVehicles(mobile, message) {
   const user = await store.upsertUser(mobile);
   const { rows } = await db.query(
     `SELECT v.reg_no, v.maker, v.model, uv.last_checked_at,
@@ -154,6 +160,11 @@ async function myVehicles(mobile) {
     return;
   }
 
+  if (rows.length === 1) {
+    await openVehicle(mobile, rows[0].reg_no, message, 'only vehicle');
+    return;
+  }
+
   const more = rows.length > 10;
   const shown = rows.slice(0, 10);
   const out = await send.list(mobile, {
@@ -167,7 +178,7 @@ async function myVehicles(mobile) {
       title: r.reg_no,
       description: [
         [r.maker, r.model].filter(Boolean).join(' ').slice(0, 30),
-        r.has_report ? 'full report ready' : 'basic only',
+        r.has_report ? 'full report (PDF)' : 'basic details',
       ].filter(Boolean).join(' · '),
     })),
   });
@@ -177,9 +188,34 @@ async function myVehicles(mobile) {
   if (!out.ok) {
     await send.text(mobile,
       'Your vehicles:\n\n'
-      + shown.map((r) => `• *${r.reg_no}* — ${r.has_report ? 'full report ready' : 'basic only'}`).join('\n')
+      + shown.map((r) => `• *${r.reg_no}* — ${r.has_report ? 'full report (PDF)' : 'basic details'}`).join('\n')
       + '\n\nSend me the number of the one you want.');
   }
+}
+
+/**
+ * Open one of their vehicles: remember it as the one in hand, then send what
+ * they have for it. The same path whether it was picked from the list or was
+ * the only one there was.
+ *
+ * A paid report still inside its download window is sent as the PDF they
+ * bought — no lookup, no check spent. Anything else gets the basic details as
+ * a message, never a PDF (user, 2026-09-25): the PDF is what ₹19 buys.
+ */
+async function openVehicle(mobile, reg, message, why) {
+  const user = await store.upsertUser(mobile);
+  const bought = await reports.validFor(user.id, reg);
+  if (bought) {
+    await sendValidReport(mobile, bought);
+    return;
+  }
+
+  await db.query(
+    `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now()
+      WHERE mobile = $1`, [mobile, JSON.stringify({ pending_reg: reg })]);
+  await setState(mobile, 'owner_lookup', why);
+  await send.text(mobile, `Checking *${reg}* … ⏳`);
+  await deliverReport(mobile, reg, message);
 }
 
 async function mainMenu(mobile, body = 'What would you like to do?') {
@@ -479,56 +515,6 @@ async function askToConfirm(mobile, parsed) {
 }
 
 /**
- * Offer the vehicles this person has already checked, as a list.
- *
- * WHY: someone eight vehicles into a trial should not be retyping plates off a
- * registration book on a phone keyboard. The list costs no lookup — every plate
- * and every expiry date shown is already in our database — and the description
- * line carries the reason to tap, which a bare list of numbers does not.
- *
- * Returns false when there is nothing worth showing, so the caller can fall
- * back to asking them to type.
- */
-async function offerKnownVehicles(mobile, userId, { body, button } = {}) {
-  const known = await store.checkedBy(userId, 9);
-  if (known.length < 2) return false;
-
-  const rows = known.map(v => {
-    const docs = report.documentsOf({
-      insurance_upto: v.insurance_upto, pucc_upto: v.pucc_upto,
-      fitness_upto: v.fitness_upto, tax_upto: v.tax_upto, permit_upto: v.permit_upto,
-      vehicle_class: v.vehicle_class,
-    });
-
-    // The most urgent thing about this vehicle: anything expired, else anything
-    // close, else simply whatever runs out next. A manufacturer's name tells
-    // someone nothing they do not already know about their own vehicle.
-    const expired = docs.filter(d => d.days < 0).sort((a, b) => a.days - b.days)[0];
-    const soon = docs.filter(d => d.days >= 0 && d.days <= 30).sort((a, b) => a.days - b.days)[0];
-    const next = docs.filter(d => d.days > 30).sort((a, b) => a.days - b.days)[0];
-
-    const status = expired ? `${expired.label} expired ${report.human(expired.days)}`
-      : soon ? `${soon.label} expires ${report.human(soon.days)}`
-      : next ? `${next.label} valid ${report.human(next.days).replace('in ', 'for ')}`
-      : 'Tap to check';
-    return {
-      id: `veh:${v.reg_no}`,
-      title: v.reg_no,
-      description: v.watched ? `Watching · ${status}` : status,
-    };
-  });
-
-  await send.list(mobile, {
-    body: body || 'Which vehicle would you like to check?',
-    button: button || 'Choose vehicle',
-    sectionTitle: 'Recently checked',
-    rows,
-    footer: 'Or just send a different vehicle number.',
-  });
-  return true;
-}
-
-/**
  * "Which of these should I keep an eye on?"
  *
  * Checking is casual and high-volume — someone at a dealer's yard runs through
@@ -811,9 +797,13 @@ async function deliverReport(mobile, regNo, message) {
       WHERE mobile = $1`, [mobile, JSON.stringify({ pending_reg: regNo })]);
 
   // Someone who has already bought the report for this vehicle sees the full
-  // detail again while it is valid; everyone else sees the basic record.
+  // detail again while it is valid; everyone else sees what the vehicle is and
+  // how many things need attention — not which.
   const bought = await reports.validFor(user.id, regNo);
-  await send.text(mobile, await report.buildFor(data, { detailed: Boolean(bought) }));
+  const plan = bought ? null : await billing.reportPlan();
+  await send.text(mobile, bought
+    ? await report.buildFor(data, { detailed: true })
+    : report.basic(data, plan ? { price: `₹${Math.round(plan.price_paise / 100)}` } : {}));
   await setState(mobile, 'owner_menu', 'basic details sent');
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
   await reportMenu(mobile, regNo, data, bought);
@@ -832,10 +822,15 @@ function lockedLines(data) {
   const c = data.challans || {};
   const present = (v) => v && !/^(NA|N\/A|NONE|NULL|-|—)$/i.test(String(v).trim());
 
-  const lines = [
+  const lines = [];
+  // The count itself is in the report, not here (user, 2026-09-25). Only
+  // offered when the record has it — the PDF prints "—" otherwise, and a
+  // promise the report cannot keep is worse than no line.
+  if (Number(rc.owner_serial) > 0) lines.push('• Number of owners — *on record*');
+  lines.push(
     `• Loan / hypothecation — ${present(rc.financer) ? '*record found*' : 'checked'}`,
     `• Blacklist & NOC — ${present(rc.blacklist_status) || present(rc.noc_details) ? '*record found*' : 'checked'}`,
-  ];
+  );
   if ((c.pending_count || 0) > 0) {
     lines.push(`• Challan numbers & offences — *${c.pending_count} pending*`);
   } else {
@@ -1041,13 +1036,7 @@ async function handle(session, message, mobile) {
     }
 
     if (String(intent.id || '').startsWith('veh:')) {
-      const reg = intent.id.slice(4);
-      await db.query(
-        `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now()
-          WHERE mobile = $1`, [mobile, JSON.stringify({ pending_reg: reg })]);
-      await setState(mobile, 'owner_lookup', 'chosen from list');
-      await send.text(mobile, `Checking *${reg}* … ⏳`);
-      await deliverReport(mobile, reg, message);
+      await openVehicle(mobile, intent.id.slice(4), message, 'chosen from list');
       return;
     }
 
@@ -1149,16 +1138,13 @@ async function handle(session, message, mobile) {
         return;
       }
 
-      case BTN.CHECK_ANOTHER: {
+      // "Check vehicle" means a number they have not given yet (user,
+      // 2026-09-25). The vehicles they already have live behind "My vehicle
+      // reports"; offering them here answered a question nobody asked.
+      case BTN.CHECK_ANOTHER:
         await setState(mobile, 'owner_start', 'checking another');
-        const user = await store.upsertUser(mobile);
-        const offered = await offerKnownVehicles(mobile, user.id, {
-          body: 'Which vehicle would you like to check?',
-          button: 'Choose vehicle',
-        });
-        if (!offered) await send.text(mobile, 'Sure — send me the next vehicle number.');
+        await send.text(mobile, 'Send me the vehicle number — like *KA31N8147*.');
         return;
-      }
 
       /**
        * The order summary — everything they are agreeing to, before any
@@ -1445,7 +1431,7 @@ async function handle(session, message, mobile) {
       }
 
       case BTN.MY_REPORTS:
-        await myVehicles(mobile);
+        await myVehicles(mobile, message);
         return;
 
       case BTN.SUPPORT:
