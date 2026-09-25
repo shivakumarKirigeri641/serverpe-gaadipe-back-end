@@ -356,6 +356,37 @@ router.delete('/notes/:id', needs('tasks.manage'), safe(async (req, res) => {
 /* Who may do what — read-only, from the same table the server enforces. */
 router.get('/permissions', needs('audit.view'), safe(async (_req, res) => res.json({ roles: auth.ROLES })));
 
+/* --------------------------- search, live activity, notifications, exports */
+
+/* Operations module phase 7 (user, 2026-09-25). */
+router.get('/search', needs('dashboard.view'), safe(async (req, res) => res.json(await require('../admin/search').search(req.query.q, { limit: req.query.limit }))));
+router.get('/activity/stream', needs('dashboard.view'), safe(async (req, res) => res.json(await require('../admin/activity').stream({ since: req.query.since }))));
+router.get('/notifications', safe(async (req, res) => res.json(await require('../admin/activity').notifications(req.admin))));
+router.post('/notifications/read', safe(async (req, res) => res.json(await require('../admin/activity').markRead(req.admin))));
+
+const exportCenter = require('../admin/exportCenter');
+router.get('/exports', needs('dashboard.view'), safe(async (req, res) => res.json(await exportCenter.list(req.query))));
+router.post('/exports', safe(async (req, res) => {
+  const out = await exportCenter.create({ dataset: req.body?.dataset, filters: req.body?.filters || {}, admin: req.admin,
+                                          can: (c) => auth.can(req.admin.role, c) });
+  if (out.ok) {
+    await auth.audit({ adminId: req.admin.id, action: 'export_created', ip: ipOf(req),
+                       detail: { export_id: out.id, dataset: req.body?.dataset, filters: req.body?.filters || {}, rows: out.rows } });
+  }
+  res.status(out.ok ? 200 : out.status || 400).json(out);
+}));
+router.get('/exports/:id/file', safe(async (req, res) => {
+  const f = await exportCenter.file(req.params.id);
+  if (!f) return res.status(404).json({ error: 'expired', message: 'That export has expired or does not exist.' });
+  const need = exportCenter.DATASETS[f.dataset]?.[1];
+  if (need && !auth.can(req.admin.role, need)) return res.status(403).json({ error: 'not_allowed', message: 'Your account may not download this export.' });
+  await auth.audit({ adminId: req.admin.id, action: 'export_downloaded', ip: ipOf(req), detail: { export_id: String(f.id), dataset: f.dataset } });
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="' + String(f.file_name).replace(/[^\w.-]/g, '_') + '"');
+  res.send(f.content);
+}));
+
+router.get('/reports/delivery', needs('dashboard.view'), safe(async (req, res) => res.json(await require('../admin/delivery').status(periodOf(req.query)))));
 /* WhatsApp and vehicle lookups (phase 4): src/admin/whatsappStats.js and
    src/admin/lookups.js, for the same periods as the command center. */
 router.get('/whatsapp/stats', safe(async (req, res) => res.json(
@@ -432,6 +463,8 @@ router.get('/export/ledger.csv', needs('finance.export'), safe(async (req, res) 
   await auth.audit({ adminId: req.admin.id, action: 'export_ledger', ip: ipOf(req),
                      detail: { range: out.range, filter: periodOf(req.query), rows: out.rows } });
   const stamp = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  await require('../admin/exportCenter').record({ adminId: req.admin.id, dataset: 'revenue', filters: periodOf(req.query), csv: out.csv, rows: out.rows,
+    masked: !auth.can(req.admin.role, 'pii'), fileName: 'gaadipe-ledger-' + stamp + '.csv' }).catch(() => {});
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="gaadipe-ledger-' + stamp + '.csv"');
   res.send('﻿' + out.csv);
@@ -446,6 +479,8 @@ router.get('/export/vehicles.csv', needs('vehicles.export'), safe(async (req, re
                                selected: req.query.ids ? String(req.query.ids).split(',').length : null,
                                sensitive: 'none (customer numbers masked)' } });
   const stamp = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  await require('../admin/exportCenter').record({ adminId: req.admin.id, dataset: 'vehicles', filters: filter, csv: out.csv, rows: out.rows,
+    masked: true, fileName: 'gaadipe-vehicles-' + stamp + '.csv' }).catch(() => {});
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="gaadipe-vehicles-' + stamp + '.csv"');
   res.send('﻿' + out.csv);   // BOM, so Excel reads ₹ correctly
@@ -459,6 +494,9 @@ router.get('/export/:kind', safe(async (req, res) => {
                      detail: { kind, from: req.query.from || null, to: req.query.to || null, rows: out.rows } });
   const stamp = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  await require('../admin/exportCenter').record({ adminId: req.admin.id, dataset: kind === 'api' ? 'api_logs' : kind,
+    filters: { from: req.query.from || null, to: req.query.to || null }, csv: out.csv, rows: out.rows,
+    masked: !auth.can(req.admin.role, 'pii'), fileName: `gaadipe-${kind}-${stamp}.csv` }).catch(() => {});
   res.setHeader('Content-Disposition', `attachment; filename="gaadipe-${kind}-${stamp}.csv"`);
   res.send(`﻿${out.csv}`);   // BOM, so Excel reads ₹ and names correctly
 }));
