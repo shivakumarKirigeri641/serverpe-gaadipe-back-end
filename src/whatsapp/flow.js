@@ -134,7 +134,8 @@ async function sendSupportLink(mobile) {
  * ONE VEHICLE IS NOT A CHOICE (user, 2026-09-25). Most owners have checked
  * exactly one plate — their own — and a dropdown with a single row is a tap
  * that asks nothing. So one vehicle goes straight to its report, basic or
- * paid, exactly as if they had picked it from the list.
+ * paid, exactly as if they had picked it from the list. What each sends is
+ * openVehicle()'s decision: the PDF if bought, the basic details if not.
  */
 async function myVehicles(mobile, message) {
   const user = await store.upsertUser(mobile);
@@ -177,7 +178,7 @@ async function myVehicles(mobile, message) {
       title: r.reg_no,
       description: [
         [r.maker, r.model].filter(Boolean).join(' ').slice(0, 30),
-        r.has_report ? 'full report ready' : 'basic only',
+        r.has_report ? 'full report (PDF)' : 'basic details',
       ].filter(Boolean).join(' · '),
     })),
   });
@@ -187,17 +188,28 @@ async function myVehicles(mobile, message) {
   if (!out.ok) {
     await send.text(mobile,
       'Your vehicles:\n\n'
-      + shown.map((r) => `• *${r.reg_no}* — ${r.has_report ? 'full report ready' : 'basic only'}`).join('\n')
+      + shown.map((r) => `• *${r.reg_no}* — ${r.has_report ? 'full report (PDF)' : 'basic details'}`).join('\n')
       + '\n\nSend me the number of the one you want.');
   }
 }
 
 /**
- * Open one of their vehicles: remember it as the one in hand, then fetch and
- * send its report. The same path whether it was picked from the list or was
+ * Open one of their vehicles: remember it as the one in hand, then send what
+ * they have for it. The same path whether it was picked from the list or was
  * the only one there was.
+ *
+ * A paid report still inside its download window is sent as the PDF they
+ * bought — no lookup, no check spent. Anything else gets the basic details as
+ * a message, never a PDF (user, 2026-09-25): the PDF is what ₹19 buys.
  */
 async function openVehicle(mobile, reg, message, why) {
+  const user = await store.upsertUser(mobile);
+  const bought = await reports.validFor(user.id, reg);
+  if (bought) {
+    await sendValidReport(mobile, bought);
+    return;
+  }
+
   await db.query(
     `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now()
       WHERE mobile = $1`, [mobile, JSON.stringify({ pending_reg: reg })]);
