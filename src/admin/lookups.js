@@ -91,9 +91,10 @@ async function list(q = {}) {
             coalesce(e.mobile, u.mobile) AS mobile, coalesce(u.display_name, u.wa_profile_name) AS person_name,
             v.maker, v.model, v.fuel, v.vehicle_class, ${STATE} AS state, ${RTO} AS rto,
             EXISTS (SELECT 1 FROM vehicle_reports vr WHERE vr.reg_no = e.reg_no AND vr.user_id = u.id) AS has_report,
-            (SELECT p.status FROM payments p WHERE p.user_id = u.id AND p.raw->>'reg_no' = e.reg_no
+            -- A payment names its vehicle by id (raw.vehicle_id), not by number.
+            (SELECT p.status FROM payments p WHERE p.user_id = u.id AND (p.raw->>'vehicle_id')::bigint = v.id
               ORDER BY p.id DESC LIMIT 1) AS payment_status,
-            (SELECT p.amount_paise FROM payments p WHERE p.user_id = u.id AND p.raw->>'reg_no' = e.reg_no
+            (SELECT p.amount_paise FROM payments p WHERE p.user_id = u.id AND (p.raw->>'vehicle_id')::bigint = v.id
                AND p.status = 'paid' ORDER BY p.id DESC LIMIT 1) AS paid_paise,
             count(*) OVER () AS total
        FROM events e

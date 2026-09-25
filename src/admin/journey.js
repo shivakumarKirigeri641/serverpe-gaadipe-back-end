@@ -176,7 +176,7 @@ const EXPORTS = {
                      u.created_at AS first_seen, u.last_seen_at AS last_active,
                      (SELECT count(*) FROM user_vehicles uv WHERE uv.user_id = u.id) AS vehicles,
                      (SELECT count(*) FROM vehicle_reports r WHERE r.user_id = u.id) AS reports,
-                     (SELECT coalesce(sum(amount_paise), 0) FROM payments p WHERE p.user_id = u.id AND p.status = 'paid') / 100.0 AS spent_rupees,
+                     round((SELECT coalesce(sum(amount_paise), 0) FROM payments p WHERE p.user_id = u.id AND p.status = 'paid') / 100.0, 2) AS spent_rupees,
                      (SELECT count(*) FROM whatsapp_messages w WHERE w.mobile = u.mobile) AS whatsapp_messages,
                      coalesce((SELECT v.first_touch->>'source' FROM visitors v WHERE v.mobile = u.mobile ORDER BY v.first_seen_at LIMIT 1),
                               (SELECT s.attribution->>'channel' FROM whatsapp_sessions s WHERE s.mobile = u.mobile)) AS first_source
@@ -184,9 +184,10 @@ const EXPORTS = {
   events: `SELECT id, occurred_at, name, channel, mobile, user_id, visitor_id, session_id, reg_no, payment_id,
                   source, campaign, page, status, error_code, duration_ms, amount_paise
              FROM events WHERE occurred_at >= $1 AND occurred_at < $2 ORDER BY occurred_at`,
-  payments: `SELECT p.id, p.created_at, p.paid_at, p.status, p.amount_paise / 100.0 AS amount_rupees, u.mobile,
-                    p.raw->>'reg_no' AS reg_no, p.order_id, p.payment_id AS razorpay_payment_id, p.gateway
+  payments: `SELECT p.id, p.created_at, p.paid_at, p.status, round(p.amount_paise / 100.0, 2) AS amount_rupees, u.mobile,
+                    v.reg_no, p.order_id, p.payment_id AS razorpay_payment_id, p.gateway
                FROM payments p LEFT JOIN users u ON u.id = p.user_id
+               LEFT JOIN vehicles v ON v.id = (p.raw->>'vehicle_id')::bigint
               WHERE p.created_at >= $1 AND p.created_at < $2 ORDER BY p.created_at`,
   searches: `SELECT e.occurred_at, e.name AS result, coalesce(e.mobile, u.mobile) AS mobile, e.reg_no,
                     v.maker, v.model, v.fuel, v.vehicle_class, e.error_code

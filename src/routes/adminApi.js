@@ -144,6 +144,27 @@ router.get('/lookups', safe(async (req, res) => res.json(await require('../admin
   limit: Number(req.query.limit) || 50, offset: Number(req.query.offset) || 0,
 }))));
 
+/* Payments and the records API (phase 5): src/admin/payments.js and
+   src/admin/apiMonitor.js. Payments are money, so they need 'money' — the
+   same rule as Revenue & GST. */
+router.get('/payments/summary', needs('money'), safe(async (req, res) => res.json(
+  await require('../admin/payments').summary({ ...periodOf(req.query), grain: req.query.grain }))));
+router.get('/payments', needs('money'), safe(async (req, res) => res.json(await require('../admin/payments').list({
+  ...periodOf(req.query), status: req.query.status || null, q: req.query.q || '',
+  limit: Number(req.query.limit) || 25, offset: Number(req.query.offset) || 0,
+}))));
+router.get('/payments/:id', needs('money'), safe(async (req, res) => {
+  const out = await require('../admin/payments').detail(req.params.id);
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'No such payment.' });
+  res.json(out);
+}));
+router.get('/api-monitor', safe(async (req, res) => res.json(
+  await require('../admin/apiMonitor').summary(periodOf(req.query)))));
+router.get('/api-monitor/log', safe(async (req, res) => res.json(await require('../admin/apiMonitor').log({
+  ...periodOf(req.query), dataset: req.query.dataset || '', result: req.query.result || null, q: req.query.q || '',
+  limit: Number(req.query.limit) || 50, offset: Number(req.query.offset) || 0,
+}))));
+
 /* One person, start to finish, and the CSV exports (phase 3,
    src/admin/journey.js). Both show personal data, so both are audited. */
 const journeys = require('../admin/journey');

@@ -199,12 +199,16 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
   // For the command center (user, 2026-09-25). Same key as the backfill, so a
   // payment confirmed twice — callback and webhook — is one event.
   if (result.activated) {
+    // The vehicle is named by id on a payment; the method (upi, card…) only
+    // arrives with Razorpay's payment entity, so it is kept here.
+    const veh = result.vehicleId
+      ? await db.one(`SELECT reg_no FROM vehicles WHERE id = $1`, [result.vehicleId]).catch(() => null) : null;
     require('../events/track').fire({
       key: `pay_ok:${result.payment.id}`, name: 'payment_success', channel: 'system',
       userId: result.payment.user_id, paymentId: result.payment.id,
-      amountPaise: result.payment.amount_paise, status: 'ok',
-      regNo: result.payment.reg_no || result.payment.raw?.reg_no || null,
-      meta: { razorpay_payment_id: razorpayPaymentId, order_id: orderId, plan: result.plan?.code || null },
+      amountPaise: result.payment.amount_paise, status: 'ok', regNo: veh?.reg_no || null,
+      meta: { razorpay_payment_id: razorpayPaymentId, order_id: orderId, plan: result.plan?.code || null,
+              method: raw?.method || null, bank: raw?.bank || null, wallet: raw?.wallet || null },
     });
   }
 
