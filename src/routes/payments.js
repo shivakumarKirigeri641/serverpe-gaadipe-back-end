@@ -336,6 +336,13 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
     await send.text(pay.mobile,
       `📋 Your report ${doc.report_number} could not be attached. Download it here until ${until}:${link}`);
   }
+  // Once per report: re-sending it later (My reports) is not a new delivery.
+  require('../events/track').fire({
+    key: `delivered:${doc.id}`, name: 'report_delivered', channel: 'whatsapp',
+    userId: pay.user_id, mobile: pay.mobile, regNo: pay.reg_no, paymentId: pay.id,
+    status: sent.ok ? 'ok' : (link ? 'link_only' : 'failed'),
+    meta: { report_number: doc.report_number, via: sent.ok ? 'pdf' : 'link' },
+  });
   return { ok: true, report: doc };
 }
 

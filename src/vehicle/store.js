@@ -198,11 +198,12 @@ async function recordCalls(userId, vehicleId, data) {
   // A cache hit is recorded too. Without it the hit-rate is invisible, and the
   // hit-rate is the entire defence against a per-call price.
   if (!calls.length) {
-    await db.query(
+    const hit = await db.one(
       `INSERT INTO api_calls (user_id, vehicle_id, reg_no, dataset, cache_hit, ok, outcome, cost_paise)
-            VALUES ($1, $2, $3, 'all', true, true, 'CACHED', $4)`,
+            VALUES ($1, $2, $3, 'all', true, true, 'CACHED', $4) RETURNING id, cost_paise`,
       [userId || null, vehicleId, data.vehicle_number,
        await settings.num('cache_hit_cost_paise', 0)]);
+    apiEvent(hit?.id, { userId, regNo: data.vehicle_number, ok: true, dataset: 'all', cacheHit: true, cost: hit?.cost_paise });
     return;
   }
 
@@ -211,15 +212,29 @@ async function recordCalls(userId, vehicleId, data) {
     const cost = COST_KEY[dataset]
       ? await settings.num(COST_KEY[dataset], 0)
       : 0;
-    await db.query(
+    const row = await db.one(
       `INSERT INTO api_calls
          (user_id, vehicle_id, reg_no, dataset, provider_path, cache_hit,
           ok, outcome, error_code, duration_ms, cost_paise)
-       VALUES ($1,$2,$3,$4,$5,false,$6,$7,$8,$9,$10)`,
+       VALUES ($1,$2,$3,$4,$5,false,$6,$7,$8,$9,$10) RETURNING id`,
       [userId || null, vehicleId, data.vehicle_number, dataset, c.path,
        c.outcome === 'FOUND', c.outcome || null,
        c.outcome === 'FOUND' ? null : String(c.code ?? ''), c.ms || null, cost]);
+    apiEvent(row?.id, { userId, regNo: data.vehicle_number, ok: c.outcome === 'FOUND', dataset,
+                        cacheHit: false, cost, ms: c.ms, code: c.outcome === 'FOUND' ? null : String(c.code ?? c.outcome ?? '') });
   }
+}
+
+/* Each Government-records call, into the command center's event stream
+   (user, 2026-09-25) — keyed by its api_calls row, like the backfill. */
+function apiEvent(id, { userId, regNo, ok, dataset, cacheHit, cost, ms, code }) {
+  if (!id) return;
+  require('../events/track').fire({
+    key: `api:${id}`, name: ok ? 'vehicle_api_success' : 'vehicle_api_failed', channel: 'system',
+    userId, regNo, status: ok ? 'ok' : 'failed', errorCode: code || null,
+    durationMs: Number.isFinite(ms) ? ms : undefined,
+    meta: { dataset, cache_hit: cacheHit, cost_paise: cost || 0 },
+  });
 }
 
 /** Store a whole gateway response: vehicle row, snapshots and the link. */

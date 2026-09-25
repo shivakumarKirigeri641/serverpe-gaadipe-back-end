@@ -196,6 +196,18 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
    * reversed payment is a disaster. onPaid() swallows its own errors for the
    * same reason.
    */
+  // For the command center (user, 2026-09-25). Same key as the backfill, so a
+  // payment confirmed twice — callback and webhook — is one event.
+  if (result.activated) {
+    require('../events/track').fire({
+      key: `pay_ok:${result.payment.id}`, name: 'payment_success', channel: 'system',
+      userId: result.payment.user_id, paymentId: result.payment.id,
+      amountPaise: result.payment.amount_paise, status: 'ok',
+      regNo: result.payment.reg_no || result.payment.raw?.reg_no || null,
+      meta: { razorpay_payment_id: razorpayPaymentId, order_id: orderId, plan: result.plan?.code || null },
+    });
+  }
+
   if (result.activated) {
     result.referral = await require('../referrals/gaadipe').onPaid({
       userId: result.payment.user_id,

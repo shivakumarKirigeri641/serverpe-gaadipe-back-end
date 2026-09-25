@@ -39,6 +39,7 @@
 
 const db = require('../db');
 const send = require('./send');
+const track = require('../events/track');
 const plate = require('../util/plate');
 const gateway = require('../vehicle/gateway');
 const store = require('../vehicle/store');
@@ -251,14 +252,37 @@ const INTRO =
  *
  * Never allowed to break the conversation it is measuring.
  */
+/* The bot's funnel steps, as the command center names them (migration 067). */
+const STEP_EVENT = {
+  hi: 'whatsapp_greeting',
+  agreed: 'terms_accepted',
+  number: 'whatsapp_vehicle_received',
+  basic_shown: 'vehicle_search_success',
+  lookup_failed: 'vehicle_search_failed',
+  buy_tapped: 'report_preview_viewed',
+  link_sent: 'payment_started',
+  opt_out: 'whatsapp_opt_out',
+  opt_in: 'whatsapp_opt_in',
+};
+
 async function funnel(mobile, step, detail = {}) {
   try {
     // The first steps happen before a users row exists, so mobile is what joins
     // the funnel together; user_id is filled in once there is one.
     const u = await db.one(`SELECT id FROM users WHERE mobile = $1`, [mobile]);
-    await db.query(
-      `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'funnel', $2)`,
+    const row = await db.one(
+      `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'funnel', $2) RETURNING id`,
       [u?.id || null, JSON.stringify({ step, mobile, ...detail })]);
+    // …and into the command center's stream, under its own name for the step
+    // (user, 2026-09-25). Keyed by this row, like migration 067's backfill.
+    require('../events/track').fire({
+      key: `funnel:${row.id}`, name: STEP_EVENT[step] || `whatsapp_${step}`, channel: 'whatsapp',
+      userId: u?.id || null, mobile, regNo: detail.reg_no || null,
+      paymentId: detail.payment_row || null,
+      status: step === 'lookup_failed' ? 'failed' : 'ok',
+      errorCode: step === 'lookup_failed' ? detail.reason || null : null,
+      meta: { step, ...detail },
+    });
   } catch (e) {
     console.error('[funnel] %s: %s', step, e.message);
   }
@@ -991,6 +1015,29 @@ async function sendReferral(mobile) {
 async function handle(session, message, mobile) {
   const intent = intentOf(message);
   const state = session.state || 'new';
+
+  /*
+   * FROM THE WEBSITE (user, 2026-09-25). Every WhatsApp link on gaadipe.in
+   * ends in the visitor's code — "Hi #K7Q2M" — because a wa.me link can carry
+   * nothing else. Read it here, tie this chat to that browser (source,
+   * campaign, pages seen), then take it out, so "Hi #K7Q2M" is handled
+   * exactly as "Hi".
+   */
+  const webCode = intent.kind === 'text' && track.CODE_RE.exec(intent.text || '');
+  if (webCode) {
+    const u = await db.one(`SELECT id FROM users WHERE mobile = $1`, [mobile]).catch(() => null);
+    const v = await track.linkByCode(webCode[1], { mobile, userId: u?.id });
+    if (v) {
+      track.fire({
+        key: `wa_link:${mobile}:${v.visitor_id}`, name: 'whatsapp_linked_to_web', channel: 'whatsapp',
+        visitorId: v.visitor_id, userId: u?.id || null, mobile,
+        source: v.last_touch?.source || v.first_touch?.source || null,
+        campaign: v.last_touch?.campaign || v.first_touch?.campaign || null,
+        meta: { code: webCode[1] },
+      });
+    }
+    intent.text = intent.text.replace(track.CODE_RE, '').replace(/\s+/g, ' ').trim() || 'Hi';
+  }
 
   /*
    * STOP AND START (user, 2026-09-25). The Terms say: reply STOP and we stop

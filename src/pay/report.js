@@ -102,6 +102,12 @@ async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data
     return rows[0];
   });
 
+  require('../events/track').fire({
+    key: `report:${row.id}`, name: 'report_generated', channel: 'system',
+    userId: row.user_id, regNo: row.reg_no, paymentId: row.payment_id,
+    meta: { report_number: row.report_number, channel: row.channel },
+  });
+
   const pdf = await buildVehicleReport({
     report: row,
     business,

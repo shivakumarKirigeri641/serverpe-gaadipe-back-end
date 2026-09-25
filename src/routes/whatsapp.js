@@ -33,6 +33,7 @@ const flow = require('../whatsapp/flow');
 const send = require('../whatsapp/send');
 const blocks = require('../admin/blocks');
 const customers = require('../vehicle/store');
+const track = require('../events/track');
 const db = require('../db');
 
 const router = express.Router();
@@ -103,6 +104,30 @@ async function handle(body) {
               `UPDATE whatsapp_sessions SET user_id = $2 WHERE mobile = $1 AND user_id IS DISTINCT FROM $2`,
               [rec.mobile, u.id]))
             .catch((e) => console.error('[wa] could not record customer %s: %s', rec.mobile, e.message));
+
+          // The command center's stream (user, 2026-09-25): every message in,
+          // and the first one per number as the start of the chat. Keyed by
+          // Meta's message id and the number, so a redelivered webhook is one.
+          const userId = (await db.one(`SELECT id FROM users WHERE mobile = $1`, [rec.mobile]).catch(() => null))?.id || null;
+          const at = m.timestamp ? new Date(Number(m.timestamp) * 1000) : null;
+          track.fire({ key: `wa_chat:${rec.mobile}`, name: 'whatsapp_chat_started', channel: 'whatsapp',
+                       at, userId, mobile: rec.mobile });
+          track.fire({ key: `wa_msg:${m.id}`, name: 'whatsapp_message_received', channel: 'whatsapp',
+                       at, userId, mobile: rec.mobile, meta: { type: m.type } });
+
+          // FROM A WHATSAPP AD (click-to-WhatsApp). Meta puts the ad on the
+          // first message of a chat it started; it was being thrown away. It
+          // becomes the chat's attribution unless the website got there first.
+          if (m.referral) {
+            const r = m.referral;
+            const ad = { channel: 'whatsapp_ad', source_type: r.source_type || null, source_id: r.source_id || null,
+                         source_url: r.source_url || null, headline: r.headline || null, ctwa_clid: r.ctwa_clid || null };
+            await db.query(
+              `UPDATE whatsapp_sessions SET attribution = $2::jsonb
+                WHERE mobile = $1 AND attribution = '{}'::jsonb`, [rec.mobile, JSON.stringify(ad)]).catch(() => {});
+            track.fire({ key: `wa_ad:${m.id}`, name: 'whatsapp_ad_clicked', channel: 'whatsapp', at, userId,
+                         mobile: rec.mobile, source: 'meta_ads', campaign: r.headline || r.source_id || null, meta: ad });
+          }
         }
         // Testing guard: a number outside WHATSAPP_ALLOWED_RECIPIENTS is recorded
         // above but never moved through the flow, so its session state stays

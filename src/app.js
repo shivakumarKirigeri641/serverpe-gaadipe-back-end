@@ -103,6 +103,8 @@ app.use('/serverpe/platform/gaadipe/v1/public/users', (req, res, next) => {
   next();
 });
 app.use('/serverpe/platform/gaadipe/v1/public/users', publicRoutes);
+// Website events for the command center: anonymous, narrow, rate-limited.
+app.use('/serverpe/platform/gaadipe/v1/public/users', require('./routes/track'));
 
 // Meta's webhook, on the same public prefix as the policies — the shape the
 // other ServerPe products already use. No API key: the caller is Meta, and it
