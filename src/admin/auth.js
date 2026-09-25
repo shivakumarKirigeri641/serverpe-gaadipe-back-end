@@ -34,16 +34,29 @@ const sha256 = (v) => crypto.createHash('sha256').update(String(v)).digest('hex'
  * check — "may this person refund?" survives a new role being added, where
  * "is this person finance?" does not.
  */
+const V_ALL = ['vehicles.view', 'vehicles.view_sensitive', 'vehicles.export', 'vehicles.refresh',
+               'vehicles.notes', 'vehicles.tags', 'vehicles.api_logs'];
 const ROLES = {
-  owner:      ['read', 'money', 'settings', 'block', 'lookup', 'admins', 'pii'],
-  admin:      ['read', 'money', 'settings', 'block', 'lookup', 'pii'],
+  owner:      ['read', 'money', 'settings', 'block', 'lookup', 'admins', 'pii', ...V_ALL],
+  admin:      ['read', 'money', 'settings', 'block', 'lookup', 'pii', ...V_ALL],
   // Command center phase 7 (user, 2026-09-25): the day-to-day running of the
   // service without the money, and helping customers without changing it.
-  operations: ['read', 'settings', 'block', 'lookup', 'pii'],
-  finance:    ['read', 'money'],
-  support:    ['read', 'lookup', 'pii'],
-  viewer:     ['read'],
+  operations: ['read', 'settings', 'block', 'lookup', 'pii', ...V_ALL],
+  finance:    ['read', 'money', 'vehicles.view', 'vehicles.export'],
+  support:    ['read', 'lookup', 'pii', 'vehicles.view', 'vehicles.view_sensitive', 'vehicles.notes', 'vehicles.tags'],
+  viewer:     ['read', 'vehicles.view'],
 };
+/*
+ * The Vehicles module (user, 2026-09-25) checks its own capabilities, route by
+ * route, on the server:
+ *   vehicles.view            the explorer and a vehicle's profile
+ *   vehicles.view_sensitive  reveal a customer's mobile, the owner's name and
+ *                            address on the RC — each reveal audited
+ *   vehicles.export          CSV of vehicle records
+ *   vehicles.refresh         a fresh records-API lookup (may cost money)
+ *   vehicles.notes / .tags   write notes, tags, lists, assignment
+ *   vehicles.api_logs        API history and the provider's stored response
+ */
 /*
  * 'pii' — may see customers' full mobile numbers. Without it, every mobile the
  * admin API returns is masked (98******15) by the server itself, in screens

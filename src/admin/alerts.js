@@ -202,7 +202,10 @@ async function badges() {
               WHERE direction = 'in' AND created_at > now() - interval '15 minutes')::int AS whatsapp_live,
             (SELECT count(*) FROM admin_alerts WHERE status = 'open')::int AS alerts_open,
             (SELECT count(*) FROM admin_alerts WHERE status = 'open' AND severity = 'critical')::int AS alerts_critical,
-            (SELECT count(*) FROM payments WHERE status = 'created' AND created_at > now() - interval '30 minutes')::int AS payments_pending`);
+            (SELECT count(*) FROM payments WHERE status = 'created' AND created_at > now() - interval '30 minutes')::int AS payments_pending,
+            -- The Vehicles menu item: today's vehicle lookups (IST day).
+            (SELECT count(*) FROM events WHERE name IN ('vehicle_search_success', 'vehicle_search_failed')
+                AND occurred_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS vehicles_today`);
 }
 
 module.exports = { check, list, ack, resolve, feed, badges, raise, clear };

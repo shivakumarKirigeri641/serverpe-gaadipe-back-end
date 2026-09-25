@@ -224,6 +224,20 @@ router.get('/journey', safe(async (req, res) => {
   }
   res.json(out);
 }));
+/* Vehicle records as CSV (the Vehicles module): the explorer's filters and the
+   fields chosen, logged with both. Customers' numbers are always masked here. */
+router.get('/export/vehicles.csv', needs('vehicles.export'), safe(async (req, res) => {
+  const out = await require('../admin/vehicles').exportCsv(req.query, req.admin);
+  const filter = Object.fromEntries(Object.entries(req.query).filter(([k, v]) => !['fields', 'ids'].includes(k) && v !== ''));
+  await auth.audit({ adminId: req.admin.id, action: 'vehicle_export', ip: ipOf(req),
+                     detail: { filter, rows: out.rows, fields: out.fields,
+                               selected: req.query.ids ? String(req.query.ids).split(',').length : null,
+                               sensitive: 'none (customer numbers masked)' } });
+  const stamp = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="gaadipe-vehicles-' + stamp + '.csv"');
+  res.send('﻿' + out.csv);   // BOM, so Excel reads ₹ correctly
+}));
 router.get('/export/:kind', safe(async (req, res) => {
   const kind = String(req.params.kind || '').replace(/\.csv$/, '');
   const out = await journeys.exportCsv(kind, { from: req.query.from, to: req.query.to,
@@ -423,65 +437,128 @@ router.get('/live/visitors/:id/trail', safe(async (req, res) => res.json({
 
 /* --------------------------------------------------------------- vehicles */
 
-router.get('/vehicles', safe(async (req, res) => {
-  const term = String(req.query.q || '').trim();
-  const p = term ? plate.normalize(term) : '';
-  const { rows } = await db.query(
-    `SELECT v.id, v.reg_no, v.maker, v.model, v.fuel, v.vehicle_class, v.rc_status,
-            v.insurance_upto, v.pucc_upto, v.fitness_upto, v.tax_upto, v.permit_upto,
-            v.financer, v.blacklist_status, v.last_seen_at,
-            (SELECT count(*) FROM user_vehicles uv WHERE uv.vehicle_id = v.id) AS checked_by,
-            (SELECT count(*) FROM watches w WHERE w.vehicle_id = v.id AND w.is_active) AS watchers,
-            EXISTS (SELECT 1 FROM blocks b WHERE b.kind = 'vehicle'
-                      AND b.value = v.reg_no AND b.released_at IS NULL) AS blocked,
-            count(*) OVER () AS total_rows
-       FROM vehicles v
-      WHERE ($1 = '' OR v.reg_no LIKE '%' || $1 || '%')
-      ORDER BY v.last_seen_at DESC NULLS LAST
-      LIMIT $2 OFFSET $3`,
-    [p, Math.min(200, Number(req.query.limit) || 50), Number(req.query.offset) || 0]);
-  res.json({
-    total: rows[0] ? Number(rows[0].total_rows) : 0,
-    rows: rows.map(({ total_rows, ...r }) => ({ ...r, id: String(r.id),
-      checked_by: Number(r.checked_by), watchers: Number(r.watchers) })),
-  });
-}));
+/*
+ * The Vehicles module (user, 2026-09-25): src/admin/vehicles.js reads,
+ * src/admin/vehicleOps.js writes. Every route checks its own capability here,
+ * on the server — hiding a menu item protects nothing. Reading a vehicle,
+ * revealing a number, reading a provider response, refreshing, exporting and
+ * every write are audited with the vehicle's number in the detail.
+ */
+const vehicleDesk = require('../admin/vehicles');
+const vehicleOps = require('../admin/vehicleOps');
+const vehicleIdsOf = (b) => (Array.isArray(b?.vehicle_ids) ? b.vehicle_ids : []);
+const sendOut = (res, out) => res.status(out.ok ? 200 : 400).json(out);
 
-router.get('/vehicles/:regNo', safe(async (req, res) => {
-  const { regNo, ok } = plate.parse(req.params.regNo);
-  if (!ok) return res.status(400).json({ error: 'bad_plate', message: 'That is not a vehicle number.' });
+router.get('/vehicles', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleDesk.list(req.query, req.admin))));
+router.get('/vehicles/stats', needs('vehicles.view'), safe(async (_req, res) => res.json(await vehicleDesk.stats())));
+router.get('/vehicles/quick', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleDesk.quick(req.query.q))));
+router.get('/vehicles/meta', needs('vehicles.view'), safe(async (_req, res) => res.json({
+  ...(await vehicleOps.meta()), export_fields: vehicleDesk.EXPORT_FIELDS, views: Object.keys(vehicleDesk.VIEWS) })));
+router.get('/vehicles/intel', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleOps.intel(req.query))));
+router.get('/vehicles/signals', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleOps.signals(req.query))));
+router.get('/vehicles/live', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleOps.live({ since: req.query.since }))));
+router.get('/vehicles/api-logs', needs('vehicles.api_logs'), safe(async (req, res) => res.json(await vehicleOps.apiLogs(req.query))));
 
-  const vehicle = await db.one(`SELECT * FROM vehicles WHERE reg_no = $1`, [regNo]);
-  if (!vehicle) return res.status(404).json({ error: 'not_found', message: 'Not checked here yet.' });
+// Preferences: the explorer's columns and saved filters, per admin.
+router.get('/prefs/:key', safe(async (req, res) => res.json(await vehicleOps.getPref(req.admin, req.params.key))));
+router.put('/prefs/:key', safe(async (req, res) => sendOut(res, await vehicleOps.setPref(req.admin, req.params.key, req.body?.value))));
 
-  const [snapshots, watchers, reports, checks] = await Promise.all([
-    db.query(`SELECT dataset, data, source, fetched_at, expires_at
-                FROM vehicle_snapshots WHERE vehicle_id = $1`, [vehicle.id]),
-    db.query(`SELECT uv.user_id, u.mobile, u.wa_profile_name AS name, uv.relation,
-                     uv.check_count, uv.last_checked_at,
-                     EXISTS (SELECT 1 FROM watches w WHERE w.user_id = uv.user_id
-                               AND w.vehicle_id = uv.vehicle_id AND w.is_active) AS watching
-                FROM user_vehicles uv JOIN users u ON u.id = uv.user_id
-               WHERE uv.vehicle_id = $1 ORDER BY uv.last_checked_at DESC`, [vehicle.id]),
-    db.query(`SELECT id, report_number, created_at, valid_until, user_id
-                FROM vehicle_reports WHERE reg_no = $1 ORDER BY id DESC`, [regNo]),
-    db.query(`SELECT dataset, provider_path, cache_hit, outcome, duration_ms, created_at
-                FROM api_calls WHERE reg_no = $1 ORDER BY id DESC LIMIT 50`, [regNo]),
-  ]);
+// Saved lists.
+router.get('/vehicle-lists', needs('vehicles.view'), safe(async (_req, res) => res.json(await vehicleOps.lists())));
+router.post('/vehicle-lists', needs('vehicles.tags'), safe(async (req, res) => sendOut(res,
+  await vehicleOps.saveList({ name: req.body?.name, notes: req.body?.notes, admin: req.admin, ip: ipOf(req) }))));
+router.put('/vehicle-lists/:id', needs('vehicles.tags'), safe(async (req, res) => sendOut(res,
+  await vehicleOps.saveList({ id: req.params.id, name: req.body?.name, notes: req.body?.notes, admin: req.admin, ip: ipOf(req) }))));
+router.delete('/vehicle-lists/:id', needs('vehicles.tags'), safe(async (req, res) => sendOut(res,
+  await vehicleOps.deleteList({ id: req.params.id, admin: req.admin, ip: ipOf(req) }))));
+router.post('/vehicle-lists/:id/items', needs('vehicles.tags'), safe(async (req, res) => sendOut(res,
+  await vehicleOps.listItems({ listId: req.params.id, vehicleIds: vehicleIdsOf(req.body), action: req.body?.action,
+                               note: req.body?.note, admin: req.admin, ip: ipOf(req) }))));
 
+// Bulk actions over selected vehicles (ids).
+router.post('/vehicles/bulk/tags', needs('vehicles.tags'), safe(async (req, res) => sendOut(res,
+  await vehicleOps.setTags({ vehicleIds: vehicleIdsOf(req.body), add: req.body?.add, remove: req.body?.remove, admin: req.admin, ip: ipOf(req) }))));
+router.post('/vehicles/bulk/assign', needs('vehicles.tags'), safe(async (req, res) => sendOut(res,
+  await vehicleOps.assign({ vehicleIds: vehicleIdsOf(req.body), adminId: req.body?.admin_id, admin: req.admin, ip: ipOf(req) }))));
+router.post('/vehicles/bulk/archive', needs('vehicles.tags'), safe(async (req, res) => sendOut(res,
+  await vehicleOps.archive({ vehicleIds: vehicleIdsOf(req.body), archived: req.body?.archived !== false, admin: req.admin, ip: ipOf(req) }))));
+
+// Notes: added, edited (the old text kept), withdrawn — never deleted.
+router.post('/vehicles/:reg/notes', needs('vehicles.notes'), safe(async (req, res) => sendOut(res,
+  await vehicleOps.addNote({ reg: req.params.reg, body: req.body?.body, admin: req.admin, ip: ipOf(req) }))));
+router.put('/vehicle-notes/:id', needs('vehicles.notes'), safe(async (req, res) => sendOut(res,
+  await vehicleOps.editNote({ noteId: req.params.id, body: req.body?.body, admin: req.admin, ip: ipOf(req) }))));
+router.delete('/vehicle-notes/:id', needs('vehicles.notes'), safe(async (req, res) => sendOut(res,
+  await vehicleOps.withdrawNote({ noteId: req.params.id, admin: req.admin, ip: ipOf(req) }))));
+router.get('/vehicle-notes/:id/versions', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleOps.noteVersions(req.params.id))));
+
+// One vehicle, whole.
+router.get('/vehicles/:reg', needs('vehicles.view'), safe(async (req, res) => {
+  const out = await vehicleDesk.profile(req.params.reg, {
+    admin: req.admin, canSensitive: auth.can(req.admin.role, 'vehicles.view_sensitive'),
+    canApi: auth.can(req.admin.role, 'vehicles.api_logs') });
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'GaadiPe has not seen this vehicle.' });
   if (!refreshing(req)) {
     await auth.audit({ adminId: req.admin.id, action: 'view_vehicle', ip: ipOf(req),
-                       detail: { reg_no: regNo } });
+                       detail: { reg_no: out.vehicle.reg_no, vehicle_id: out.vehicle.id, result: 'ok' } });
   }
+  res.json(out);
+}));
 
-  res.json({
-    vehicle: { ...vehicle, id: String(vehicle.id) },
-    snapshots: Object.fromEntries(snapshots.rows.map(s => [s.dataset, s])),
-    watchers: watchers.rows.map(w => ({ ...w, user_id: String(w.user_id) })),
-    reports: reports.rows.map(r => ({ ...r, id: String(r.id), user_id: String(r.user_id) })),
-    calls: checks.rows,
-    blocked: await blocks.isBlocked('vehicle', regNo),
-  });
+router.post('/vehicles/:reg/reveal', needs('vehicles.view_sensitive'), safe(async (req, res) => {
+  const what = req.body?.what === 'owner' ? 'owner' : 'customer';
+  const out = await vehicleDesk.reveal(req.params.reg, { ref: req.body?.ref, what });
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'No such vehicle.' });
+  const found = what === 'owner' ? Boolean(out.owner_name || out.address) : Boolean(out.mobile);
+  await auth.audit({ adminId: req.admin.id, action: what === 'owner' ? 'reveal_rc_owner' : 'reveal_phone', ip: ipOf(req),
+                     detail: { reg_no: out.vehicle.reg_no, vehicle_id: String(out.vehicle.id), ref: req.body?.ref || null,
+                               user_id: out.user_id || null, result: found ? 'shown' : 'not_found' } });
+  if (!found) return res.status(404).json({ error: 'not_found', message: 'Nothing to reveal for that.' });
+  res.json(what === 'owner' ? { owner_name: out.owner_name, address: out.address } : { mobile: out.mobile, user_id: out.user_id });
+}));
+
+router.get('/vehicles/:reg/raw/:dataset', needs('vehicles.api_logs'), safe(async (req, res) => {
+  const out = await vehicleDesk.rawResponse(req.params.reg, req.params.dataset,
+    { canSensitive: auth.can(req.admin.role, 'vehicles.view_sensitive') });
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'No such vehicle or dataset.' });
+  await auth.audit({ adminId: req.admin.id, action: 'view_api_response', ip: ipOf(req),
+                     detail: { reg_no: out.vehicle.reg_no, vehicle_id: String(out.vehicle.id), dataset: req.params.dataset,
+                               result: out.found ? 'shown' : 'none_stored' } });
+  const { vehicle: _vehicle, ...rest } = out;
+  res.json(rest);
+}));
+
+router.post('/vehicles/:reg/tags', needs('vehicles.tags'), safe(async (req, res) => {
+  const v = await vehicleDesk.find(req.params.reg);
+  if (!v) return res.status(404).json({ error: 'not_found', message: 'No such vehicle.' });
+  sendOut(res, await vehicleOps.setTags({ vehicleIds: [v.id], add: req.body?.add, remove: req.body?.remove, admin: req.admin, ip: ipOf(req) }));
+}));
+
+/*
+ * A fresh records-API lookup. It may cost money, so the panel shows the cost
+ * first and sends confirm; a vehicle looked up in the last ten minutes also
+ * needs force, so a double click never spends twice.
+ */
+router.post('/vehicles/:reg/refresh', needs('vehicles.refresh'), safe(async (req, res) => {
+  const v = await vehicleDesk.find(req.params.reg);
+  if (!v) return res.status(404).json({ error: 'not_found', message: 'No such vehicle.' });
+  if (req.body?.confirm !== true) return res.status(400).json({ error: 'confirm', message: 'Confirm the refresh first.' });
+  const last = await db.one('SELECT created_at FROM api_calls WHERE reg_no = $1 AND NOT cache_hit ORDER BY id DESC LIMIT 1', [v.reg_no]);
+  const mins = last ? (Date.now() - new Date(last.created_at)) / 60000 : null;
+  if (mins != null && mins < 10 && req.body?.force !== true) {
+    return res.status(409).json({ error: 'recent', minutes: Math.floor(mins),
+      message: 'This vehicle was looked up ' + Math.floor(mins) + ' minute(s) ago. Refresh again anyway?' });
+  }
+  let result = 'ok';
+  try {
+    await gateway.full(v.reg_no, { refresh: 1 });
+  } catch (e) {
+    result = 'failed: ' + String(e.message || e).slice(0, 120);
+  }
+  await auth.audit({ adminId: req.admin.id, action: 'vehicle_refresh', ip: ipOf(req),
+                     detail: { reg_no: v.reg_no, vehicle_id: String(v.id), forced: req.body?.force === true, result } });
+  if (result !== 'ok') return res.status(502).json({ error: 'refresh_failed', message: 'The records API did not answer. Nothing was changed.' });
+  res.json({ ok: true });
 }));
 
 /**
