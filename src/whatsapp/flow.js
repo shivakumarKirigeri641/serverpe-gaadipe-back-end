@@ -277,9 +277,10 @@ const OWNER_TERMS =
   + `💳 Refund Policy\n${SITE}/refund\n\n`
   + 'In short: GaadiPe shows Government-sourced vehicle records as they are. '
   + 'We do not show owner name, chassis or engine number.\n\n'
-  // The same line as the Terms clause (migration 062) — the one people
+  // The same promise as the Terms clause (migration 062) — the lines people
   // actually read before they tap.
-  + 'By tapping *Agree & continue* you agree to receive GaadiPe messages on WhatsApp.\n\n'
+  + 'By tapping *Agree & continue* you agree to receive GaadiPe messages on WhatsApp. '
+  + 'Reply *STOP* any time and we will stop messaging you.\n\n'
   + 'Tap below to continue.';
 
 const PARTNER_TERMS =
@@ -987,6 +988,38 @@ async function sendReferral(mobile) {
 async function handle(session, message, mobile) {
   const intent = intentOf(message);
   const state = session.state || 'new';
+
+  /*
+   * STOP AND START (user, 2026-09-25). The Terms say: reply STOP and we stop
+   * messaging you, other than to reply, until you reply START. Read here,
+   * before referrals, buttons and the state machine, because it must work from
+   * anywhere — typed, or as the "Stop promotions" button Meta puts on
+   * marketing templates. send.js refuses every template to a number that said
+   * STOP; this records it and says so.
+   */
+  if (/^(stop|unsubscribe|stop promotions)\s*$/i.test(intent.text)) {
+    await db.query(
+      `UPDATE whatsapp_sessions SET wa_opt_out_at = now(), modified_at = now()
+        WHERE mobile = $1`, [mobile]);
+    await funnel(mobile, 'opt_out');
+    console.log('[wa] %s replied STOP — no more messages from us', mobile);
+    await send.text(mobile,
+      'Done ✅ — GaadiPe will not message you any more.\n\n'
+      + 'If you write to us, we will still reply. '
+      + 'Reply *START* any time to hear from us again.');
+    return;
+  }
+  if (/^start\s*$/i.test(intent.text)) {
+    const { rowCount } = await db.query(
+      `UPDATE whatsapp_sessions SET wa_opt_out_at = NULL, modified_at = now()
+        WHERE mobile = $1 AND wa_opt_out_at IS NOT NULL`, [mobile]);
+    if (rowCount) {
+      await funnel(mobile, 'opt_in');
+      console.log('[wa] %s replied START — messages on again', mobile);
+      await send.text(mobile, 'Welcome back 👋 — GaadiPe will message you again. Reply *STOP* any time.');
+    }
+    // …and START is also a greeting, so carry on to the beginning below.
+  }
 
   /*
    * ARRIVED THROUGH A FRIEND'S LINK (user, 2026-09-23).

@@ -229,6 +229,11 @@ const PEOPLE = `
            EXISTS (SELECT 1 FROM blocks b
                     WHERE b.kind = 'mobile' AND b.value = p.mobile AND b.released_at IS NULL) AS blocked
       FROM pool p
+     -- Replied STOP (user, 2026-09-25): the Terms promise we stop messaging
+     -- them, so they are not in any audience — not listed, not counted, not
+     -- sendable. send.js refuses them as well, in case of a list built earlier.
+     WHERE NOT EXISTS (SELECT 1 FROM whatsapp_sessions s
+                        WHERE s.mobile = p.mobile AND s.wa_opt_out_at IS NOT NULL)
   )`;
 
 /** Which audiences a row is in — shown beside it, so the list explains itself. */
