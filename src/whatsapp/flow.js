@@ -1143,6 +1143,26 @@ async function handle(session, message, mobile) {
       return;
     }
 
+    /*
+     * "Get full report" on the thank-you template (user, 2026-09-26). Their
+     * latest vehicle is opened: a report they already bought comes as its PDF,
+     * anything else shows the basic details with the Full report ₹19 button.
+     * No vehicle yet: asked for one. Not agreed to the Terms in force: terms.
+     */
+    if (!Object.values(BTN).includes(intent.id) && /^get (the |a )?full report$/i.test(intent.text)) {
+      const agreed = await agreedVersion(mobile);
+      if (!agreed || agreed !== await policyVersion()) { await start(mobile); return; }
+      const user = await store.upsertUser(mobile);
+      const [last] = await store.checkedBy(user.id, 1);
+      if (last) {
+        await openVehicle(mobile, last.reg_no, message, 'template: get full report');
+      } else {
+        await setState(mobile, 'owner_start', 'template: get full report');
+        await send.text(mobile, 'Send me the vehicle number — like *KA01XX1234* — and I will show you its full report.');
+      }
+      return;
+    }
+
     switch (intent.id) {
       case BTN.OWNER:
         await setState(mobile, 'owner_consent', 'chose owner');
