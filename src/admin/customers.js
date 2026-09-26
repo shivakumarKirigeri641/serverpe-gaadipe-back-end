@@ -166,8 +166,15 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
     [term, digits, plate, blocked, paying, Math.min(200, limit), offset]);
 
   const total = rows[0] ? Number(rows[0].total_rows) : 0;
+  // Today's numbers for the page header, whatever the filter (user, 2026-09-26):
+  // joined since midnight IST, and seen since midnight IST.
+  const today = await db.one(
+    `SELECT count(*) FILTER (WHERE created_at   >= d)::int AS joined,
+            count(*) FILTER (WHERE last_seen_at >= d)::int AS active
+       FROM users, (SELECT date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' AS d) t`);
   return {
     total,
+    today,
     rows: rows.map(({ total_rows, ...r }) => ({
       ...r,
       id: String(r.id),
