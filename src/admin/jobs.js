@@ -29,6 +29,7 @@ const ABOUT = {
   renewal: ['Renewal reminders', 'Reminds customers before monitoring ends.', true],
   broadcast: ['WhatsApp broadcasts', 'Sends scheduled broadcast messages.', true],
   alerts: ['Alert rules', 'Checks the alert rules and raises or clears alerts.', false],
+  nudge: ['WhatsApp reminders', 'One free reminder, an hour later, to people who did not agree to the terms or did not pay — inside the 24-hour window only, never after STOP or at night.', true],
   maintenance: ['Daily maintenance', 'Scheduled backup (when switched on) and trimming the job history.', false],
 };
 

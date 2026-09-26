@@ -232,6 +232,8 @@ app.listen(config.port, () => {
   require('./jobs/reconDaily').start(Number(process.env.RECON_TICK_SECONDS) || 3600);
   // Scheduled backup (when switched on) and job-history trimming (operations module).
   require('./jobs/maintenance').start(Number(process.env.MAINTENANCE_TICK_SECONDS) || 3600);
+  // One free reminder inside the 24-hour window: terms not agreed, link not paid.
+  require('./jobs/nudge').start(Number(process.env.NUDGE_TICK_SECONDS) || 300);
 
 
   // Page, click and action history is kept activity_retention_days, then deleted.

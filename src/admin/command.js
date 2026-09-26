@@ -307,7 +307,7 @@ const FEED_WORDS = {
   payment_page_viewed: 'Payment page opened', payment_success: 'Payment received',
   report_generated: 'Report generated', report_delivered: 'Report delivered',
   whatsapp_linked_to_web: 'Chat linked to website visit', whatsapp_ad_clicked: 'Came from a WhatsApp ad',
-  whatsapp_opt_out: 'Replied STOP', whatsapp_opt_in: 'Replied START',
+  whatsapp_opt_out: 'Replied STOP', whatsapp_opt_in: 'Replied START', whatsapp_reminder_sent: 'Reminder sent',
 };
 
 async function live({ since = null } = {}) {
