@@ -142,6 +142,12 @@ async function journey(q) {
     profile: {
       mobile: who.mobile, user_id: who.userId,
       name: who.user?.display_name || who.user?.wa_profile_name || who.session?.profile_name || null,
+      // Their email and whether GaadiPe may use it: only a confirmed, subscribed
+      // address gets the daily / every-few-days emails (the receipt goes regardless).
+      email: who.user?.email || null,
+      email_state: !who.user?.email ? 'none' : who.user.email_unsubscribed_at ? 'unsubscribed'
+        : who.user.email_verified_at ? 'confirmed' : 'unconfirmed',
+      email_confirmed_at: who.user?.email_verified_at || null,
       first_seen: times.length ? new Date(Math.min(...times)) : who.user?.created_at || null,
       last_active: times.length ? new Date(Math.max(...times)) : null,
       in_window: who.session?.last_inbound_at ? Date.now() - new Date(who.session.last_inbound_at) < 24 * 3600e3 : false,
