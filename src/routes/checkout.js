@@ -117,6 +117,28 @@ const wayOut = (url, { wa = 'Open WhatsApp', web = 'Open GaadiPe' } = {}) =>
 /** "on WhatsApp" is a promise GaadiPe cannot keep today; the inbox is. */
 const sentTo = () => (WA_ON() ? 'in your WhatsApp chat' : 'in your email');
 
+/* The checkout's pre-fills (user, 2026-09-26). */
+// Email can be skipped only when the report is delivered in the WhatsApp chat;
+// a website purchase is delivered by email, so there it stays required.
+const emailIsOptional = (pay) => WA_ON() && pay.raw?.channel !== 'web';
+// A WhatsApp profile name as an invoice name: emoji and symbols dropped, and
+// nothing at all if what is left is not a name.
+const cleanName = (n) => {
+  const s = String(n || '').replace(/[^\p{L}\p{M}\s.'-]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+  return /\p{L}{2}/u.test(s) ? s : '';
+};
+// The GST state code for a plate's state (KA -> 29). Matched by name against
+// the invoice's list, so the two lists cannot drift apart. BH plates say nothing.
+const PLATE_ALIASES = { OR: 'OD', UA: 'UK', CT: 'CG', TG: 'TS', DN: 'DD' };
+function gstStateOfPlate(regNo) {
+  const letters = String(regNo || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 2);
+  const name = require('../admin/geo').STATES[PLATE_ALIASES[letters] || letters];
+  if (!name) return null;
+  const { STATES } = require('../pay/invoice');
+  const hit = Object.entries(STATES).find(([, n]) => n.toLowerCase() === name.toLowerCase());
+  return hit ? hit[0] : null;
+}
+
 const page = (title, body) => `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -246,8 +268,15 @@ router.get('/pay/:token', safe(async (req, res) => {
   const { STATES } = require('../pay/invoice');
   const biz = await db.one(`SELECT home_state_code FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
   const home = String(biz.home_state_code || '29');
-  const buyerName = pay.raw?.buyer_name || pay.display_name || '';
-  const buyerState = String(pay.raw?.buyer_state_code || pay.state_code || '');
+  /* FEWER THINGS TO TYPE BEFORE ₹19 (user, 2026-09-26): 3 of 5 who opened
+     this page left without paying. The name comes from their WhatsApp
+     profile, the state from their vehicle's registration (both editable), and
+     the email is optional when the report is delivered in the chat. */
+  const buyerName = pay.raw?.buyer_name || pay.display_name || cleanName(pay.wa_profile_name);
+  const knownState = String(pay.raw?.buyer_state_code || pay.state_code || '');
+  const buyerState = knownState || gstStateOfPlate(pay.reg_no) || '';
+  const stateGuessed = !knownState && Boolean(buyerState);
+  const emailOptional = emailIsOptional(pay);
   const grossPaise = pay.amount_paise;
   const basePaise = Math.round(grossPaise / 1.18);
   const taxPaise = grossPaise - basePaise;
@@ -328,11 +357,17 @@ router.get('/pay/:token', safe(async (req, res) => {
     <input id="bname" maxlength="80" autocomplete="name" placeholder="Your full name" value="${esc(buyerName)}"></label>
   <label class="fld"><span>State / union territory</span>
     <select id="bstate"><option value="">Choose…</option>${stateOptions}</select></label>
-  <p class="muted" style="margin:6px 0 0">For your GST invoice. Your state is the place of supply — it decides
+  <p class="muted" style="margin:6px 0 0">${stateGuessed
+    ? 'Picked from your vehicle’s registration — change it if you live in another state. '
+    : ''}For your GST invoice. Your state is the place of supply — it decides
   CGST + SGST or IGST. The price stays the same.</p>
-  <label class="fld" style="margin-top:10px"><span>Email — for your invoice and daily vehicle updates</span>
+  <label class="fld" style="margin-top:10px"><span>${emailOptional
+    ? 'Email (optional) — add it to get your invoice and daily updates by email'
+    : 'Email — for your invoice and daily vehicle updates'}</span>
     <input id="bemail" type="email" inputmode="email" maxlength="160" autocomplete="email" placeholder="you@example.com" value="${esc(pay.email || '')}"></label>
-  <p class="muted" style="margin:6px 0 0">Name, phone (${esc('+91 ' + String(pay.mobile).slice(-10))}) and email are printed on the invoice.</p>
+  <p class="muted" style="margin:6px 0 0">${emailOptional
+    ? 'Your report and invoice arrive in your WhatsApp chat either way. '
+    : ''}Name, phone (${esc('+91 ' + String(pay.mobile).slice(-10))})${emailOptional ? ' and email, if given,' : ' and email'} are printed on the invoice.</p>
 </div>
 
 <div class="card">
@@ -362,7 +397,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   var bname = document.getElementById('bname'), bstate = document.getElementById('bstate'),
       bemail = document.getElementById('bemail');
   var EMAIL_RE = /^[^@\\s]+@[^@\\s]+\\.[^@\\s]{2,}$/;
-  var HOME = ${JSON.stringify(home)}, TAX = ${taxPaise}, CGST = ${cgstPaise};
+  var HOME = ${JSON.stringify(home)}, TAX = ${taxPaise}, CGST = ${cgstPaise}, EMAIL_OPTIONAL = ${emailOptional};
   function rs(p) { return '₹' + (p / 100).toFixed(2); }
   // The tax lines follow the state: CGST + SGST at home, IGST anywhere else.
   function renderTax() {
@@ -373,7 +408,9 @@ router.get('/pay/:token', safe(async (req, res) => {
       ? '<div class="row"><span>CGST @ 9%</span><b>' + rs(CGST) + '</b></div>'
         + '<div class="row"><span>SGST @ 9%</span><b>' + rs(TAX - CGST) + '</b></div>'
       : '<div class="row"><span>IGST @ 18%</span><b>' + rs(TAX) + '</b></div>';
-    btn.disabled = bname.value.trim().length < 2 || !s || !EMAIL_RE.test(bemail.value.trim());
+    var mail = bemail.value.trim();
+    btn.disabled = bname.value.trim().length < 2 || !s
+      || (mail ? !EMAIL_RE.test(mail) : !EMAIL_OPTIONAL);
   }
   bname.oninput = renderTax; bstate.onchange = renderTax; bemail.oninput = renderTax; renderTax();
   // Paid: swap the order summary for the success card, and try to open the
@@ -457,20 +494,26 @@ router.get('/pay/:token', safe(async (req, res) => {
    account for next time) before Razorpay opens. Only while unpaid. */
 router.post('/pay/:token/buyer', express.json(), safe(async (req, res) => {
   const { STATES } = require('../pay/invoice');
-  const pay = await db.one(`SELECT id, user_id, status FROM payments WHERE checkout_token = $1`, [req.params.token]);
+  const pay = await db.one(`SELECT id, user_id, status, raw FROM payments WHERE checkout_token = $1`, [req.params.token]);
   if (!pay) return res.status(404).json({ ok: false, message: 'This payment link is not valid.' });
   if (pay.status === 'paid') return res.status(409).json({ ok: false, message: 'This payment is already complete.' });
   const name = String(req.body?.name || '').replace(/\s+/g, ' ').trim().slice(0, 80);
   const state = String(req.body?.state_code || '').replace(/\D/g, '').padStart(2, '0');
   if (name.length < 2) return res.status(400).json({ ok: false, message: 'Please enter your name for the invoice.' });
   if (!STATES[state]) return res.status(400).json({ ok: false, message: 'Please choose your state or union territory.' });
-  // The email: required, and a new one is sent a confirmation link (mail/customer.js).
+  // The email: a new one is sent a confirmation link (mail/customer.js).
+  // Required when email is how the report is delivered; optional when it
+  // arrives in the WhatsApp chat (user, 2026-09-26).
   const customerMail = require('../mail/customer');
   const email = String(req.body?.email || '').trim();
-  if (!customerMail.validEmail(email)) {
-    return res.status(400).json({ ok: false, message: 'Please enter your email — your invoice and daily vehicle updates are sent there.' });
+  if (email || !emailIsOptional(pay)) {
+    if (!customerMail.validEmail(email)) {
+      return res.status(400).json({ ok: false, message: emailIsOptional(pay)
+        ? 'That email does not look right — correct it, or leave it empty.'
+        : 'Please enter your email — your invoice and daily vehicle updates are sent there.' });
+    }
+    await customerMail.setEmail(pay.user_id, email);
   }
-  await customerMail.setEmail(pay.user_id, email);
   await db.query(
     `UPDATE payments SET raw = COALESCE(raw,'{}'::jsonb) || $2::jsonb WHERE id = $1`,
     [pay.id, JSON.stringify({ buyer_name: name, buyer_state_code: state })]);
