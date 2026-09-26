@@ -166,17 +166,28 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
     [term, digits, plate, blocked, paying, Math.min(200, limit), offset]);
 
   const total = rows[0] ? Number(rows[0].total_rows) : 0;
-  // Today's numbers for the page header, whatever the filter (user, 2026-09-26):
-  // joined since midnight IST, and seen since midnight IST.
+  // Today's numbers for the page header, whatever the filter (user, 2026-09-26),
+  // each against yesterday UP TO THE SAME TIME, so 10 am is not compared with a
+  // whole day. Joined: users created. Active: people who did anything (a
+  // message, a check, a payment) — from events, because last_seen_at only
+  // keeps the latest visit and could not say who was active yesterday.
   const today = await db.one(
-    `SELECT count(*) FILTER (WHERE created_at   >= d)::int AS joined,
-            count(*) FILTER (WHERE last_seen_at >= d)::int AS active
-       FROM users, (SELECT date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' AS d) t`);
+    `WITH b AS (SELECT date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' AS d)
+     SELECT (SELECT count(*) FROM users, b WHERE created_at >= b.d)::int AS joined,
+            (SELECT count(*) FROM users, b WHERE created_at >= b.d - interval '1 day'
+                                              AND created_at <  now() - interval '1 day')::int AS joined_yesterday,
+            (SELECT count(DISTINCT coalesce(user_id::text, mobile)) FROM events, b
+              WHERE occurred_at >= b.d AND coalesce(user_id::text, mobile) IS NOT NULL)::int AS active,
+            (SELECT count(DISTINCT coalesce(user_id::text, mobile)) FROM events, b
+              WHERE occurred_at >= b.d - interval '1 day' AND occurred_at < now() - interval '1 day'
+                AND coalesce(user_id::text, mobile) IS NOT NULL)::int AS active_yesterday`);
+  const where = await placesFor(rows);
   return {
     total,
     today,
     rows: rows.map(({ total_rows, ...r }) => ({
       ...r,
+      place: where.get(String(r.id)) || null,
       id: String(r.id),
       vehicles_checked: Number(r.vehicles_checked || 0),
       sign_ins: Number(r.sign_ins || 0),
@@ -189,6 +200,54 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
       messages: Number(r.messages || 0),
     })),
   };
+}
+
+/*
+ * WHERE A CUSTOMER IS, ROUGHLY (user, 2026-09-26) — state level, never finer,
+ * and only from what GaadiPe already holds. No GPS is asked for: the product
+ * does not need it, and a precise location next to vehicle records is exactly
+ * the kind of data not worth keeping. In order of trust:
+ *
+ *   declared  the state they gave at checkout (it sets GST's place of supply)
+ *   internet  their website visits, looked up offline from the IP address
+ *             (geoip-lite). On 4G often the operator's city, so only a hint.
+ *   vehicle   the state their most-checked vehicle is registered in — where
+ *             the vehicle is from, not necessarily where they are.
+ */
+async function placesFor(rows) {
+  const out = new Map();
+  const ids = rows.map((r) => r.id);
+  if (!ids.length) return out;
+  const { STATES: GST } = require('../pay/invoice');
+  const { STATES: REG } = require('./geo');
+  const [users, visits, sessions, vehicles] = await Promise.all([
+    db.query(`SELECT id, state_code FROM users WHERE id = ANY($1)`, [ids]),
+    db.query(`SELECT DISTINCT ON (user_id) user_id, place FROM visitors
+               WHERE user_id = ANY($1) AND place <> '{}'::jsonb ORDER BY user_id, last_seen_at DESC`, [ids]),
+    db.query(`SELECT DISTINCT ON (user_id) user_id, coalesce(last_ip, ip) AS ip FROM site_sessions
+               WHERE user_id = ANY($1) AND coalesce(last_ip, ip) IS NOT NULL ORDER BY user_id, last_used_at DESC NULLS LAST`, [ids]),
+    db.query(`SELECT DISTINCT ON (uv.user_id) uv.user_id, upper(left(v.reg_no, 2)) AS code, count(*) OVER (PARTITION BY uv.user_id, left(v.reg_no, 2)) AS n
+                FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
+               WHERE uv.user_id = ANY($1) ORDER BY uv.user_id, n DESC`, [ids]),
+  ]);
+  const visitOf = new Map(visits.rows.map((r) => [String(r.user_id), r.place || {}]));
+  const ipOf = new Map(sessions.rows.map((r) => [String(r.user_id), r.ip]));
+  const vehOf = new Map(vehicles.rows.map((r) => [String(r.user_id), r.code]));
+  const device = require('../site/device');
+  for (const u of users.rows) {
+    const id = String(u.id);
+    const declared = GST[String(u.state_code || '')];
+    let net = visitOf.get(id);
+    if ((!net || !net.region) && ipOf.get(id)) net = device.locate(ipOf.get(id));
+    const netState = net && net.country === 'India' ? net.region : null;
+    const vehState = REG[vehOf.get(id)] || null;
+    const city = netState ? net.city || null : null;
+    out.set(id, declared ? { state: declared, source: 'declared', city: netState === declared ? city : null, vehicle_state: vehState }
+      : netState ? { state: netState, source: 'internet', city, vehicle_state: vehState }
+      : vehState ? { state: vehState, source: 'vehicle', city: null, vehicle_state: vehState }
+      : null);
+  }
+  return out;
 }
 
 /** One customer, with everything the panel shows on a tap. */
