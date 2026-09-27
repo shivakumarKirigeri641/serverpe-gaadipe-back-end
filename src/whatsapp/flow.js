@@ -405,6 +405,10 @@ async function agreedVersion(mobile) {
  * event is permanent — and "one trial per mobile number, ever" is a promise
  * about all of history, not about current state.
  */
+/* THE FREE TRIAL IS OFF (user, 2026-09-27): monitoring is strictly ₹19 per
+   vehicle, so no vehicle is watched for free. trial_enabled turns it back on. */
+const trialOn = async () => settings.bool('trial_enabled', false);
+
 async function trialUsed(userId) {
   const row = await db.one(
     `SELECT 1 FROM event_log WHERE kind = 'trial_started' AND user_id = $1 LIMIT 1`,
@@ -446,6 +450,7 @@ async function sessionContext(mobile) {
  * the code production runs.
  */
 async function startTrial(userId, regNo) {
+  if (!await trialOn()) return { ok: false, reason: 'disabled' };
   const vehicle = await db.one(`SELECT id FROM vehicles WHERE reg_no = $1`, [regNo]);
   if (!vehicle) return { ok: false, reason: 'unknown_vehicle' };
 
@@ -761,6 +766,10 @@ async function quotaMessage(q) {
     return `You have used today's ${q.limit} free checks — they reset tomorrow.\n\n`
       + 'The vehicles on your trial are still being checked automatically every day.';
   }
+  if (!await trialOn()) {
+    return `You have used your ${q.limit} free checks for today — they reset tomorrow.\n\n`
+      + 'Want everything on a vehicle now? Tap *Full report* on any vehicle you have checked.';
+  }
   return `You have used your ${q.limit} free checks for today — they reset tomorrow.\n\n`
     + `Start a free ${days}-day trial and I will check your vehicles automatically, `
     + 'and message you the moment something needs attention.';
@@ -784,7 +793,7 @@ async function deliverReport(mobile, regNo, message) {
   if (!q.allowed) {
     await setState(mobile, 'owner_menu', `quota ${q.reason}`);
     await send.buttons(mobile, await quotaMessage(q),
-      q.tier === 'stranger'
+      q.tier === 'stranger' && await trialOn()
         ? [{ id: BTN.TRIAL_START, title: 'Start free trial' }]
         : [{ id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
     return;
@@ -1405,6 +1414,17 @@ async function handle(session, message, mobile) {
         const price = Math.round(await settings.num('first_payment_paise', 4900) / 100);
         const r = await startTrial(user.id, reg);
 
+        // An old "Start free trial" button, or a vehicle picked to watch,
+        // while the trial is off: monitoring comes with the ₹19 report.
+        if (!r.ok && r.reason === 'disabled') {
+          await setState(mobile, 'owner_menu', 'trial is off');
+          await send.buttons(mobile,
+            reg ? `Monitoring comes with the full report — *₹19 for ${reg}*, one-time.`
+              : 'Monitoring comes with the full report — ₹19 per vehicle, one-time.',
+            [...(reg ? [{ id: BTN.BUY_REPORT, title: 'Full report ₹19' }] : []),
+             { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
+          return;
+        }
         if (!r.ok && r.reason === 'trial_over') {
           await setState(mobile, 'owner_menu', 'trial already finished');
           await send.buttons(mobile,
