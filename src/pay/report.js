@@ -131,6 +131,27 @@ async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data
   return { report: { ...row, pdf_path: file }, pdf };
 }
 
+/**
+ * Re-print an issued report with newer data — same number, same file, same
+ * download link (user, 2026-09-27: a report issued while the e-Challan
+ * service was down is completed when it answers).
+ */
+async function rebuild(row, data) {
+  const business = await db.one(
+    `SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
+  const pdf = await buildVehicleReport({
+    report: row, business, data, consent: row.consent || null,
+    requester: { name: row.requester_name, mobile: row.requested_by, ip: row.ip,
+                 device: row.device, channel: row.channel || 'whatsapp' },
+  });
+  fs.mkdirSync(DIR, { recursive: true });
+  const file = row.pdf_path || path.join(DIR, `${row.report_number}.pdf`);
+  fs.writeFileSync(file, pdf);
+  await db.query(`UPDATE vehicle_reports SET snapshot = $2, pdf_path = $3 WHERE id = $1`,
+    [row.id, JSON.stringify(data), file]);
+  return { ...row, snapshot: data, pdf_path: file };
+}
+
 /** The latest report for a vehicle this person can see. */
 const latestFor = (userId, regNo) => db.one(
   `SELECT * FROM vehicle_reports
@@ -147,4 +168,4 @@ const validFor = (userId, regNo) => db.one(
       AND valid_until IS NOT NULL AND valid_until > now()
     ORDER BY id DESC LIMIT 1`, [userId, regNo]);
 
-module.exports = { issue, latestFor, validFor, describeDevice, nextNumber };
+module.exports = { issue, rebuild, latestFor, validFor, describeDevice, nextNumber };

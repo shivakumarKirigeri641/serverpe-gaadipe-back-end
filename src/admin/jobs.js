@@ -30,6 +30,7 @@ const ABOUT = {
   broadcast: ['WhatsApp broadcasts', 'Sends scheduled broadcast messages.', true],
   alerts: ['Alert rules', 'Checks the alert rules and raises or clears alerts.', false],
   nudge: ['WhatsApp reminders', 'One free reminder, an hour later, to people who did not agree to the terms or did not pay — inside the 24-hour window only, never after STOP or at night.', true],
+  challanFollowup: ['Challan follow-up', 'A paid report issued while the e-Challan service was not answering: asks again every 30 minutes for a day, updates the report and tells the customer.', true],
   maintenance: ['Daily maintenance', 'Scheduled backup (when switched on) and trimming the job history.', false],
 };
 

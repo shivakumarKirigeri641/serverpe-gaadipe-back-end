@@ -234,6 +234,8 @@ app.listen(config.port, () => {
   require('./jobs/maintenance').start(Number(process.env.MAINTENANCE_TICK_SECONDS) || 3600);
   // One free reminder inside the 24-hour window: terms not agreed, link not paid.
   require('./jobs/nudge').start(Number(process.env.NUDGE_TICK_SECONDS) || 300);
+  // A paid report issued while e-Challan was down: completed when it answers.
+  require('./jobs/challanFollowup').start(Number(process.env.CHALLAN_FOLLOWUP_TICK_SECONDS) || 300);
 
 
   // Page, click and action history is kept activity_retention_days, then deleted.
