@@ -513,6 +513,111 @@ async function lifecycle() {
            lapsed: lapsed.rowCount, expired: expired.rowCount };
 }
 
+/*
+ * THE DAILY "ALL CLEAR" (user, 2026-09-27). While GaadiPe is new, silence
+ * reads as "is this working?" — so every paying customer with monitoring on
+ * hears once each evening, even when nothing changed: no new challans, and
+ * each document's date. Switched off with watch_daily_status_enabled when the
+ * business is ready for "only when something happens".
+ *
+ * No extra lookup is spent: it reads what the last check stored. Skipped for
+ * anyone who already got a real alert today (they have heard), anyone paused,
+ * blocked or who replied STOP (send.js refuses those). Once per person per
+ * IST day, recorded as watch_status in event_log.
+ */
+// { mobile } sends to that one customer only, at any hour — for testing from
+// the server: node -e "require('./src/jobs/watch').dailyStatus({ mobile: '98xxxxxxxx' })"
+async function dailyStatus({ mobile = null } = {}) {
+  if (!mobile && !await settings.bool('watch_daily_status_enabled', false)) return { sent: 0 };
+  const from = await settings.num('alert_send_hour_ist', 19);
+  const until = await settings.num('alert_send_until_hour_ist', 22);
+  const hour = istNow().getUTCHours();
+  if (!mobile && (hour < from || hour >= until)) return { sent: 0 };
+
+  const today = istNow().toISOString().slice(0, 10);
+  const { rows } = await db.query(
+    `SELECT w.id, w.user_id, w.vehicle_id, w.last_checked_at, w.created_at, v.reg_no,
+            u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name
+       FROM watches w
+       JOIN vehicles v ON v.id = w.vehicle_id
+       JOIN users u    ON u.id = w.user_id
+      WHERE w.is_active AND (w.expires_at IS NULL OR w.expires_at > now()) AND NOT u.is_paused
+        AND EXISTS (SELECT 1 FROM payments p WHERE p.user_id = w.user_id AND p.status = 'paid' AND p.amount_paise > 0)
+        AND NOT EXISTS (SELECT 1 FROM event_log e WHERE e.user_id = w.user_id
+                          AND e.kind IN ('watch_status', 'watch_digest') AND e.detail->>'ist_date' = $1
+                          AND coalesce(e.detail->>'failed', 'false') <> 'true')
+        AND ($2::text IS NULL OR u.mobile = $2)
+      ORDER BY w.user_id, v.reg_no`, [today, mobile ? String(mobile).replace(/\D/g, '').slice(-10) : null]);
+
+  const people = new Map();
+  for (const r of rows) {
+    if (!people.has(r.user_id)) people.set(r.user_id, []);
+    people.get(r.user_id).push(r);
+  }
+
+  let sent = 0;
+  for (const [userId, list] of people) {
+    // Claimed first, so two passes in the same minute cannot both send.
+    const claim = await db.one(
+      `INSERT INTO event_log (user_id, kind, detail)
+       SELECT $1, 'watch_status', $2
+        WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE user_id = $1 AND kind = 'watch_status' AND detail->>'ist_date' = $3)
+       RETURNING id`, [userId, JSON.stringify({ ist_date: today, vehicles: list.map((w) => w.reg_no) }), today]);
+    if (!claim) continue;
+
+    const lines = [];
+    for (const w of list) lines.push({ reg: w.reg_no, ...statusOf(await previous(w.vehicle_id)) });
+    const first = list[0];
+    const checked = list.map((w) => new Date(w.last_checked_at || w.created_at)).sort((a, b) => b - a)[0];
+    const name = String(first.name || 'there').split(' ')[0];
+
+    let out;
+    if (await send.windowOpen(first.mobile)) {
+      out = await send.text(first.mobile, '✅ *Today\'s update from GaadiPe*\n\n'
+        + lines.map((l) => `🚗 *${l.reg}*\n${l.text.split(' · ').map((t) => `• ${t}`).join('\n')}`).join('\n\n')
+        + `\n\n_Last checked ${fmtDate(checked)}. We will message you if anything changes._`);
+    } else {
+      const summary = (lines.map((l) => (lines.length > 1 ? `${l.reg}: ${l.text}` : l.text)).join(' · ')
+        + ` (last checked ${fmtDate(checked)})`).slice(0, 900);
+      // The approved gp_monitoring_alert_en_v1: 1 name, 2 vehicle, 3 status, 4 action.
+      const expired = [...new Set(lines.flatMap((l) => l.expired))];
+      const challans = lines.some((l) => l.challans);
+      const todo = [expired.length ? `renew your ${expired.join(', ')}` : null, challans ? 'clear the pending challans' : null].filter(Boolean);
+      const action = todo.length
+        ? `Please ${todo.join(' and ')}. We will keep watching and tell you when anything changes.`
+        : 'Nothing to do. We will keep watching and tell you if anything changes.';
+      out = await send.template(first.mobile,
+        await settings.get('template_daily_status', 'gp_monitoring_alert_en_v1'),
+        [name, lines.length === 1 ? first.reg_no : `${first.reg_no} +${lines.length - 1} more`, summary, action],
+        { language: await settings.get('wa_template_language', 'en') });
+    }
+    if (out?.ok) sent += 1;
+    else {
+      await db.query(`UPDATE event_log SET detail = detail || $2::jsonb WHERE id = $1`,
+        [claim.id, JSON.stringify({ failed: true, error: String(out?.error || '').slice(0, 300) })]);
+      console.warn('[watch] daily status to user %s failed: %s', userId, out?.error);
+    }
+  }
+  if (sent) console.log('[watch] daily all-clear sent to %d customer(s)', sent);
+  return { sent };
+}
+
+/** "No pending challans · Insurance valid till 12 Mar 2027 · PUC expired 2 months ago" — one line, no newlines. */
+const statusLine = (snap) => statusOf(snap).text;
+function statusOf(snap) {
+  const expired = [];
+  let challans = false;
+  const bits = [];
+  const pending = snap.challan?.pending_count;
+  if (pending === 0) bits.push('No pending challans ✅');
+  else if (pending > 0) { challans = true; bits.push(`${pending} pending challan${pending === 1 ? '' : 's'}`); }
+  for (const d of report.documentsOf(snap.rc || {})) {
+    if (d.days < 0) expired.push(d.label);
+    bits.push(d.days < 0 ? `${d.label} expired ${report.human(d.days)}` : `${d.label} valid till ${fmtDate(d.date)}`);
+  }
+  return { expired, challans, text: bits.length ? bits.join(' · ') : 'All clear — nothing new since the last check ✅' };
+}
+
 /** One pass. Safe to call as often as you like; it only acts on what is due. */
 async function runOnce() {
   const started = Date.now();
@@ -526,6 +631,8 @@ async function runOnce() {
   }
   const digest = await eveningDigest();
   sent = digest.sent || 0;
+  // After the real alerts, so anyone who just got one is skipped.
+  sent += (await dailyStatus().catch((e) => { console.error('[watch] daily status:', e.message); return { sent: 0 }; })).sent || 0;
   const life = await lifecycle();
 
   if (list.length || sent || life.notified || life.renewals || life.expired) {
@@ -550,4 +657,4 @@ function start(everySeconds = 60) {
   console.log(`  watch job: every ${everySeconds}s`);
 }
 
-module.exports = { start, runOnce, checkOne, findings, lifecycle, due, eveningDigest };
+module.exports = { start, runOnce, checkOne, findings, lifecycle, due, eveningDigest, dailyStatus, statusLine };
