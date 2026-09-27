@@ -321,6 +321,14 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
       console.error('[pay] report for payment %d not issued: %s', pay.id, data?.error || 'lookup failed');
       return { ok: false, reason: 'lookup_failed' };
     }
+    // The e-Challan service did not answer (user, 2026-09-27): one more try
+    // before a paid report goes out without challans. RC and FASTag come from
+    // the cache, so only the challan call is repeated.
+    if (!data.challans) {
+      const again = await gateway.full(pay.reg_no, { challans: 'all' }).catch(() => null);
+      if (again?.success && again.challans) data = again;
+      else console.warn('[pay] report for payment %d: e-Challan still not answering — issued without challans', pay.id);
+    }
 
     if (withText) await send.text(pay.mobile, await report.buildFor(data, { detailed: true }));
 

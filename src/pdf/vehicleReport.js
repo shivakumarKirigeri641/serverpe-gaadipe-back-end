@@ -154,15 +154,29 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
 
     /* ── challans ── */
     const c = data.challans || {};
+    // NO ANSWER IS NOT "NO CHALLANS" (user, 2026-09-27): when the e-Challan
+    // service timed out, this used to print "Pending challans: 0" — telling a
+    // paying customer they had none when nobody had checked.
+    const noAnswer = !data.challans;
     y = T.ensureSpace(doc, y, 100);
     y = T.sectionTitle(doc, 'Traffic Challans', y,
-      (c.pending_count || 0) > 0 ? T.BRAND.red || T.BRAND.brand : T.BRAND.green);
-    y = T.kvCard(doc, [
+      noAnswer ? T.BRAND.muted : (c.pending_count || 0) > 0 ? T.BRAND.red || T.BRAND.brand : T.BRAND.green);
+    y = T.kvCard(doc, noAnswer ? [
+      ['Pending challans', 'Not available'],
+      ['Why', 'e-Challan service did not answer'],
+    ] : [
       ['Pending challans', String(c.pending_count ?? 0)],
       ['Amount pending', rupees(c.pending_amount_paise)],
       ['Already paid', String(c.disposed_count ?? 0)],
       ['Amount paid', rupees(c.disposed_amount_paise)],
     ], y, { cols: 2 });
+    if (noAnswer) {
+      doc.fillColor(T.BRAND.muted).font(doc._F.regular).fontSize(7.6)
+         .text('The Government e-Challan service did not respond when this report was made, so challans could not be checked — '
+           + 'this does not mean there are none. Your vehicle is being monitored: GaadiPe checks challans again and will '
+           + 'message you on WhatsApp if any are found.', T.M, y + 4, { width: W });
+      y = doc.y + 8;
+    }
 
     /* WHY A SUMMARY OF OFFENCES BEFORE A LIST OF CHALLANS: this bus has 352
        pending challans. Twelve rows of wrapped offence text is a page of noise

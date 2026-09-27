@@ -276,6 +276,9 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
     if (c.disposed_count) lines.push(`_${c.disposed_count} already paid_`);
   } else if (c) {
     lines.push('', '✅ *CHALLANS* — none pending');
+  } else {
+    // No answer is not "none" (user, 2026-09-27).
+    lines.push('', '⚠️ *CHALLANS* — the Government e-Challan service did not answer just now, so challans could not be checked. This does not mean there are none.');
   }
 
   // FASTag: status and balance only. Never crossings.
