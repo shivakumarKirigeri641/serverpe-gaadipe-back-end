@@ -260,7 +260,10 @@ function dailyMail(user, { paid, changes = [], others = [] }) {
     intro: [changeHtml],
     sections: [
       ...fullViews.flatMap(({ v, alertsUntil }) => fullSections(v, { alertsUntil })),
-      ...others.map((r) => basicSection(view.basic(r, { detail: 'labels' }))),
+      // Strictly per vehicle (user, 2026-09-27): a vehicle not paid for shows
+      // what a free check shows — how many things need attention, not which —
+      // however much the same customer paid for another one.
+      ...others.map((r) => basicSection(view.basic(r, { detail: 'count' }))),
     ],
     cta: { label: 'Open GaadiPe', url: regs.length === 1 ? `${SITE()}/app/vehicle/${encodeURIComponent(regs[0])}` : `${SITE()}/app` },
     footer: 'You are receiving this daily because you bought a GaadiPe report and it includes alerts.',
