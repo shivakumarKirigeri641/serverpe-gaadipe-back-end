@@ -162,7 +162,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     y = T.sectionTitle(doc, 'Traffic Challans', y,
       noAnswer ? T.BRAND.muted : (c.pending_count || 0) > 0 ? T.BRAND.red || T.BRAND.brand : T.BRAND.green);
     y = T.kvCard(doc, noAnswer ? [
-      ['Pending challans', 'Not available'],
+      ['Pending challans', 'Checking — update coming'],
       ['Why', 'e-Challan service did not answer'],
     ] : [
       ['Pending challans', String(c.pending_count ?? 0)],
@@ -172,9 +172,10 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     ], y, { cols: 2 });
     if (noAnswer) {
       doc.fillColor(T.BRAND.muted).font(doc._F.regular).fontSize(7.6)
-         .text('The Government e-Challan service did not respond when this report was made, so challans could not be checked — '
-           + 'this does not mean there are none. Your vehicle is being monitored: GaadiPe checks challans again and will '
-           + 'message you on WhatsApp if any are found.', T.M, y + 4, { width: W });
+         .text('The Government e-Challan service did not respond when this report was made, so challans could not be checked yet — '
+           + 'this does not mean there are none. GaadiPe keeps checking every 30 minutes over the next 24 hours. As soon as the '
+           + 'service answers, this report is updated with the full challan details (same report number, same download link) '
+           + 'and we message you on WhatsApp with them. You do not need to do anything.', T.M, y + 4, { width: W });
       y = doc.y + 8;
     }
 

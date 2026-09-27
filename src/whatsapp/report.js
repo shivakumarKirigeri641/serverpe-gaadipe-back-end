@@ -278,7 +278,8 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
     lines.push('', '✅ *CHALLANS* — none pending');
   } else {
     // No answer is not "none" (user, 2026-09-27).
-    lines.push('', '⚠️ *CHALLANS* — the Government e-Challan service did not answer just now, so challans could not be checked. This does not mean there are none.');
+    lines.push('', '⏳ *CHALLANS* — the Government e-Challan service did not answer just now, so challans could not be checked yet. '
+      + 'This does not mean there are none. If you have bought the full report, we keep checking and message you here with the challan details as soon as it answers.');
   }
 
   // FASTag: status and balance only. Never crossings.
