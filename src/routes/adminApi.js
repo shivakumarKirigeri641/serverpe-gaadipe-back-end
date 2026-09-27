@@ -1499,7 +1499,7 @@ router.post('/broadcasts/templates/status', needs('settings'), safe(async (req, 
 }));
 
 router.get('/broadcasts/:id/targets', safe(async (req, res) =>
-  res.json({ targets: await broadcasts.targets(String(req.params.id).replace(/\D/g, '') || '0') })));
+  res.json(await broadcasts.targets(String(req.params.id).replace(/\D/g, '') || '0'))));
 
 /* What each chosen customer would receive, before anything is sent. */
 router.post('/broadcasts/preview', needs('settings'), safe(async (req, res) =>

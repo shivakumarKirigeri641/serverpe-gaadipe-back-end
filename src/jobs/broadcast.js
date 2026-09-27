@@ -56,9 +56,10 @@ async function runOnce() {
     const status = out.ok ? 'sent' : DECIDED.has(out.error) ? 'skipped' : 'failed';
     await db.query(
       `UPDATE whatsapp_broadcast_targets
-          SET status = $2, error = $3, sent_at = CASE WHEN $2 = 'sent' THEN now() END
+          SET status = $2, error = $3, sent_at = CASE WHEN $2 = 'sent' THEN now() END,
+              wa_message_id = $4
         WHERE id = $1`,
-      [t.id, status, out.ok ? null : String(out.error || '').slice(0, 500)]);
+      [t.id, status, out.ok ? null : String(out.error || '').slice(0, 500), out.ok ? out.id || null : null]);
 
     if (out.ok) {
       sent += 1;

@@ -453,14 +453,30 @@ async function list({ limit = 50 } = {}) {
   return rows.map((r) => ({ ...r, id: String(r.id) }));
 }
 
-/** One broadcast, person by person. */
+/**
+ * One broadcast, person by person — and what Meta reported after "sent"
+ * (user, 2026-09-27, live progress): the furthest of delivered / read, or a
+ * failure on the phone's side, with its reason.
+ */
 async function targets(id, { limit = 500 } = {}) {
   const { rows } = await db.query(
-    `SELECT t.id, t.mobile, t.params, t.status, t.error, t.attempts, t.sent_at, u.display_name
+    `SELECT t.id, t.mobile, t.params, t.status, t.error, t.attempts, t.sent_at,
+            coalesce(u.display_name, u.wa_profile_name) AS display_name,
+            d.status AS delivery, d.error_title AS delivery_error, d.created_at AS delivery_at
        FROM whatsapp_broadcast_targets t
        LEFT JOIN users u ON u.id = t.user_id
+       LEFT JOIN LATERAL (
+         SELECT s.status, s.error_title, s.created_at FROM whatsapp_status_logs s
+          WHERE t.wa_message_id IS NOT NULL AND s.wa_message_id = t.wa_message_id
+          ORDER BY CASE s.status WHEN 'failed' THEN 4 WHEN 'read' THEN 3 WHEN 'delivered' THEN 2 ELSE 1 END DESC, s.id DESC
+          LIMIT 1) d ON true
       WHERE t.broadcast_id = $1 ORDER BY t.id LIMIT $2`, [id, Math.min(2000, limit)]);
-  return rows.map((r) => ({ ...r, id: String(r.id) }));
+  const b = await db.one(`SELECT id, template_name, language, status, recipients, created_at FROM whatsapp_broadcasts WHERE id = $1`, [id]);
+  const perMinute = Math.max(1, await require('../util/settings').num('whatsapp_broadcast_per_tick', 5));
+  return {
+    broadcast: b ? { ...b, id: String(b.id), per_minute: perMinute } : null,
+    targets: rows.map((r) => ({ ...r, id: String(r.id) })),
+  };
 }
 
 /**
