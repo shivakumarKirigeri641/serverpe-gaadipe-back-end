@@ -547,7 +547,11 @@ async function dailyStatus({ mobile = null } = {}) {
                           AND e.kind IN ('watch_status', 'watch_digest') AND e.detail->>'ist_date' = $1
                           AND coalesce(e.detail->>'failed', 'false') <> 'true')
         AND ($2::text IS NULL OR u.mobile = $2)
-      ORDER BY w.user_id, v.reg_no`, [today, mobile ? String(mobile).replace(/\D/g, '').slice(-10) : null]);
+        -- Only the first N days of each watch (user, 2026-09-27): reassurance
+        -- while it is new, then news only. 0 = every day, as long as it runs.
+        AND ($3::int <= 0 OR w.created_at > now() - make_interval(days => $3::int))
+      ORDER BY w.user_id, v.reg_no`, [today, mobile ? String(mobile).replace(/\D/g, '').slice(-10) : null,
+                                      await settings.num('watch_daily_status_days', 7)]);
 
   const people = new Map();
   for (const r of rows) {
