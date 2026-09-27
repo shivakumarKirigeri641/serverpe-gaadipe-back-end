@@ -542,7 +542,11 @@ async function dailyStatus({ mobile = null } = {}) {
        JOIN vehicles v ON v.id = w.vehicle_id
        JOIN users u    ON u.id = w.user_id
       WHERE w.is_active AND (w.expires_at IS NULL OR w.expires_at > now()) AND NOT u.is_paused
-        AND EXISTS (SELECT 1 FROM payments p WHERE p.user_id = w.user_id AND p.status = 'paid' AND p.amount_paise > 0)
+        -- Paid for THIS vehicle (user, 2026-09-27): dates and challans are
+        -- what the ₹19 buys, so a free watch on another vehicle of a paying
+        -- customer must never get them.
+        AND EXISTS (SELECT 1 FROM payments p WHERE p.user_id = w.user_id AND p.status = 'paid' AND p.amount_paise > 0
+                      AND p.raw->>'vehicle_id' = w.vehicle_id::text)
         AND NOT EXISTS (SELECT 1 FROM event_log e WHERE e.user_id = w.user_id
                           AND e.kind IN ('watch_status', 'watch_digest') AND e.detail->>'ist_date' = $1
                           AND coalesce(e.detail->>'failed', 'false') <> 'true')
