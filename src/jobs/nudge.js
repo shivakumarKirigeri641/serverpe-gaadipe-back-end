@@ -25,6 +25,7 @@ const settings = require('../util/settings');
 const flags = require('../util/flags');
 
 const PER_TICK = 20;
+const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';   // as flow.js links the policies
 const SITE_BASE = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 
 function quiet(from, to) {
@@ -58,6 +59,9 @@ async function terms(mins) {
       'Still want to check your vehicle? 🙂\n\n'
       + 'Tap *Agree & continue* below, then send any vehicle number (like KA01XX1234). '
       + 'You will see its insurance, PUC, tax and challan status in seconds.\n\n'
+      // What the button agrees to, in the same message as the button (user,
+      // 2026-09-28) — not only in the terms screen further up the chat.
+      + `By agreeing you accept our Terms (${SITE}/terms), Privacy (${SITE}/privacy) and Refund (${SITE}/refund) policies.\n`
       + '_Reply STOP if you would rather not hear from us._',
       [{ id: 'agree_owner', title: 'Agree & continue' }],
       { footer: 'ServerPe App Solutions' });
