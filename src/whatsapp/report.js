@@ -324,7 +324,27 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
  * the rest is the variant. Imperfect for two-word models, but the whole string
  * is still shown, just split across two lines.
  */
-function basic(data, { price = '₹19', soonDays = 30 } = {}) {
+/**
+ * What needs attention, by NAME — never a date, an amount or a detail (user,
+ * 2026-09-28, whatsapp_free_view_detail = 'labels'). The same conditions as
+ * attentionCount, so the named list and the count always agree.
+ */
+function attentionLabels(data, { soonDays = 30 } = {}) {
+  const rc = data.rc || {};
+  const out = [];
+  for (const d of documentsOf(rc)) {
+    if (d.days < 0) out.push(`${d.label} — expired`);
+    else if (d.days <= soonDays) out.push(`${d.label} — expires soon`);
+  }
+  const pending = data.challans?.pending_count || 0;
+  if (pending > 0) out.push(`Challans — ${pending} pending`);
+  if (/^T|BLACK/i.test(String(rc.blacklist_status || '')) &&
+      !/^NA|NONE|^$/i.test(String(rc.blacklist_status))) out.push('Blacklist — record found');
+  if (rc.status && !/^ACTIVE/i.test(String(rc.status))) out.push('RC — not active');
+  return out;
+}
+
+function basic(data, { price = '₹19', soonDays = 30, detail = 'count' } = {}) {
   const rc = data.rc || {};
   const make = String(rc.maker || '')
     .replace(/\(P\)|\bPVT\.?|\bPRIVATE\b|\bLTD\.?|\bLIMITED\b|\bINDIA\b|\bCO\.?$/gi, '')
@@ -340,11 +360,15 @@ function basic(data, { price = '₹19', soonDays = 30 } = {}) {
   row('Vehicle type', rc.vehicle_class && titleCase(rc.vehicle_class));
 
   const n = attentionCount(data, { soonDays });
-  lines.push('', n
-    ? `⚠️ *${n} thing${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} attention.*\n`
-      + `Get the full report for *${price}* to see what, and what to do about it.`
-    : '✅ Nothing needs attention right now.\n'
-      + `The full report for *${price}* has every date, challan and record behind that.`);
+  const named = detail === 'labels' ? attentionLabels(data, { soonDays }) : [];
+  lines.push('', !n
+    ? '✅ Nothing needs attention right now.\n'
+      + `The full report for *${price}* has every date, challan and record behind that.`
+    : named.length
+      ? `⚠️ *Needs attention:*\n${named.map((t) => `• ${t}`).join('\n')}\n\n`
+        + `Get the full report for *${price}* to see the dates, amounts, challan details and what to do about each.`
+      : `⚠️ *${n} thing${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} attention.*\n`
+        + `Get the full report for *${price}* to see what, and what to do about it.`);
 
   lines.push('', `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · Government records_`);
   return lines.join('\n');
@@ -399,5 +423,5 @@ async function buildFor(data, opts = {}) {
   });
 }
 
-module.exports = { build, buildFor, basic, attentionCount, attentionSummary, safeRc, documentsOf, human,
+module.exports = { build, buildFor, basic, attentionCount, attentionLabels, attentionSummary, safeRc, documentsOf, human,
                    maskName, maskNumber, titleCase, NEVER_SHOW };

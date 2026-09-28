@@ -838,7 +838,13 @@ async function deliverReport(mobile, regNo, message) {
   const plan = bought ? null : await billing.reportPlan();
   await send.text(mobile, bought
     ? await report.buildFor(data, { detailed: true })
-    : report.basic(data, plan ? { price: `₹${Math.round(plan.price_paise / 100)}` } : {}));
+    : report.basic(data, {
+      ...(plan ? { price: `₹${Math.round(plan.price_paise / 100)}` } : {}),
+      // WhatsApp's own free level (user, 2026-09-28): 'labels' names what needs
+      // attention — PUC expired, 2 pending challans — never dates or amounts.
+      // The website keeps free_view_detail; the two are set apart on purpose.
+      detail: String(await settings.get('whatsapp_free_view_detail', 'labels')).toLowerCase(),
+    }));
   await setState(mobile, 'owner_menu', 'basic details sent');
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
   await reportMenu(mobile, regNo, data, bought);
