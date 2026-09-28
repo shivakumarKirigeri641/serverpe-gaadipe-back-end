@@ -5,6 +5,7 @@
  * links sent, half are never opened. Each of them gets ONE reminder:
  *
  *   terms   still on "terms shown" an hour later  → the Agree button again
+ *   number  agreed, but no vehicle number an hour later → what to send
  *   payment latest link still unpaid an hour later → the same link again
  *
  * FREE AND ALLOWED: only inside WhatsApp's 24-hour window after the person's
@@ -65,6 +66,34 @@ async function terms(mins) {
   return sent;
 }
 
+/* Agreed, then went quiet before sending a vehicle number (user, 2026-09-28):
+   the most common reason is not knowing what to send. */
+async function number(mins) {
+  const due = (await db.query(
+    `SELECT id, mobile, user_id FROM whatsapp_sessions
+      WHERE state = 'owner_start' AND number_nudged_at IS NULL AND wa_opt_out_at IS NULL
+        AND modified_at     <= now() - make_interval(mins => $1)
+        AND last_inbound_at <= now() - make_interval(mins => $1)
+        AND last_inbound_at >  now() - interval '23 hours'
+      ORDER BY last_inbound_at LIMIT ${PER_TICK}`, [mins])).rows;
+  let sent = 0;
+  for (const s of due) {
+    const mine = await db.one(
+      `UPDATE whatsapp_sessions SET number_nudged_at = now()
+        WHERE id = $1 AND number_nudged_at IS NULL AND state = 'owner_start'
+          AND last_inbound_at <= now() - make_interval(mins => $2)
+      RETURNING id`, [s.id, mins]);
+    if (!mine) continue;
+    const out = await send.text(s.mobile,
+      'Ready when you are 🙂\n\n'
+      + 'Just send your vehicle number here — like *KA01XX1234* — and I will show its '
+      + 'insurance, PUC, tax and challan status in seconds.\n\n'
+      + '_Reply STOP if you would rather not hear from us._');
+    if (out?.ok) { sent += 1; mark(`nudge_number:${s.id}`, 'whatsapp_reminder_sent', s.mobile, s.user_id, { kind: 'number' }); }
+  }
+  return sent;
+}
+
 async function payments(mins) {
   const base = SITE_BASE();
   if (!base) return 0;
@@ -104,6 +133,7 @@ async function tick() {
   if (quiet(await settings.num('nudge_quiet_from_ist', 21), await settings.num('nudge_quiet_to_ist', 8))) return { sent: 0 };
   const mins = Math.max(15, await settings.num('nudge_after_minutes', 60));
   let sent = await terms(mins);
+  sent += await number(mins);
   if (await flags.on('payments')) sent += await payments(mins);
   return { sent };
 }

@@ -239,10 +239,13 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
 }
 const baseUrl = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 
+/* SHORTER (user, 2026-09-28): 4 in 10 people left at the old 12-line terms
+   screen. The same three documents, the same STOP promise and the same
+   recorded agreement — only fewer words before the button. The documents
+   themselves and the policy version are unchanged, so nobody is re-asked. */
 const INTRO =
-  'Namaste! 🙏 This is *GaadiPe* — Government vehicle records on WhatsApp.\n\n'
-  + 'Before buying a used vehicle, check its loan, blacklist and challan status. '
-  + 'Own one? Get told before a document expires or a new challan appears.\n\n';
+  'Namaste! 🙏 *GaadiPe* shows any vehicle\'s insurance, PUC, tax, challan and loan status '
+  + 'from Government records, right here on WhatsApp.\n\n';
 
 /**
  * One row per step of the owner funnel, all under one kind, so the whole funnel
@@ -295,17 +298,10 @@ const WELCOME =
   + 'What brings you here?';
 
 const OWNER_TERMS =
-  'Before we begin, please read how GaadiPe works:\n\n'
-  + `📄 Terms of Service\n${SITE}/terms\n\n`
-  + `🔒 Privacy Policy\n${SITE}/privacy\n\n`
-  + `💳 Refund Policy\n${SITE}/refund\n\n`
-  + 'In short: GaadiPe shows Government-sourced vehicle records as they are. '
-  + 'We do not show owner name, chassis or engine number.\n\n'
-  // The same promise as the Terms clause (migration 062) — the lines people
+  `Please agree to our Terms (${SITE}/terms), Privacy (${SITE}/privacy) and Refund (${SITE}/refund) policies to continue. `
+  // The same promise as the Terms clause (migration 062) — the line people
   // actually read before they tap.
-  + 'By tapping *Agree & continue* you agree to receive GaadiPe messages on WhatsApp. '
-  + 'Reply *STOP* any time and we will stop messaging you.\n\n'
-  + 'Tap below to continue.';
+  + 'You\'ll get GaadiPe messages here; reply *STOP* anytime.';
 
 const PARTNER_TERMS =
   'Good to have you! 🤝 Please read the partner terms first:\n\n'
