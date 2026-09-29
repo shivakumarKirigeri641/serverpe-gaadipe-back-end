@@ -331,52 +331,20 @@ async function notify(w, items, summary, byVehicle = null) {
   }
 
   /*
-   * THE CUSTOMER'S LANGUAGE FIRST, THEN A NET UNDER IT.
-   *
-   * Meta rejects a template that is pending approval, paused, or was never
-   * submitted in that language — and a rejected alert is an alert the customer
-   * never gets. So each template is tried in turn until one is accepted, and
-   * the last is one already approved. Its parameters differ (3 carries the
-   * details, 4 the date of the check), which is why each attempt carries its
-   * own list rather than sharing one.
+   * ONE APPROVED TEMPLATE (user, 2026-09-29). The per-language and v2 alert
+   * templates are not on the account (#132001) and are gone from here; alerts
+   * go out as gp_monitoring_alert_en_v1 — 1 name, 2 vehicle, 3 what was found,
+   * 4 what to do.
    */
   const checkedOn = fmtDate(new Date());
-  const attempts = [];
-  // Until Meta approves the per-language templates, only the approved v2 is used.
-  const languagesLive = String(await settings.get('template_vehicle_alert_languages_live', 'false')) === 'true';
-  if (languagesLive && w.preferred_language === 'hi') {
-    attempts.push({ name: await settings.get('template_vehicle_alert_hi', 'gp_vehicle_alert_hi_v1'),
-                    language: 'hi', params: [name, w.reg_no, what, summary] });
-  }
-  if (languagesLive) {
-    attempts.push({ name: await settings.get('template_vehicle_alert_en', 'gp_vehicle_alert_en_v1'),
-                    language: 'en', params: [name, w.reg_no, what, summary] });
-  }
-  attempts.push({ name: await settings.get('template_vehicle_alert_fallback', 'gp_vehicle_alert_v2'),
-                  language: 'en', params: [name, w.reg_no, summary, checkedOn] });
-  /* THE LAST NET (user, 2026-09-29): gp_vehicle_alert_v2 no longer exists in
-     English on the account (#132001), and a new challan went unannounced. The
-     approved monitoring template takes 1 name, 2 vehicle, 3 status, 4 action. */
-  const monitoring = await settings.get('template_daily_status', 'gp_monitoring_alert_en_v1');
-  if (!attempts.some((a) => a.name === monitoring)) {
-    attempts.push({ name: monitoring, language: await settings.get('wa_template_language', 'en'),
-      params: [name, w.reg_no, `${summary} (checked ${checkedOn})`.slice(0, 900),
-        'Please take a look — the details are in your GaadiPe report. We will keep watching and tell you when anything changes.'] });
-  }
-
-  /* ANYTHING GOES WRONG, THE FALLBACK IS TRIED (user, 2026-09-18) — not only a
-     template error: the language template may be pending, paused, renamed or
-     simply refused, and the customer should still hear. The fallback is the
-     last attempt and is always an approved template. */
-  for (let i = 0; i < attempts.length; i++) {
-    const t = attempts[i];
-    const r = await send.template(w.mobile, t.name, t.params, { language: t.language });
-    if (r.ok) return { ok: true, template: t.name };
-    const last = i === attempts.length - 1;
-    console.warn('[watch] template %s (%s) failed%s: %s', t.name, t.language,
-      last ? ' — no fallback left' : ' — trying the fallback', r.error);
-    if (last) return { ok: false, error: r.error };
-  }
+  const tpl = await settings.get('template_daily_status', 'gp_monitoring_alert_en_v1');
+  const r = await send.template(w.mobile, tpl,
+    [name, w.reg_no, `${summary} (checked ${checkedOn})`.slice(0, 900),
+     `Please take a look at the ${what.toLowerCase() || 'change'} — the details are in your GaadiPe report. We will keep watching and tell you when anything changes.`],
+    { language: await settings.get('wa_template_language', 'en') });
+  if (r.ok) return { ok: true, template: tpl };
+  console.warn('[watch] alert template %s failed: %s', tpl, r.error);
+  return { ok: false, error: r.error };
 }
 
 /**
@@ -403,7 +371,6 @@ async function lifecycle() {
     [String(noticeBefore)]);
 
   for (const t of ending.rows) {
-    const name = (t.wa_profile_name || 'there').split(' ')[0];
     const price = Math.round(await settings.num('first_payment_paise', 4900) / 100);
     const when = new Date(t.expires_at);
     if (await send.windowOpen(t.mobile)) {
@@ -411,83 +378,19 @@ async function lifecycle() {
         `Your free trial for *${t.reg_no}* ends on *${fmtDate(when)}*.\n\n`
         + `To keep monitoring this vehicle, it is ₹${price} for 28 days. `
         + 'Nothing is charged automatically.');
-    } else {
-      const tpl = await settings.get('template_trial_ending', 'gp_trialending_v1');
-      await send.template(t.mobile, tpl, [name, t.reg_no, String(price)]);
     }
+    // Outside the window nothing is sent: there is no approved trial template
+    // (and trials are off — trial_enabled).
     await db.query(
       `INSERT INTO event_log (user_id, kind, detail)
        SELECT user_id, 'trial_ending_notice', $2 FROM watches WHERE id = $1`,
       [t.id, JSON.stringify({ watch_id: String(t.id), reg_no: t.reg_no })]);
   }
 
-  /* --------------------------------------------------- paid, ending soon */
-
-  // A trial ending is a sales moment; a paid subscription ending is a service
-  // one. Someone who paid expects to be told before their alerts stop, and
-  // being dropped in silence is how a renewable customer is lost for good.
-  const renewalDays = await settings.num('renewal_notice_days', 3);
-  const dueRenewal = await db.query(
-    `SELECT s.id, s.ends_on, v.reg_no, u.mobile, u.wa_profile_name,
-            pl.kind AS plan_kind, pl.price_paise AS plan_price_paise
-       FROM subscriptions s
-       JOIN vehicles v ON v.id = s.vehicle_id
-       JOIN users    u ON u.id = s.user_id
-       JOIN plans    pl ON pl.id = s.plan_id
-      WHERE s.is_active
-        AND s.ends_on <= (CURRENT_DATE + ($1 || ' days')::interval)
-        AND s.ends_on >= CURRENT_DATE
-        AND NOT u.is_paused
-        AND NOT EXISTS (
-          SELECT 1 FROM event_log e
-           WHERE e.kind = 'renewal_notice'
-             AND e.detail->>'subscription_id' = s.id::text
-             AND e.detail->>'ends_on' = s.ends_on::text)`,
-    [String(renewalDays)]);
-
-  for (const s of dueRenewal.rows) {
-    const name = (s.wa_profile_name || 'there').split(' ')[0];
-    const isReport = s.plan_kind === 'report';
-    const price = isReport
-      ? Math.round(s.plan_price_paise / 100)
-      : Math.round(await settings.num('renewal_paise', 3900) / 100);
-    const ends = fmtDate(new Date(s.ends_on));
-
-    if (isReport && await send.windowOpen(s.mobile)) {
-      // A report is bought again, not renewed: the offer is today's records and
-      // a fresh 28 days of alerts, at the same one-time price.
-      await send.text(s.mobile,
-        `Alerts for *${s.reg_no}* end on *${ends}*.\n\n`
-        + `Send me *${s.reg_no}* to see today's records — a fresh full report is ₹${price} `
-        + 'and includes another 28 days of alerts. Nothing renews automatically.');
-    } else if (await send.windowOpen(s.mobile)) {
-      await send.text(s.mobile,
-        `Monitoring for *${s.reg_no}* ends on *${ends}*.\n\n`
-        + `To continue, it is ₹${price} for the next 28 days. `
-        + 'Nothing is charged automatically — send me the vehicle number when you '
-        + 'are ready and I will send a payment link.');
-    } else {
-      const tpl = await settings.get('template_renewal_due', 'gp_premiumrenewal_v1');
-      // gp_premiumrenewal_v1 asks for days remaining, not a date.
-      const daysLeft = Math.max(0, Math.round(
-        (new Date(s.ends_on) - Date.now()) / (24 * 60 * 60 * 1000)));
-      await send.template(s.mobile, tpl, [name, s.reg_no, String(daysLeft)]);
-    }
-
-    // The marker is built in SQL, not in JavaScript. The de-duplication above
-    // compares against `ends_on::text`, and a JS-formatted date will not match
-    // it — String(date) yields "Wed Sep 10 2026 …", so the notice was sent
-    // again on every pass. Formatting both sides in the same place removes the
-    // possibility rather than fixing one instance of it.
-    await db.query(
-      `INSERT INTO event_log (user_id, kind, detail)
-       SELECT user_id, 'renewal_notice',
-              jsonb_build_object('subscription_id', id::text,
-                                 'reg_no', $2::text,
-                                 'ends_on', ends_on::text)
-         FROM subscriptions WHERE id = $1`,
-      [s.id, s.reg_no]);
-  }
+  /* The renewal reminder before a paid period ends is sent by jobs/renewal.js
+     (WhatsApp gp_renewal_en_v1 + email). A second copy here used
+     gp_premiumrenewal_v1, which is not on the account, and its "already told"
+     marker then stopped the working one (user, 2026-09-29). */
 
   // Subscriptions that have run out stop being active, which stops their watch.
   const lapsed = await db.query(
@@ -518,7 +421,7 @@ async function lifecycle() {
   }
   if (expired.rowCount) console.log('[watch] %d watch(es) expired', expired.rowCount);
 
-  return { notified: ending.rowCount, renewals: dueRenewal.rowCount,
+  return { notified: ending.rowCount, renewals: 0,
            lapsed: lapsed.rowCount, expired: expired.rowCount };
 }
 
