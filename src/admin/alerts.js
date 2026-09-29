@@ -197,7 +197,7 @@ async function resolve(id, adminId, note) {
 /** Everything worth a pop-up since `since` (an ISO time), oldest first. */
 async function feed(since) {
   const from = since && !Number.isNaN(Date.parse(since)) ? new Date(since) : new Date(Date.now() - 60000);
-  const [paid, opened, recovered] = await Promise.all([
+  const [paid, opened, recovered, activity] = await Promise.all([
     db.query(
       `SELECT e.id, e.occurred_at AS at, e.amount_paise, e.reg_no, coalesce(e.mobile, u.mobile) AS mobile,
               coalesce(u.display_name, u.wa_profile_name) AS person_name, e.metadata->>'method' AS method,
@@ -211,7 +211,19 @@ async function feed(since) {
     db.query(`SELECT id, resolved_at AS at, severity, source, title FROM admin_alerts
                WHERE resolved_at > $1 AND resolved_by IS NULL AND resolution = 'Cleared by itself'
                ORDER BY resolved_at LIMIT 20`, [from]),
+    // Someone said hi, or checked a vehicle (user, 2026-09-29): a pop-up
+    // that comes and goes. Internal accounts are left out.
+    db.query(
+      `SELECT e.id, e.occurred_at AS at, e.name, e.reg_no, coalesce(e.mobile, u.mobile) AS mobile,
+              coalesce(u.display_name, u.wa_profile_name,
+                       (SELECT ws.profile_name FROM whatsapp_sessions ws WHERE ws.mobile = e.mobile)) AS person_name,
+              (SELECT ws.attribution->>'channel' FROM whatsapp_sessions ws WHERE ws.mobile = coalesce(e.mobile, u.mobile)) AS came_from
+         FROM events e LEFT JOIN users u ON u.id = e.user_id OR (e.user_id IS NULL AND u.mobile = e.mobile)
+        WHERE e.name IN ('whatsapp_greeting', 'vehicle_search_success') AND e.occurred_at > $1
+          AND NOT coalesce(u.is_internal, false)
+        ORDER BY e.occurred_at LIMIT 20`, [from]),
   ]);
+  const who = (r) => [r.person_name, r.mobile ? `…${String(r.mobile).slice(-4)}` : null].filter(Boolean).join(' · ');
   const items = [
     ...paid.rows.map((p) => ({ kind: 'payment', id: `pay:${p.id}`, at: p.at, tone: 'good',
       title: 'Payment received', amount_paise: p.amount_paise, reg_no: p.reg_no, source: p.source,
@@ -221,6 +233,11 @@ async function feed(since) {
       severity: a.severity, title: a.title, text: a.description })),
     ...recovered.rows.map((a) => ({ kind: 'recovered', id: `ok:${a.id}`, at: a.at, tone: 'good',
       title: `Recovered: ${a.title}`, text: 'The condition cleared by itself.' })),
+    ...activity.rows.map((r) => (r.name === 'whatsapp_greeting'
+      ? { kind: 'hi', id: `hi:${r.id}`, at: r.at, tone: 'info', title: '👋 Someone said hi',
+          text: [who(r), r.came_from === 'whatsapp_ad' ? 'from your ad' : null].filter(Boolean).join(' · '), mobile: r.mobile }
+      : { kind: 'check', id: `chk:${r.id}`, at: r.at, tone: 'info', title: `🔍 Vehicle checked${r.reg_no ? ` · ${r.reg_no}` : ''}`,
+          text: who(r), mobile: r.mobile, reg_no: r.reg_no })),
   ].sort((a, b) => new Date(a.at) - new Date(b.at));
   return { items, at: new Date().toISOString() };
 }
