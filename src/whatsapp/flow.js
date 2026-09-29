@@ -76,6 +76,7 @@ const BTN = {
   MY_REPORTS: 'my_reports',
   INVOICE: 'invoice',
   MENU: 'menu',
+  FLEET: 'fleet',
 };
 
 const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
@@ -94,12 +95,34 @@ const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
  * and a reply button is one tap where a list is two. Anything rarer lives
  * behind Support or the longer menu.
  */
+/* "More" (user, 2026-09-29): the longer list — Support, Fleet, invoices,
+   feedback — was only ever reached from two rare error messages. Support is
+   its first row. */
 async function doors(mobile, body) {
   return send.buttons(mobile, body, [
     { id: BTN.CHECK_ANOTHER, title: 'Check vehicle' },
     { id: BTN.MY_REPORTS,    title: 'My vehicle reports' },
-    { id: BTN.SUPPORT,       title: 'Support' },
+    { id: BTN.MENU,          title: 'More' },
   ]);
+}
+
+/* GaadiPe for fleets (user, 2026-09-29): by email only. The owner writes to
+   support@gaadipe.in with the vehicle list; the admin quotes, and once paid
+   and approved the fleet gets one Excel email every evening. */
+async function sendFleetInfo(mobile) {
+  await send.text(mobile,
+    '🚛 *GaadiPe for fleets* — 5 or more vehicles\n\n'
+    + 'Every evening, one email with an *Excel report of your whole fleet*: a row per vehicle, '
+    + 'with insurance, PUC (emission test), road tax, fitness, permit and pending challans — '
+    + 'coloured green, amber or red so you see at once what needs action.\n\n'
+    + '*To start, email support@gaadipe.in with:*\n'
+    + '1. Company name and your name\n'
+    + '2. Email for the daily report\n'
+    + '3. GSTIN (for a GST invoice, optional)\n'
+    + '4. The list of vehicle numbers (5 or more)\n'
+    + '5. The line: "We own or operate these vehicles"\n\n'
+    + 'Subject: *Fleet enquiry*\n'
+    + 'We reply quickly with your quotation — ₹19 per vehicle for 28 days.');
 }
 
 /**
@@ -225,6 +248,8 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
     button: 'Choose',
     sectionTitle: 'GaadiPe',
     rows: [
+      { id: BTN.SUPPORT,         title: 'Support',          description: 'Ask us anything — we reply with a ticket number' },
+      { id: BTN.FLEET,           title: 'Fleet (5+ vehicles)', description: 'Daily Excel report of all your vehicles, by email' },
       { id: BTN.CHECK_ANOTHER,   title: 'Check a vehicle',  description: 'Any Indian number — basics are free' },
       { id: BTN.DOWNLOAD_REPORT, title: 'My reports',       description: 'Send my report PDF again' },
       { id: BTN.INVOICE,         title: 'My GST invoice',   description: 'The tax invoice for a payment' },
@@ -1519,6 +1544,10 @@ async function handle(session, message, mobile) {
 
       case BTN.SUPPORT:
         await sendSupportLink(mobile);
+        return;
+
+      case BTN.FLEET:
+        await sendFleetInfo(mobile);
         return;
 
       case BTN.INVOICE:

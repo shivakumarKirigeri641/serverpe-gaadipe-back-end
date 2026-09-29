@@ -113,6 +113,16 @@ async function handle(body) {
     return;
   }
 
+  // A fleet's quotation or renewal link (user, 2026-09-29): "fl-<fleet_payments.id>".
+  if (String(reference).startsWith('fl-')) {
+    if (event !== 'payment_link.paid' && !(event === 'payment.captured' && payment?.notes?.fleet_payment_id)) return;
+    const fpId = Number(String(reference).slice(3));
+    const out = await require('../fleet/fleets').markPaid(fpId, { razorpayPaymentId: payment?.id || null })
+      .catch((e) => ({ ok: false, reason: e.message }));
+    console.log('[pay] fleet payment %s -> %s', fpId, out.ok ? 'paid' : out.reason);
+    return;
+  }
+
   // "gp-42-m1k9x" -> 42. Older links carried the bare id, so both are accepted.
   const rowId = Number(String(reference).startsWith('gp-')
     ? String(reference).split('-')[1]

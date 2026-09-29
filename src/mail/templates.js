@@ -53,7 +53,7 @@ const duration = (sec) => {
  *            (intro: raw HTML blocks placed before them)
  */
 function layout({ preheader = '', badge, title, lead, stats = [], sections = [], note, cta, footer,
-                  tagline = 'Admin alert', footerHtml = '', blocks = [], intro = [] }) {
+                  tagline = 'Admin alert', footerHtml = '', blocks = [], intro = [], repliesWelcome = false }) {
   const tone = TONES[badge?.tone] || TONES.info;
   const statCells = stats.map(([k, v]) => `
       <td style="padding:0 6px 12px 6px;" width="${Math.floor(100 / stats.length)}%" valign="top">
@@ -113,7 +113,8 @@ function layout({ preheader = '', badge, title, lead, stats = [], sections = [],
     <tr><td style="padding:22px 28px 26px 28px;">
       <div style="border-top:1px solid #e3ecea;padding-top:14px;font-size:11.5px;line-height:1.6;color:#6b8380;">
         ${esc(footer || 'You are receiving this because you administer GaadiPe. Alerts can be switched off under Settings in the admin panel.')}<br>
-        ${footerHtml ? `${footerHtml}<br>` : ''}GaadiPe · ServerPe App Solutions · Bengaluru · This mailbox is not monitored — please do not reply.
+        ${footerHtml ? `${footerHtml}<br>` : ''}GaadiPe · ServerPe App Solutions · Bengaluru · ${repliesWelcome
+          ? 'Reply to this email — it reaches support@gaadipe.in.' : 'This mailbox is not monitored — please do not reply.'}
       </div>
     </td></tr>
   </table>

@@ -437,6 +437,65 @@ router.post('/alerts/:id/resolve', safe(async (req, res) => {
   if (ok) await auth.audit({ adminId: req.admin.id, action: 'alert_resolved', ip: ipOf(req), detail: { alert_id: req.params.id, note: req.body?.note || null } });
   res.json({ ok });
 }));
+/* ─────────────────────────── fleets (user, 2026-09-29, src/fleet/*) ── */
+const fleets = require('../fleet/fleets');
+const fleetId = (req) => String(req.params.id).replace(/\D/g, '') || '0';
+const fleetAudit = (req, action, detail = {}) => auth.audit({ adminId: req.admin.id, action, ip: ipOf(req), detail: { fleet_id: fleetId(req), ...detail } });
+router.get('/fleets', needs('dashboard.view'), safe(async (req, res) => res.json(await fleets.list({ status: req.query.status || null }))));
+router.get('/fleets/:id', needs('dashboard.view'), safe(async (req, res) => {
+  const out = await fleets.get(fleetId(req));
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'No such fleet.' });
+  res.json(out);
+}));
+router.post('/fleets', needs('settings'), safe(async (req, res) => {
+  const out = await fleets.create(req.body, req.admin);
+  if (out.ok) await auth.audit({ adminId: req.admin.id, action: 'fleet_created', ip: ipOf(req), detail: { fleet_id: out.id } });
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.patch('/fleets/:id', needs('settings'), safe(async (req, res) => {
+  const out = await fleets.update(fleetId(req), req.body, req.admin);
+  if (out.ok) await fleetAudit(req, 'fleet_edited');
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.post('/fleets/:id/vehicles', needs('settings'), safe(async (req, res) => {
+  const out = await fleets.changeVehicles(fleetId(req), { add: req.body?.add, remove: req.body?.remove || [] }, req.admin);
+  if (out.ok) await fleetAudit(req, 'fleet_vehicles', { added: out.added.length, removed: out.removed.length });
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.post('/fleets/:id/quote', needs('settings'), safe(async (req, res) => {
+  const out = await fleets.quote(fleetId(req), { amountPaise: req.body?.amount_paise }, req.admin);
+  if (out.ok) await fleetAudit(req, 'fleet_quoted', { amount_paise: out.payment.amount_paise });
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.post('/fleets/:id/approve', needs('settings'), safe(async (req, res) => {
+  const out = await fleets.approve(fleetId(req), req.admin);
+  if (out.ok) await fleetAudit(req, 'fleet_approved');
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.post('/fleets/:id/status', needs('settings'), safe(async (req, res) => {
+  const to = String(req.body?.to || '');
+  const out = await fleets.setStatus(fleetId(req), to, req.admin);
+  if (out.ok) await fleetAudit(req, `fleet_${to}`);
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.post('/fleets/:id/note', needs('dashboard.view'), safe(async (req, res) => {
+  const out = await fleets.note(fleetId(req), req.body?.text, req.admin);
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.post('/fleets/:id/send-report', needs('settings'), safe(async (req, res) => {
+  const out = await fleets.sendReport(fleetId(req), { force: true, admin: req.admin });
+  if (out.ok) await fleetAudit(req, 'fleet_report_sent');
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.get('/fleets/:id/excel', needs('dashboard.view'), safe(async (req, res) => {
+  const out = await fleets.excelNow(fleetId(req));
+  if (!out) return res.status(404).json({ error: 'not_found' });
+  await fleetAudit(req, 'fleet_excel_download');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="GaadiPe-Fleet-${out.company.replace(/[^\w]+/g, '-')}.xlsx"`);
+  res.send(out.buffer);
+}));
+
 router.get('/feed', safe(async (req, res) => res.json(await alertCenter.feed(req.query.since))));
 router.get('/badges', safe(async (_req, res) => res.json(await alertCenter.badges())));
 

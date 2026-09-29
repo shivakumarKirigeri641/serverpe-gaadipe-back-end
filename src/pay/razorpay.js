@@ -107,6 +107,31 @@ async function createLink({ amountPaise, mobile, name, description, referenceId,
 }
 
 /**
+ * A payment link for a fleet quotation (user, 2026-09-29). Unlike a customer's
+ * link it may have no mobile — fleets are dealt with by email — and Razorpay
+ * sends nothing itself: the quotation email carries the link.
+ */
+async function createFleetLink({ amountPaise, description, referenceId, name, email, mobile, notes = {}, expireBy }) {
+  const contact = String(mobile || '').replace(/\D/g, '').slice(-10);
+  return call('/payment_links', 'POST', {
+    amount: amountPaise,
+    currency: 'INR',
+    accept_partial: false,
+    description: String(description).slice(0, 2048),
+    reference_id: String(referenceId),
+    customer: {
+      name: name || undefined,
+      email: email || undefined,
+      contact: contact.length === 10 ? `+91${contact}` : undefined,
+    },
+    notify: { sms: false, email: false },
+    reminder_enable: false,
+    notes,
+    expire_by: Math.floor(new Date(expireBy).getTime() / 1000),
+  });
+}
+
+/**
  * Did this webhook really come from Razorpay?
  *
  * Same reasoning as Meta's: the endpoint is a public URL that grants paid
@@ -177,5 +202,5 @@ const listPayments = ({ from, to, skip = 0, count = 100 }) => call(
 /** Every payment attempted against an order — the reconciler looks for a captured one. */
 const getOrderPayments = (orderId) => call(`/orders/${orderId}/payments`);
 
-module.exports = { createLink, createOrder, verifyWebhook, verifyCheckout,
+module.exports = { createLink, createFleetLink, createOrder, verifyWebhook, verifyCheckout,
                    getPayment, getLink, getOrderPayments, listPayments, configured, isLive, KEY };

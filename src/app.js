@@ -77,7 +77,7 @@ const { gate, loopGuard } = require('./security/guard');
 const { tunnel } = require('./security/tunnel');
 // Files come back as files, not through the encrypted tunnel: report and
 // invoice PDFs, the backup, and the CSV exports (command center phase 3).
-const fileRoute = (req) => /^\/((reports|invoices)\/[^/]+\/file|maintenance\/backup|export\/[a-z_]+(\.csv)?|exports\/\d+\/file)$/.test(req.path);
+const fileRoute = (req) => /^\/((reports|invoices)\/[^/]+\/file|maintenance\/backup|export\/[a-z_]+(\.csv)?|exports\/\d+\/file|fleets\/\d+\/excel)$/.test(req.path);
 
 app.use('/admin/api', cors(config.admin.origins), gate('admin'), tunnel('admin', { exempt: fileRoute }),
   loopGuard('admin'), adminRoutes);
@@ -234,6 +234,8 @@ app.listen(config.port, () => {
   require('./jobs/maintenance').start(Number(process.env.MAINTENANCE_TICK_SECONDS) || 3600);
   // One free reminder inside the 24-hour window: terms not agreed, link not paid.
   require('./jobs/nudge').start(Number(process.env.NUDGE_TICK_SECONDS) || 300);
+  // Fleets: daily checks, the 7 pm Excel email, renewal links and expiry.
+  require('./jobs/fleet').start(Number(process.env.FLEET_TICK_SECONDS) || 300);
   // A paid report issued while e-Challan was down: completed when it answers.
   require('./jobs/challanFollowup').start(Number(process.env.CHALLAN_FOLLOWUP_TICK_SECONDS) || 300);
 
