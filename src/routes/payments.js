@@ -35,6 +35,16 @@ router.post('/payments/webhook', (req, res) => {
 
   if (verdict === 'bad' || verdict === 'missing') {
     console.warn('[pay] rejected webhook: signature %s', verdict);
+    // Emailed to the admin (user, 2026-09-29): a real payment's webhook
+    // rejected means a fleet payment is never marked paid. Once per open alert.
+    require('../admin/alerts').raise({
+      key: 'razorpay_webhook_rejected', severity: 'critical', source: 'payments',
+      title: 'Razorpay webhook rejected',
+      description: `A Razorpay webhook arrived with a ${verdict} signature and was ignored. If a real payment was behind it, `
+        + 'it was not recorded here (fleet payments depend on this). Check that the webhook secret in the Razorpay dashboard '
+        + 'matches RAZORPAY_WEBHOOK on the server, and that no other webhook (e.g. QuizPe) points at this URL.',
+      detail: { verdict, event: req.body?.event || null, at: new Date().toISOString() },
+    }).catch(() => {});
     // 200 regardless: a 4xx would make Razorpay retry a request we will never
     // accept, for 24 hours.
     return res.sendStatus(200);
@@ -44,6 +54,8 @@ router.post('/payments/webhook', (req, res) => {
   }
 
   res.sendStatus(200);
+  // A properly signed webhook: whatever was wrong with the secret is fixed.
+  if (verdict === 'ok') require('../admin/alerts').clear('razorpay_webhook_rejected', 'A signed webhook arrived').catch(() => {});
   handle(req.body).catch(e => console.error('[pay] handling failed:', e.message));
 });
 

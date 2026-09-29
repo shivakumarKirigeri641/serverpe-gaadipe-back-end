@@ -58,19 +58,41 @@ const auth = () => 'Basic ' + Buffer.from(`${KEY}:${SECRET}`).toString('base64')
 
 const configured = () => Boolean(KEY && SECRET);
 
+/*
+ * A failed Razorpay call is an admin alert (user, 2026-09-29): when orders or
+ * payment links cannot be created, nobody can pay. Only creating things
+ * (POST) raises it — a failed lookup is retried by the reconcilers — and the
+ * next successful POST clears it.
+ */
+const alertOn = (e, path) => require('../admin/alerts').raise({
+  key: 'razorpay_api_failing', severity: 'critical', source: 'payments', title: 'Razorpay not accepting requests',
+  description: `Creating ${path.startsWith('/payment_links') ? 'a payment link' : path.startsWith('/orders') ? 'an order' : path} failed: ${e.message}. `
+    + 'Customers may not be able to pay. Check the Razorpay dashboard (account status, API keys) and the server logs.',
+  detail: { path, code: e.code || null, message: String(e.message).slice(0, 300) },
+}).catch(() => {});
+
 async function call(path, method = 'GET', body) {
-  const res = await fetch(`https://api.razorpay.com/v1${path}`, {
-    method,
-    headers: { Authorization: auth(), 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(20000),
-  });
+  let res;
+  try {
+    res = await fetch(`https://api.razorpay.com/v1${path}`, {
+      method,
+      headers: { Authorization: auth(), 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch (err) {
+    if (method === 'POST') await alertOn(err, path);
+    throw err;
+  }
   const json = await res.json().catch(() => ({}));
   if (json.error) {
     const e = new Error(json.error.description || 'razorpay error');
     e.code = json.error.code;
+    // A customer's own bad input is not an outage.
+    if (method === 'POST' && !/BAD_REQUEST_ERROR/.test(String(e.code || ''))) await alertOn(e, path);
     throw e;
   }
+  if (method === 'POST') await require('../admin/alerts').clear('razorpay_api_failing', 'Razorpay accepted a request again').catch(() => {});
   return json;
 }
 
