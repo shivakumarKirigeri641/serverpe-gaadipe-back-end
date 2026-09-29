@@ -201,6 +201,40 @@ async function quote(id, { amountPaise } = {}, admin) {
   return { ok: true, payment: { ...row, id: String(row.id) }, emailed: out.ok, email_error: out.ok ? null : out.error };
 }
 
+/**
+ * A fleet invoice's PDF from its stored row — amounts, number, date and place
+ * of supply as issued; one line per vehicle it covered. Used when it is issued
+ * and when a lost file is rebuilt (pay/rebuild.js).
+ */
+async function renderFleetInvoice(row, fp, fleet, business) {
+  const inv = require('../pay/invoice');
+  fp = fp || await db.one(`SELECT * FROM fleet_payments WHERE id = $1`, [row.fleet_payment_id]);
+  fleet = fleet || await db.one(`SELECT * FROM fleets WHERE id = $1`, [fp.fleet_id]);
+  business = business || await db.one(`SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
+  const home = String(business.home_state_code || '29');
+  const pos = String(row.place_of_supply || home);
+  const base = Number(row.base_paise); const cgst = Number(row.cgst_paise || 0); const sgst = Number(row.sgst_paise || 0); const igst = Number(row.igst_paise || 0);
+  const vehicles = Array.isArray(fp.covered) && fp.covered.length ? fp.covered : [];
+  const n = Math.max(1, vehicles.length);
+  const each = Math.floor(base / n);
+  const lineItems = (vehicles.length ? vehicles : [null]).map((reg, i) => ({
+    reg_no: reg, description: reg ? `GaadiPe Fleet monitoring — ${reg} (${fp.period_days} days)` : `GaadiPe Fleet monitoring — ${fp.vehicles} vehicles (${fp.period_days} days)`,
+    taxable: (i === n - 1 ? base - each * (n - 1) : each) / 100,
+  }));
+  return require('../pdf/invoice').buildInvoice({
+    invoice: {
+      invoice_number: row.invoice_number, invoice_date: row.invoice_date, customer_name: row.buyer_name || fleet.company,
+      customer_gstin: row.buyer_gstin, customer_email: fleet.email, customer_mobile: fleet.mobile,
+      place_of_supply: inv.STATES[pos] || 'Karnataka', place_of_supply_code: pos, is_interstate: pos !== home, sac_code: '998319',
+      taxable_amount: base / 100, cgst_amount: cgst / 100, sgst_amount: sgst / 100, igst_amount: igst / 100,
+      total_tax: (cgst + sgst + igst) / 100, gross_amount: Number(row.total_paise) / 100,
+    },
+    business, gst: { cgst_percent: 9, sgst_percent: 9, igst_percent: 18, sac_code: '998319' },
+    lineItems,
+    lineItem: { payment_id: fp.razorpay_payment_id, method: 'ONLINE', paid_at: fp.paid_at },
+  });
+}
+
 /** The GST invoice for a fleet payment: one line per vehicle. */
 async function invoiceFor(fp, fleet) {
   const existing = await db.one(`SELECT * FROM invoices WHERE fleet_payment_id = $1`, [fp.id]);
@@ -225,25 +259,11 @@ async function invoiceFor(fp, fleet) {
     return rows[0];
   });
 
+  // The vehicles covered, frozen onto the payment so the invoice can always be
+  // re-printed exactly — even after vehicles are added or removed later.
   const vehicles = (await db.query(`SELECT reg_no FROM fleet_vehicles WHERE fleet_id = $1 AND removed_at IS NULL ORDER BY reg_no`, [fleet.id])).rows.map((r) => r.reg_no);
-  const n = Math.max(1, vehicles.length);
-  const each = Math.floor(base / n);
-  const lineItems = (vehicles.length ? vehicles : ['Fleet']).map((reg, i) => ({
-    reg_no: reg, description: `GaadiPe Fleet monitoring — ${reg} (${fp.period_days} days)`,
-    taxable: (i === n - 1 ? base - each * (n - 1) : each) / 100,
-  }));
-  const pdf = await require('../pdf/invoice').buildInvoice({
-    invoice: {
-      invoice_number: row.invoice_number, invoice_date: row.invoice_date, customer_name: fleet.company,
-      customer_gstin: fleet.gstin, customer_email: fleet.email, customer_mobile: fleet.mobile,
-      place_of_supply: inv.STATES[pos] || 'Karnataka', place_of_supply_code: pos, is_interstate: inter, sac_code: '998319',
-      taxable_amount: base / 100, cgst_amount: cgst / 100, sgst_amount: sgst / 100, igst_amount: igst / 100,
-      total_tax: tax / 100, gross_amount: gross / 100,
-    },
-    business, gst: { cgst_percent: 9, sgst_percent: 9, igst_percent: 18, sac_code: '998319' },
-    lineItems,
-    lineItem: { payment_id: fp.razorpay_payment_id, method: 'ONLINE', paid_at: fp.paid_at },
-  });
+  await db.query(`UPDATE fleet_payments SET covered = $2 WHERE id = $1`, [fp.id, JSON.stringify(vehicles)]);
+  const pdf = await renderFleetInvoice(row, { ...fp, covered: vehicles }, fleet, business);
   const dir = path.join(__dirname, '..', 'uploads', 'invoices');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${row.invoice_number}.pdf`);
@@ -351,4 +371,4 @@ async function excelNow(id) {
 }
 
 module.exports = { list, get, create, update, changeVehicles, quote, markPaid, approve, setStatus, note, sendReport, excelNow,
-  invoiceFor, parsePlates, event, istDate };
+  invoiceFor, renderFleetInvoice, parsePlates, event, istDate };

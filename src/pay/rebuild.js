@@ -34,6 +34,8 @@ const DIRS = {
  * `one` runs a one-row query — the app's database unless a script passes its own.
  */
 function renderInvoice(inv, business, one) {
+  // A fleet's invoice has no customer payment behind it (src/fleet).
+  if (inv.fleet_payment_id && !one) return require('../fleet/fleets').renderFleetInvoice(inv, null, null, business);
   return renderStored(inv, { business, ...(one ? { one } : {}) });
 }
 
