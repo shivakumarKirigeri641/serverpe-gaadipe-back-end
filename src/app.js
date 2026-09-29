@@ -121,6 +121,8 @@ app.use('/serverpe/platform/gaadipe/v1/public/users', paymentRoutes);
 // authorisation, it belongs to exactly one payment, and it grants nothing
 // except the right to pay that one amount.
 app.use('/', checkoutRoutes);
+// The fleet enquiry form, at /fleet/<token>, opened from WhatsApp's "For fleets".
+app.use('/', require('./routes/fleet'));
 
 // The confirm and unsubscribe links in customer email. The token is the authorisation.
 app.use('/', require('./routes/email'));

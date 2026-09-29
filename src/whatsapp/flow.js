@@ -76,6 +76,7 @@ const BTN = {
   MY_REPORTS: 'my_reports',
   INVOICE: 'invoice',
   MENU: 'menu',
+  FLEET: 'fleet',
 };
 
 const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
@@ -94,12 +95,29 @@ const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
  * and a reply button is one tap where a list is two. Anything rarer lives
  * behind Support or the longer menu.
  */
+/* "More" (user, 2026-09-29), not "Support": the longer list was only ever
+   reached from two rare error messages, so nothing in it — invoices, fleets —
+   could be found. Support is its first row: two taps instead of one. */
 async function doors(mobile, body) {
   return send.buttons(mobile, body, [
     { id: BTN.CHECK_ANOTHER, title: 'Check vehicle' },
     { id: BTN.MY_REPORTS,    title: 'My vehicle reports' },
-    { id: BTN.SUPPORT,       title: 'Support' },
+    { id: BTN.MENU,          title: 'More' },
   ]);
+}
+
+/* For fleets (user, 2026-09-29): a link to one form — no typing in the chat.
+   What they send is emailed to support@gaadipe.in (src/fleet/enquiries.js). */
+async function sendFleetLink(mobile) {
+  const user = await store.upsertUser(mobile);
+  const { url, hours } = await require('../fleet/enquiries').linkFor({ userId: user.id, mobile });
+  await send.text(mobile,
+    '🚛 *GaadiPe for fleets* (5 or more vehicles)\n\n'
+    + '• One Excel report every day covering all your vehicles\n'
+    + '• Challans, insurance, PUC (emission test), tax, fitness, permit\n'
+    + '• Warnings before anything expires\n'
+    + '• A fleet dashboard and a GST invoice\n\n'
+    + `Fill in this short form and our team will email you your plan (the link works for ${hours} hours):\n${url}`);
 }
 
 /**
@@ -224,11 +242,13 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
     body,
     button: 'Choose',
     sectionTitle: 'GaadiPe',
+    // "Refer & get free" is gone (user, 2026-09-29): no free reports.
     rows: [
+      { id: BTN.SUPPORT,         title: 'Support',          description: 'Ask us anything — we reply with a ticket number' },
+      { id: BTN.FLEET,           title: 'For fleets (5+)',  description: 'Many vehicles? Daily Excel report & GST invoice' },
       { id: BTN.CHECK_ANOTHER,   title: 'Check a vehicle',  description: 'Any Indian number — basics are free' },
       { id: BTN.DOWNLOAD_REPORT, title: 'My reports',       description: 'Send my report PDF again' },
       { id: BTN.INVOICE,         title: 'My GST invoice',   description: 'The tax invoice for a payment' },
-      { id: BTN.REFER,           title: 'Refer & get free', description: 'A friend buys, your next is free' },
       { id: BTN.FEEDBACK,        title: 'Feedback',         description: 'Tell us what is wrong or missing' },
     ],
   });
@@ -1581,6 +1601,10 @@ async function handle(session, message, mobile) {
 
       case BTN.SUPPORT:
         await sendSupportLink(mobile);
+        return;
+
+      case BTN.FLEET:
+        await sendFleetLink(mobile);
         return;
 
       case BTN.REFER:
