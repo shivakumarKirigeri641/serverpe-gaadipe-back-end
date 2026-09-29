@@ -228,7 +228,6 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
       { id: BTN.CHECK_ANOTHER,   title: 'Check a vehicle',  description: 'Any Indian number — basics are free' },
       { id: BTN.DOWNLOAD_REPORT, title: 'My reports',       description: 'Send my report PDF again' },
       { id: BTN.INVOICE,         title: 'My GST invoice',   description: 'The tax invoice for a payment' },
-      { id: BTN.REFER,           title: 'Refer & get free', description: 'A friend buys, your next is free' },
       { id: BTN.FEEDBACK,        title: 'Feedback',         description: 'Tell us what is wrong or missing' },
     ],
   });
