@@ -142,6 +142,8 @@ const rupees = (paise) => '₹' + Math.round((paise || 0) / 100).toLocaleString(
  * "Permit: not applicable" on every private car is noise that makes the rest
  * look less trustworthy.
  */
+const SHOWN = { PUC: 'PUC (emission test)' };
+
 function documentsOf(rc) {
   const transport = /TRANSPORT|GOODS|PASSENGER|TAXI|BUS|TRUCK|LORRY|MAXI|TRAILER/i
     .test(`${rc.vehicle_category || ''} ${rc.vehicle_class || ''}`);
@@ -157,8 +159,11 @@ function documentsOf(rc) {
     list.push({ key: 'permit_upto',  label: 'Permit' });
   }
 
+  /* `label` is the internal name — alert windows and "already said" keys are
+     built on it, so it never changes. `name` is what a customer reads (user,
+     2026-09-28: say what PUC is). */
   return list
-    .map(d => ({ ...d, date: parseDate(rc[d.key]) }))
+    .map(d => ({ ...d, name: SHOWN[d.label] || d.label, date: parseDate(rc[d.key]) }))
     .filter(d => d.date)
     .map(d => ({ ...d, days: daysUntil(d.date) }));
 }
@@ -247,11 +252,11 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
   if (bad.length || soon.length) {
     lines.push('', '⚠️ *NEEDS ATTENTION*');
     for (const d of bad) {
-      lines.push(`❌ *${d.label}* — expired ${human(d.days)}`);
+      lines.push(`❌ *${d.name}* — expired ${human(d.days)}`);
       lines.push(`   ${fmtDate(d.date)}${extra[d.label] ? ` · ${extra[d.label]}` : ''}`);
     }
     for (const d of soon) {
-      lines.push(`⏳ *${d.label}* — expires ${human(d.days)}`);
+      lines.push(`⏳ *${d.name}* — expires ${human(d.days)}`);
       lines.push(`   ${fmtDate(d.date)}${extra[d.label] ? ` · ${extra[d.label]}` : ''}`);
     }
   }
@@ -259,7 +264,7 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
   if (fine.length) {
     lines.push('', '✅ *VALID*');
     for (const d of fine) {
-      lines.push(`• ${d.label} — till ${fmtDate(d.date)}${detail(d.label)}`);
+      lines.push(`• ${d.name} — till ${fmtDate(d.date)}${detail(d.label)}`);
     }
   }
 
@@ -333,8 +338,8 @@ function attentionLabels(data, { soonDays = 30 } = {}) {
   const rc = data.rc || {};
   const out = [];
   for (const d of documentsOf(rc)) {
-    if (d.days < 0) out.push(`${d.label} — expired`);
-    else if (d.days <= soonDays) out.push(`${d.label} — expires soon`);
+    if (d.days < 0) out.push(`${d.name} — expired`);
+    else if (d.days <= soonDays) out.push(`${d.name} — expires soon`);
   }
   const pending = data.challans?.pending_count || 0;
   if (pending > 0) out.push(`Challans — ${pending} pending`);
@@ -396,8 +401,8 @@ function attentionCount(data, { soonDays = 30 } = {}) {
 function attentionSummary(data, { soonDays = 30 } = {}) {
   const items = [];
   for (const d of documentsOf(data.rc || {})) {
-    if (d.days < 0) items.push(`${d.label} expired ${human(d.days)}`);
-    else if (d.days <= soonDays) items.push(`${d.label} expires ${human(d.days)}`);
+    if (d.days < 0) items.push(`${d.name} expired ${human(d.days)}`);
+    else if (d.days <= soonDays) items.push(`${d.name} expires ${human(d.days)}`);
   }
   const c = data.challans;
   if (c && (c.pending_count || 0) > 0) {

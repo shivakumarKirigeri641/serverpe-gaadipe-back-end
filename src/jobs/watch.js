@@ -109,9 +109,9 @@ function findings(data, before) {
     if (horizon === undefined) continue;
     const date = new Date(d.date).toISOString().slice(0, 10);
     if (d.days < 0) {
-      out.push({ key: `${d.label}:${date}:expired`, label: d.label, text: `${d.label} expired ${report.human(d.days)}` });
+      out.push({ key: `${d.label}:${date}:expired`, label: d.label, text: `${d.name} expired ${report.human(d.days)}` });
     } else if (d.days <= horizon) {
-      out.push({ key: `${d.label}:${date}:expiring`, label: d.label, text: `${d.label} expires ${report.human(d.days)}` });
+      out.push({ key: `${d.label}:${date}:expiring`, label: d.label, text: `${d.name} expires ${report.human(d.days)}` });
     }
   }
 
@@ -626,8 +626,8 @@ function statusOf(snap) {
   if (pending === 0) bits.push('No pending challans ✅');
   else if (pending > 0) { challans = true; bits.push(`${pending} pending challan${pending === 1 ? '' : 's'}`); }
   for (const d of report.documentsOf(snap.rc || {})) {
-    if (d.days < 0) expired.push(d.label);
-    bits.push(d.days < 0 ? `${d.label} expired ${report.human(d.days)}` : `${d.label} valid till ${fmtDate(d.date)}`);
+    if (d.days < 0) expired.push(d.name);
+    bits.push(d.days < 0 ? `${d.name} expired ${report.human(d.days)}` : `${d.name} valid till ${fmtDate(d.date)}`);
   }
   return { expired, challans, text: bits.length ? bits.join(' · ') : 'All clear — nothing new since the last check ✅' };
 }

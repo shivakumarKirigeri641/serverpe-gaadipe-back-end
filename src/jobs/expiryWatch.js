@@ -41,7 +41,7 @@ const { config } = require('../config');
 /** The documents we warn about, and where each date lives on the vehicle. */
 const DOCUMENTS = [
   { key: 'insurance', column: 'insurance_upto', label: 'Insurance' },
-  { key: 'pucc',      column: 'pucc_upto',      label: 'PUC' },
+  { key: 'pucc',      column: 'pucc_upto',      label: 'PUC (emission test)' },   // what customers read; dedup is on key
   { key: 'tax',       column: 'tax_upto',       label: 'Road tax' },
   { key: 'fitness',   column: 'fitness_upto',   label: 'Fitness' },
   { key: 'permit',    column: 'permit_upto',    label: 'Permit' },

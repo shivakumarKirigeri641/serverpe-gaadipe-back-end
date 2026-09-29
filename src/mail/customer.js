@@ -146,7 +146,7 @@ const vehicleTitle = (v) => [v.identity?.maker, v.identity?.model].filter(Boolea
 /** Sections for one PAID vehicle: every document, challan, ownership and FASTag detail. */
 function fullSections(v, extra = {}) {
   const head = `${v.pretty || v.reg_no} · ${vehicleTitle(v)}`;
-  const docs = (v.documents || []).map((d) => [d.label, {
+  const docs = (v.documents || []).map((d) => [d.name || d.label, {
     html: pill(d.state === 'expired' ? `Expired ${report.human(d.days)}` : `Valid till ${istDay(d.valid_until)}`, d.state)
       + (d.state === 'expired' ? ` <span style="color:#6b8380;font-weight:400;">(${esc(istDay(d.valid_until))})</span>`
         : ` <span style="color:#6b8380;font-weight:400;">(${esc(report.human(d.days))})</span>`),

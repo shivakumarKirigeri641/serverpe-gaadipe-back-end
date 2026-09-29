@@ -142,7 +142,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     ], docs
       .sort((a, b) => a.days - b.days)
       .map(d => [
-        d.label,
+        d.name || d.label,
         fmt(d.date),
         d.days < 0 ? `Expired ${human(d.days)}` : `Valid, expires ${human(d.days)}`,
         d.label === 'Insurance'

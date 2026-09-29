@@ -127,6 +127,7 @@ function full(data) {
     },
     documents: report.documentsOf(rc).map(d => ({
       label: d.label,
+      name: d.name,          // what to show: "PUC (emission test)"
       valid_until: d.date instanceof Date ? d.date.toISOString().slice(0, 10) : d.date,
       days: d.days,
       state: d.days < 0 ? 'expired' : d.days <= 30 ? 'due' : 'valid',
