@@ -964,64 +964,6 @@ async function welcome(mobile) {
  * @param {object} message                     the raw WhatsApp message
  * @param {string} mobile                      10 digits
  */
-/**
-
- * Their own referral link, as something to forward.
-
- *
-
- * Two messages on purpose: the first is the explanation, for them; the
-
- * second is the one they pass on, so the explanation does not travel with
-
- * it. Reached by tapping "Refer & get free" or by typing "refer".
-
- */
-
-async function sendReferral(mobile) {
-
-    const user = await store.upsertUser(mobile);
-
-    const summary = await refer.summaryFor(user);
-
-    if (!summary.enabled) {
-
-      await send.text(mobile, 'Referrals are not running at the moment.');
-
-      return;
-
-    }
-
-    const plan = await billing.reportPlan().catch(() => null);
-
-    const price = Math.round((plan?.price_paise || 1900) / 100);
-
-    await send.text(mobile,
-
-      '🎁 *Refer a friend*\n\n'
-
-      + `Anyone who has a vehicle. When they buy their first report at ₹${price}, `
-
-      + 'your next full report is free.\n\n'
-
-      + (summary.available
-
-        ? `You have *${summary.available}* free report${summary.available === 1 ? '' : 's'} waiting — `
-
-          + 'send me a vehicle number and I will use one.\n\n'
-
-        : '')
-
-      + 'Forward the message below 👇');
-
-    await send.text(mobile,
-
-      'Check any vehicle on GaadiPe — challans, insurance, PUC and road tax, '
-
-      + `straight from the Government record.\n\n${summary.share_url}`);
-
-}
-
 async function handle(session, message, mobile) {
   const intent = intentOf(message);
   const state = session.state || 'new';
@@ -1094,13 +1036,10 @@ async function handle(session, message, mobile) {
    * already referred — each is a real rule, and none of them is a reason to
    * refuse the person a conversation.
    */
-  const referralCode = refer.codeFromText(intent.text);
-  if (referralCode) {
-    const user = await store.upsertUser(mobile);
-    const out = await refer.attach(user, referralCode, { deviceId: null, ip: null })
-      .catch(() => ({ ok: false }));
-    console.log('[wa] %s arrived through %s -> %s', mobile, referralCode, out.ok ? 'attached' : out.reason);
-    // Whatever the verdict, they have just walked in: start at the beginning.
+  // REFERRAL IS OFF IN WHATSAPP (user, 2026-09-29: no free reports). A message
+  // still carrying an old link's code is welcomed like any first "hi" — nothing
+  // is attached, so no reward can be earned through it.
+  if (refer.codeFromText(intent.text)) {
     await start(mobile);
     return;
   }
@@ -1582,10 +1521,6 @@ async function handle(session, message, mobile) {
         await sendSupportLink(mobile);
         return;
 
-      case BTN.REFER:
-        await sendReferral(mobile);
-        return;
-
       case BTN.INVOICE:
         await sendInvoices(mobile);
         return;
@@ -1617,16 +1552,8 @@ async function handle(session, message, mobile) {
 
   // "invoice" and "report" are typed, not tapped, because they are asked for
   // days later — long after any button has scrolled out of view.
-  /*
-   * "refer" — their own link, as a message they can forward as it stands.
-   * Sent as two messages on purpose: the explanation is for them, and the
-   * second one is the thing they pass on, so it travels without the
-   * explanation attached to it.
-   */
-  if (/^(refer|referral|invite|share)\s*$/i.test(intent.text)) {
-    await sendReferral(mobile);
-    return;
-  }
+  // No referral in WhatsApp (user, 2026-09-29): typing "refer" is no longer a
+  // command, and no free report is offered here.
 
   if (/^(invoice|bill|receipt)s?\s*$/i.test(intent.text)) {
     await sendInvoices(mobile);
