@@ -354,6 +354,15 @@ async function notify(w, items, summary, byVehicle = null) {
   }
   attempts.push({ name: await settings.get('template_vehicle_alert_fallback', 'gp_vehicle_alert_v2'),
                   language: 'en', params: [name, w.reg_no, summary, checkedOn] });
+  /* THE LAST NET (user, 2026-09-29): gp_vehicle_alert_v2 no longer exists in
+     English on the account (#132001), and a new challan went unannounced. The
+     approved monitoring template takes 1 name, 2 vehicle, 3 status, 4 action. */
+  const monitoring = await settings.get('template_daily_status', 'gp_monitoring_alert_en_v1');
+  if (!attempts.some((a) => a.name === monitoring)) {
+    attempts.push({ name: monitoring, language: await settings.get('wa_template_language', 'en'),
+      params: [name, w.reg_no, `${summary} (checked ${checkedOn})`.slice(0, 900),
+        'Please take a look — the details are in your GaadiPe report. We will keep watching and tell you when anything changes.'] });
+  }
 
   /* ANYTHING GOES WRONG, THE FALLBACK IS TRIED (user, 2026-09-18) — not only a
      template error: the language template may be pending, paused, renamed or
@@ -671,4 +680,4 @@ function start(everySeconds = 60) {
   console.log(`  watch job: every ${everySeconds}s`);
 }
 
-module.exports = { start, runOnce, checkOne, findings, lifecycle, due, eveningDigest, dailyStatus, statusLine };
+module.exports = { start, runOnce, checkOne, findings, lifecycle, due, eveningDigest, dailyStatus, statusLine, notify };
