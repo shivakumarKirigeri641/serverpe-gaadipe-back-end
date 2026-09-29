@@ -214,14 +214,25 @@ async function payments() {
 
 /* ───────────────────────────────────────────────────── contact / feedback ── */
 
+/* Support tickets and contact messages also go to support_ticket_emails
+   (user, 2026-09-29) — on top of the admin recipients, and only these emails:
+   the sign-in, payment and summary emails stay with the admins alone. */
+async function ticketRecipients() {
+  const extra = String(await settings.get('support_ticket_emails', '') || '')
+    .split(/[,;\s]+/).map((s) => s.trim()).filter((s) => /@/.test(s));
+  return [...new Set([...(await mailer.adminRecipients()), ...extra])];
+}
+
 async function contacts() {
   if (!(await on('notify_contact'))) return 0;
+  const to = await ticketRecipients();
   const { rows } = await db.query(
     `SELECT * FROM contact_messages c WHERE c.created_at > now() - interval '2 days'
         AND ${notDone('contact', 'c.id::text')} ORDER BY c.id LIMIT 20`);
   let n = 0;
   for (const c of rows) {
     n += await deliver('contact', c.id, async () => ({
+      to,
       subject: `✉️ Contact form · ${c.subject || 'New message'} · ${c.name}`,
       replyTo: c.email || undefined,
       ...T.layout({
