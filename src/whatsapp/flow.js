@@ -944,7 +944,7 @@ async function reportMenu(mobile, regNo, data, bought) {
     + `🔔 New challans watched ${plan.duration_days} days, and a warning before insurance, PUC, `
     + 'road tax, fitness or permit about to expire\n\n'
     // What the other way costs (user, 2026-09-30) — the same line as the website.
-    + `🏃 *Why run around?* No RTO queue, no fuel, no follow-up calls — all of it for ${price}.\n\n`
+    + `🚫 RTO queue · 🚫 Fuel · 🚫 Follow-ups — *just ${price}* ✨\n\n`
     + '_* Price includes GST. Owner details are never shown. Nothing renews automatically._',
     [{ id: BTN.BUY_REPORT,    title: `Full report ${price}*` },
      { id: BTN.FEEDBACK,      title: 'Feedback' },
