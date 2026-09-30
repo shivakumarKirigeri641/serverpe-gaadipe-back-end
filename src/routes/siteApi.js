@@ -18,6 +18,7 @@
  *   GET    /site/api/reports          my reports · /:id/file the PDF
  *   GET    /site/api/invoices         my invoices · /:id/file the PDF
  *   GET    /site/api/pricing          what a report costs, for the page to show
+ *   GET    /site/api/stats            "GaadiPe so far" — public totals, no personal data
  *
  * THE SAME RULES AS THE BOT, DELIBERATELY REUSED: the quota that decides how
  * many free checks someone gets, the plate parser, the block list and the
@@ -93,6 +94,12 @@ router.get('/pricing', safe(async (_req, res) => {
     // What a free check shows, so the home page's example matches it exactly.
     free_view_detail: await freeDetail(),
   });
+}));
+
+/** "GaadiPe so far" — public totals for the home page (src/site/stats.js). */
+router.get('/stats', safe(async (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json({ stats: await require('../site/stats').get() });
 }));
 
 /* ────────────────────────────────────────── how a full report is unlocked ── */
