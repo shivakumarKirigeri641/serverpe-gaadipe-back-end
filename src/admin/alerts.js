@@ -239,6 +239,7 @@ async function feed(since, adminId = null) {
       : { kind: 'check', id: `chk:${r.id}`, at: r.at, tone: 'info', title: `🔍 Vehicle checked${r.reg_no ? ` · ${r.reg_no}` : ''}`,
           text: who(r), mobile: r.mobile, reg_no: r.reg_no })),
     ...(await milestones(adminId)),
+    ...(await newFeedback(from)),
   ].sort((a, b) => new Date(a.at) - new Date(b.at));
   return { items, at: new Date().toISOString() };
 }
@@ -278,6 +279,24 @@ async function milestones(adminId) {
   return rows.map((r) => ({ kind: 'milestone', id: `ms:${r.customers}`, at: r.at, tone: 'good',
     customers: r.customers, big: r.customers % 1000 === 0,
     title: `🎉 ${r.customers.toLocaleString('en-IN')} customers!`, text: 'A new milestone for GaadiPe.' }));
+}
+
+/*
+ * NEW FEEDBACK (user, 2026-09-30): a pop-up for each note; 4 or 5 stars also
+ * gets a celebration in the panel. Only what the panel needs to show — the
+ * name given (or none), the stars, the first words.
+ */
+async function newFeedback(from) {
+  const { rows } = await db.query(
+    `SELECT f.id, f.created_at AS at, f.rating, f.channel, left(f.body, 140) AS body,
+            coalesce(u.display_name, u.wa_profile_name, f.name) AS person
+       FROM feedback f LEFT JOIN users u ON u.id = f.user_id
+      WHERE f.created_at > $1 ORDER BY f.created_at LIMIT 20`, [from]);
+  return rows.map((f) => ({
+    kind: 'feedback', id: `fb:${f.id}`, at: f.at, rating: f.rating, tone: f.rating && f.rating <= 2 ? 'watch' : 'good',
+    title: f.rating ? `${f.rating >= 4 ? '🌟' : '💬'} ${f.rating}-star feedback` : '💬 New feedback',
+    text: [f.person || 'Anonymous customer', /\(no message\)$/.test(f.body) ? null : `“${f.body}”`].filter(Boolean).join(' · '),
+  }));
 }
 
 /** The panel showed this milestone to this admin; it is not returned again. */
