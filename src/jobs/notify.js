@@ -268,14 +268,14 @@ async function feedback() {
   let n = 0;
   for (const f of rows) {
     n += await deliver('feedback', f.id, async () => ({
-      subject: `💬 Feedback${f.rating ? ` ${'★'.repeat(f.rating)}${'☆'.repeat(5 - f.rating)}` : ''} · ${f.shown_name || T.mobile(f.mobile)}${f.reg_no ? ` · ${f.reg_no}` : ''}`,
+      subject: `💬 Feedback${f.rating ? ` ${'★'.repeat(f.rating)}${'☆'.repeat(5 - f.rating)}` : ''} · ${f.shown_name || (f.mobile ? T.mobile(f.mobile) : 'Anonymous customer')}${f.reg_no ? ` · ${f.reg_no}` : ''}`,
       ...T.layout({
         badge: { text: 'New feedback', tone: 'info' },
-        title: `Feedback from ${f.shown_name || T.mobile(f.mobile)}`,
+        title: `Feedback from ${f.shown_name || (f.mobile ? T.mobile(f.mobile) : 'an anonymous customer')}`,
         lead: `Sent ${T.ist(f.created_at)}${f.reg_no ? ` about ${f.reg_no}` : ''}.`,
         note: f.body,
         sections: [{ heading: 'From', rows: [['Rating', f.rating ? `${'★'.repeat(f.rating)}${'☆'.repeat(5 - f.rating)} (${f.rating}/5)` : null],
-          ['Name', f.shown_name || 'Not given'], ['Mobile', f.mobile ? T.mobile(f.mobile) : 'Not given'], ['Vehicle', f.reg_no],
+          ['Name', f.shown_name || 'Anonymous customer'], ['Mobile', f.mobile ? T.mobile(f.mobile) : 'Not given'], ['Vehicle', f.reg_no],
           ['Came from', f.channel && f.channel !== 'whatsapp' ? `Website${f.channel.includes(':') ? ` (${f.channel.split(':')[1]})` : ''}` : 'WhatsApp']] }],
         cta: { label: 'Open feedback', path: '/feedback' },
       }),
