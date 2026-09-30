@@ -312,7 +312,7 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
     '━━━━━━━━━━━━━━━',
     `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · Government records_`,
     detailed
-      ? '_Owner name and document numbers are masked. Chassis and engine numbers are never shown._'
+      ? '_Owner details, chassis and engine numbers are never shown. Document numbers are masked._'
       : '_Chassis, engine and owner details are never shown on a free check._');
 
   return lines.join('\n');
@@ -434,7 +434,9 @@ async function buildFor(data, opts = {}) {
   const settings = require('../util/settings');
   return build(data, {
     ...opts,
-    owner: await settings.get('owner_name_display', 'masked'),
+    // No owner name in any report, masked or not (user, 2026-09-30, migration 089);
+    // the owner count ("2nd owner") is still shown.
+    owner: await settings.get('owner_name_display', 'hidden'),
     docNumbers: await settings.get('document_numbers_display', 'masked'),
   });
 }
