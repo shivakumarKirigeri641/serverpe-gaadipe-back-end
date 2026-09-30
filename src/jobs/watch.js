@@ -320,6 +320,11 @@ async function notify(w, items, summary, byVehicle = null) {
   const name = (w.wa_profile_name || 'there').split(' ')[0];
   const what = [...new Set(items.map(i => i.label))].join(', ');
 
+  // STOP means nothing we start (user, 2026-09-30). send.js refuses templates;
+  // a plain message inside the 24-hour window is not refused there, because
+  // replies must still go — so it is checked here.
+  if (await send.optedOut(w.mobile)) return { ok: false, error: 'opted_out' };
+
   if (await send.windowOpen(w.mobile)) {
     // Inside the 24-hour window a plain message is free, and can list vehicles line by line.
     const body = byVehicle
@@ -373,7 +378,7 @@ async function lifecycle() {
   for (const t of ending.rows) {
     const price = Math.round(await settings.num('first_payment_paise', 4900) / 100);
     const when = new Date(t.expires_at);
-    if (await send.windowOpen(t.mobile)) {
+    if (!(await send.optedOut(t.mobile)) && await send.windowOpen(t.mobile)) {
       await send.text(t.mobile,
         `Your free trial for *${t.reg_no}* ends on *${fmtDate(when)}*.\n\n`
         + `To keep monitoring this vehicle, it is ₹${price} for 28 days. `
@@ -498,7 +503,9 @@ async function dailyStatus({ mobile = null } = {}) {
     const name = String(first.name || 'there').split(' ')[0];
 
     let out;
-    if (await send.windowOpen(first.mobile)) {
+    if (await send.optedOut(first.mobile)) {
+      out = { ok: false, error: 'opted_out' }; // STOP (user, 2026-09-30) — see notify()
+    } else if (await send.windowOpen(first.mobile)) {
       out = await send.text(first.mobile, '✅ *Today\'s update from GaadiPe*\n\n'
         + lines.map((l) => `🚗 *${l.reg}*\n${l.text.split(' · ').map((t) => `• ${t}`).join('\n')}`).join('\n\n')
         + `\n\n_Last checked ${fmtDate(checked)}. We will message you if anything changes._`);
