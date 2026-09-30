@@ -364,11 +364,22 @@ function basic(data, { price = '₹19', soonDays = 30, detail = 'count' } = {}) 
   row('Fuel', rc.fuel && titleCase(rc.fuel));
   row('Vehicle type', rc.vehicle_class && titleCase(rc.vehicle_class));
 
+  /*
+   * NO VERDICT ON THE FREE CHECK (user, 2026-09-30): "Insurance — expired"
+   * answered the question, and "✅ Nothing needs attention" told them there was
+   * nothing to pay for — either way people stopped at the free check. With
+   * nothing found, it now says what was checked, not that all is well; with
+   * something found, how many (never which). The menu after it lists what
+   * the report holds.
+   */
   const n = attentionCount(data, { soonDays });
   const named = detail === 'labels' ? attentionLabels(data, { soonDays }) : [];
   lines.push('', !n
-    ? '✅ Nothing needs attention right now.\n'
-      + `The full report for *${price}* has every date, challan and record behind that.`
+    ? '🔍 Insurance, PUC, road tax, fitness, challans and loan checked in Government records.\n'
+      + `The dates and details are in the full report for *${price}* 👇`
+    : detail !== 'labels'
+      ? `⚠️ *${n} thing${n === 1 ? '' : 's'} on this vehicle need${n === 1 ? 's' : ''} attention.*\n`
+        + `Which ${n === 1 ? 'one' : 'ones'} — with dates, amounts and what to do — are in the full report for *${price}* 👇`
     : named.length
       ? `⚠️ *Needs attention:*\n${named.map((t) => `• ${t}`).join('\n')}\n\n`
         + `Get the full report for *${price}* to see the dates, amounts, challan details and what to do about each.`

@@ -867,7 +867,9 @@ async function deliverReport(mobile, regNo, message) {
       // WhatsApp's own free level (user, 2026-09-28): 'labels' names what needs
       // attention — PUC expired, 2 pending challans — never dates or amounts.
       // The website keeps free_view_detail; the two are set apart on purpose.
-      detail: String(await settings.get('whatsapp_free_view_detail', 'labels')).toLowerCase(),
+      // Back to 'count' (user, 2026-09-30, migration 088): naming them gave the
+      // answer away and people stopped paying.
+      detail: String(await settings.get('whatsapp_free_view_detail', 'count')).toLowerCase(),
     }));
   await setState(mobile, 'owner_menu', 'basic details sent');
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
