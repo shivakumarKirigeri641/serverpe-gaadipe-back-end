@@ -70,6 +70,9 @@ const SEGMENTS = {
                           AND pf.created_at < now() - interval '30 minutes')`,
   // Worth a look, never an automatic verdict: blocked, or checking far more
   // vehicles than a person does.
+  // Replied STOP (user, 2026-09-30): left out of every other view and of the
+  // total; this is where they are seen. A search by number still finds them.
+  stopped:      `ws.wa_opt_out_at IS NOT NULL`,
   suspicious:   `(EXISTS (SELECT 1 FROM blocks b2 WHERE b2.kind = 'mobile' AND b2.value = u.mobile AND b2.released_at IS NULL)
                   OR coalesce(pu.vehicles_checked, 0) >= 25)`,
 };
@@ -161,6 +164,7 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
               SELECT 1 FROM subscriptions s WHERE s.user_id = u.id AND s.is_active
                  AND s.ends_on >= CURRENT_DATE))
         AND (${SEGMENTS[segment] || 'true'})
+        AND ($1 <> '' OR ${segment === 'stopped' ? 'true' : 'ws.wa_opt_out_at IS NULL'})
       ORDER BY ${order}
       LIMIT $6 OFFSET $7`,
     [term, digits, plate, blocked, paying, Math.min(200, limit), offset]);

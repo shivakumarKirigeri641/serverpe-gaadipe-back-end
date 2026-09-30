@@ -147,7 +147,9 @@ async function today() {
            AND p.paid_at ${IST} >= b.yesterday AND p.paid_at ${IST} < b.today)            AS earned_before_paise,
        (SELECT count(*)::int FROM subscriptions
          WHERE is_active AND ends_on >= CURRENT_DATE)                                     AS monitoring,
-       (SELECT count(*)::int FROM users)                                                  AS customers,
+       -- Not counting anyone who replied STOP (user, 2026-09-30).
+       (SELECT count(*)::int FROM users u WHERE NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)) AS customers,
+       (SELECT count(*)::int FROM whatsapp_sessions WHERE wa_opt_out_at IS NOT NULL)       AS customers_stopped,
        (SELECT count(*)::int FROM vehicles)                                               AS vehicles`);
 }
 

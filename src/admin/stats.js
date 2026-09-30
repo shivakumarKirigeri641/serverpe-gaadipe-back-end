@@ -71,7 +71,8 @@ async function dashboard() {
               date_trunc('day', now() ${IST}) - interval '1 day' AS yesterday
      )
      SELECT
-       (SELECT count(*) FROM users)                                        AS users_total,
+       -- Not counting anyone who replied STOP (user, 2026-09-30).
+       (SELECT count(*) FROM users u WHERE NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)) AS users_total,
        (SELECT count(*) FROM users u, bounds b
          WHERE u.created_at ${IST} >= b.today)                             AS users_today,
        (SELECT count(*) FROM users u, bounds b
