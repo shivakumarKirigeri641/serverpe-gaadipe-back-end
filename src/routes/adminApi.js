@@ -496,7 +496,10 @@ router.get('/fleets/:id/excel', needs('dashboard.view'), safe(async (req, res) =
   res.send(out.buffer);
 }));
 
-router.get('/feed', safe(async (req, res) => res.json(await alertCenter.feed(req.query.since))));
+router.get('/feed', safe(async (req, res) => res.json(await alertCenter.feed(req.query.since, req.admin?.id))));
+/* The milestone celebration was shown to this admin (user, 2026-09-30). */
+router.post('/milestones/:customers/seen', safe(async (req, res) =>
+  res.json({ ok: await alertCenter.seenMilestone(req.admin?.id, req.params.customers) })));
 router.get('/badges', safe(async (_req, res) => res.json(await alertCenter.badges())));
 
 /* Where the vehicles are: by state, then by RTO (phase 7, src/admin/geo.js). */

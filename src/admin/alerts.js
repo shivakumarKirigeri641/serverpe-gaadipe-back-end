@@ -195,7 +195,7 @@ async function resolve(id, adminId, note) {
 /* ─────────────────────────── pop-ups and badges ─────────────────────────── */
 
 /** Everything worth a pop-up since `since` (an ISO time), oldest first. */
-async function feed(since) {
+async function feed(since, adminId = null) {
   const from = since && !Number.isNaN(Date.parse(since)) ? new Date(since) : new Date(Date.now() - 60000);
   const [paid, opened, recovered, activity] = await Promise.all([
     db.query(
@@ -238,7 +238,7 @@ async function feed(since) {
           text: [who(r), r.came_from === 'whatsapp_ad' ? 'from your ad' : null].filter(Boolean).join(' · '), mobile: r.mobile }
       : { kind: 'check', id: `chk:${r.id}`, at: r.at, tone: 'info', title: `🔍 Vehicle checked${r.reg_no ? ` · ${r.reg_no}` : ''}`,
           text: who(r), mobile: r.mobile, reg_no: r.reg_no })),
-    ...(await milestones()),
+    ...(await milestones(adminId)),
   ].sort((a, b) => new Date(a.at) - new Date(b.at));
   return { items, at: new Date().toISOString() };
 }
@@ -247,12 +247,15 @@ async function feed(since) {
  * CUSTOMER MILESTONES (user, 2026-09-30): every hundred customers is a
  * celebration in the panel, every thousand a bigger one. Counted like the Home
  * tile — without anyone who said STOP — and each mark recorded once in
- * event_log, so it fires once however many tabs are open. Marks from the last
- * three days are always returned: the panel remembers which ones this browser
- * has already celebrated, so one reached overnight still gets its moment when
- * the admin next opens the panel.
+ * event_log, so it fires once however many tabs are open.
+ *
+ * MISSED ONES WAIT (user, 2026-09-30): the latest mark this admin has not seen
+ * is returned on every poll, however old, until the panel says it was shown
+ * (seenMilestone). Seen is kept per admin on the server, not per browser — so
+ * a celebration missed with the browser closed plays at the next login, on
+ * any device, and once.
  */
-async function milestones() {
+async function milestones(adminId) {
   const { n } = await db.one(
     `SELECT count(*)::int AS n FROM users u
       WHERE NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)`);
@@ -264,13 +267,30 @@ async function milestones() {
         WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE kind = 'customer_milestone' AND (detail->>'customers')::int = $1)`,
       [mark, n]);
   }
+  if (!adminId) return [];
   const { rows } = await db.query(
-    `SELECT created_at AS at, (detail->>'customers')::int AS customers FROM event_log
-      WHERE kind = 'customer_milestone' AND created_at > now() - interval '3 days'
-      ORDER BY created_at DESC LIMIT 1`);
+    `SELECT e.created_at AS at, (e.detail->>'customers')::int AS customers FROM event_log e
+      WHERE e.kind = 'customer_milestone'
+        AND NOT EXISTS (SELECT 1 FROM event_log s WHERE s.kind = 'milestone_seen'
+                          AND s.detail->>'admin_id' = $1::text
+                          AND (s.detail->>'customers')::int >= (e.detail->>'customers')::int)
+      ORDER BY (e.detail->>'customers')::int DESC LIMIT 1`, [String(adminId)]);
   return rows.map((r) => ({ kind: 'milestone', id: `ms:${r.customers}`, at: r.at, tone: 'good',
     customers: r.customers, big: r.customers % 1000 === 0,
     title: `🎉 ${r.customers.toLocaleString('en-IN')} customers!`, text: 'A new milestone for GaadiPe.' }));
+}
+
+/** The panel showed this milestone to this admin; it is not returned again. */
+async function seenMilestone(adminId, customers) {
+  const n = Number(customers);
+  if (!adminId || !Number.isInteger(n) || n < 100) return false;
+  await db.query(
+    `INSERT INTO event_log (kind, detail)
+     SELECT 'milestone_seen', jsonb_build_object('admin_id', $1::text, 'customers', $2::int)
+      WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE kind = 'milestone_seen'
+                          AND detail->>'admin_id' = $1::text AND (detail->>'customers')::int = $2)`,
+    [String(adminId), n]);
+  return true;
 }
 
 async function badges() {
@@ -285,4 +305,4 @@ async function badges() {
                 AND occurred_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS vehicles_today`);
 }
 
-module.exports = { check, list, ack, resolve, feed, badges, raise, clear };
+module.exports = { seenMilestone, check, list, ack, resolve, feed, badges, raise, clear };
