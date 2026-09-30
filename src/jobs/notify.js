@@ -329,6 +329,62 @@ async function whoIs(mobile) {
 }
 const nameOf = (w, mobile) => w?.display_name || w?.profile_name || T.mobile(mobile);
 
+/*
+ * MORE ABOUT A NEW CONTACT (user, 2026-09-30) — everything we know, without
+ * guessing. WhatsApp shares no location, so "where" comes from what they did:
+ * a website visit linked by the code in their Hi (city and state of the
+ * connection), the state they chose at checkout, and the state codes of the
+ * vehicles they checked. "How" is the Meta ad they tapped, the website source,
+ * or neither. Each line says where it came from; a line with nothing is left out.
+ */
+async function hiDetails(mobile, userId, at) {
+  const { STATES: REG } = require('../admin/geo');
+  const { STATES: GST } = require('../pay/invoice');
+  const [sess, visit, user, plates, first, today] = await Promise.all([
+    db.one(`SELECT attribution FROM whatsapp_sessions WHERE mobile = $1`, [mobile]),
+    db.one(`SELECT place, first_touch, device, page_views FROM visitors WHERE mobile = $1 ORDER BY last_seen_at DESC NULLS LAST LIMIT 1`, [mobile]).catch(() => null),
+    userId ? db.one(`SELECT state_code, email FROM users WHERE id = $1`, [userId]) : null,
+    userId ? db.query(`SELECT v.reg_no, v.maker, v.model FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
+                        WHERE uv.user_id = $1 ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 5`, [userId]) : { rows: [] },
+    db.one(`SELECT body FROM whatsapp_messages WHERE mobile = $1 AND direction = 'in' ORDER BY id LIMIT 1`, [mobile]),
+    db.one(`WITH b AS (SELECT date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' AS d)
+            SELECT (SELECT count(*) FROM whatsapp_sessions, b WHERE created_at >= b.d AND created_at <= $1)::int AS n,
+                   (SELECT count(*) FROM whatsapp_sessions, b WHERE created_at >= b.d - interval '1 day'
+                                                                AND created_at <= $1::timestamptz - interval '1 day')::int AS before`, [at]),
+  ]);
+  const a = sess?.attribution || {};
+  const place = visit?.place || {};
+  const ft = visit?.first_touch || a.first_touch || {};
+  const dev = visit?.device || {};
+  const plateStates = [...new Set(plates.rows.map((r) => REG[String(r.reg_no).slice(0, 2).toUpperCase()]).filter(Boolean))];
+
+  const came = a.channel === 'whatsapp_ad'
+    ? `Your WhatsApp ad${a.headline ? ` — “${a.headline}”` : ''}`
+    : a.channel === 'website' || visit
+      ? `Website${ft.source ? ` (from ${ft.source}${ft.campaign ? ` · ${ft.campaign}` : ''})` : ''}`
+      : 'Straight to the WhatsApp number (saved it, or a forwarded link)';
+  return {
+    where: [
+      ['City (from their internet)', place.country === 'India' && place.city ? `${place.city}, ${place.region || ''}`.replace(/, $/, '') : null],
+      ['State (from their internet)', place.country === 'India' && !place.city ? place.region : null],
+      ['State chosen at checkout', GST[String(user?.state_code || '')] || null],
+      ['Vehicles registered in', plateStates.join(', ') || null],
+      ['Where', !place.region && !user?.state_code && !plateStates.length ? 'Not known yet — WhatsApp does not share location' : null],
+    ],
+    how: [
+      ['Came from', came],
+      ['Ad link', a.channel === 'whatsapp_ad' ? a.source_url : null],
+      ['First page on the website', ft.landing || null],
+      ['Phone', [dev.device_type, dev.os, dev.browser].filter(Boolean).join(' · ') || null],
+      ['Website pages seen', visit?.page_views ? String(visit.page_views) : null],
+      ['First message', first?.body ? `“${String(first.body).slice(0, 120)}”` : null],
+    ],
+    recent: plates.rows.slice(0, 3).map((r) => [r.reg_no, [r.maker, r.model].filter(Boolean).join(' ') || '—']),
+    today: today || { n: 0, before: 0 },
+    email: user?.email || null,
+  };
+}
+
 async function waHi() {
   if (!(await on('notify_wa_hi'))) return 0;
   let n = 0;
@@ -338,18 +394,29 @@ async function waHi() {
       const w = await whoIs(mobile);
       // New = their chat began within a minute of this Hi.
       const isNew = !w?.first_seen || Math.abs(new Date(e.created_at) - new Date(w.first_seen)) < 60 * 1000;
+      const d = await hiDetails(mobile, w?.user_id, e.created_at).catch(() => null);
+      const where = d?.where.find(([k, v]) => v && k !== 'Where')?.[1];
       return {
-        subject: `👋 ${isNew ? 'New on WhatsApp' : 'Said Hi'} · ${nameOf(w, mobile)}`,
+        subject: `👋 ${isNew ? 'New on WhatsApp' : 'Said Hi'} · ${nameOf(w, mobile)}${where ? ` · ${where}` : ''}`,
         ...T.layout({
           badge: { text: isNew ? 'New contact' : 'Said Hi again', tone: isNew ? 'good' : 'info' },
           title: `${nameOf(w, mobile)} said Hi on WhatsApp`,
-          lead: `${T.ist(e.created_at)}. ${isNew ? 'First time they have written to GaadiPe.' : 'They have written before.'}`,
-          sections: [{ heading: 'Who', rows: [
-            ['WhatsApp name', w?.profile_name || 'Not shown'],
-            ['Mobile', T.mobile(mobile)],
-            ['Vehicles checked before', String(w?.vehicles ?? 0)],
-            ['Paid before', w?.paid ? `Yes (${w.paid})` : 'No'],
-          ] }],
+          lead: `${T.ist(e.created_at)}. ${isNew ? 'First time they have written to GaadiPe.' : 'They have written before.'}`
+            + (d && isNew ? ` New contact no. ${d.today.n} today (${d.today.before} by this time yesterday).` : ''),
+          sections: [
+            { heading: 'Who', rows: [
+              ['WhatsApp name', w?.profile_name || 'Not shown'],
+              ['Mobile', T.mobile(mobile)],
+              ['Email', d?.email],
+              ['Vehicles checked before', String(w?.vehicles ?? 0)],
+              ['Paid before', w?.paid ? `Yes (${w.paid})` : 'No'],
+            ] },
+            ...(d ? [
+              { heading: 'Where', rows: d.where },
+              { heading: 'How they found GaadiPe', rows: d.how },
+              ...(d.recent.length ? [{ heading: 'Vehicles they checked', rows: d.recent }] : []),
+            ] : []),
+          ],
           cta: { label: 'Open Live', path: '/live' },
         }),
       };
