@@ -30,7 +30,7 @@ const { config } = require('../config');
 const MAX_ATTEMPTS = 3;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 /** Refusals from the door in send.js: a decision, not a fault to retry. */
-const DECIDED = new Set(['recipient_not_allowed', 'blocked']);
+const DECIDED = new Set(['recipient_not_allowed', 'blocked', 'opted_out']);
 
 async function runOnce() {
   if (!config.whatsapp.enabled) return { off: true };

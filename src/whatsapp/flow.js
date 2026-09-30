@@ -955,7 +955,13 @@ async function reportMenu(mobile, regNo, data, bought) {
  */
 async function start(mobile) {
   await funnel(mobile, 'hi');
-  await send.buttons(mobile, INTRO + OWNER_TERMS,
+  // The price before the first tap (user, 2026-09-30): someone who tapped
+  // Full report expecting it free called it "worst". Read from the plan.
+  const plan = await billing.reportPlan().catch(() => null);
+  const price = plan
+    ? `✅ Basic check — *free* · 📋 Full report — *₹${Math.round(plan.price_paise / 100)}* (only if you want it)\n\n`
+    : '';
+  await send.buttons(mobile, INTRO + price + OWNER_TERMS,
     [{ id: BTN.AGREE_OWNER, title: 'Agree & continue' }],
     { footer: 'ServerPe App Solutions' });
   await setState(mobile, 'owner_consent', 'terms shown');
@@ -989,6 +995,25 @@ async function welcome(mobile) {
  * @param {object} message                     the raw WhatsApp message
  * @param {string} mobile                      10 digits
  */
+/* Asking not to be messaged, in the words people actually use (user, 2026-09-30). */
+const OPT_OUT_RE = new RegExp([
+  "\\b(don'?t|do not|dont|pls don'?t|please don'?t)\\s+(message|msg|text|contact|disturb|send)",
+  '\\bstop\\s+(messag|msg|sending|texting|spam)',
+  '\\bno more (messages|msgs|texts)\\b', '\\bunsubscribe\\b', '\\bopt[ -]?out\\b',
+  '\\bblock (me|this|you|number)\\b', '\\bleave me alone\\b',
+  '\\b(message|msg|sms) (mat|na) (karo|kar|bhejo|bhej)\\b', '\\bmat bhejo\\b',
+  '\\b(band|bandh) karo\\b', '\\bmessage band\\b', '\\bpareshan mat\\b',
+].join('|'), 'i');
+
+/* Unhappy words — the person is not asking for a vehicle (user, 2026-09-30). */
+const UNHAPPY_RE = /\b(fraud|froud|scam|cheat(er|ing)?|chor|loot|bakwas|bakvas|faltu|bekar|bekaar|worst|useless|waste|fake|dhoka|thag)\b/i;
+
+/* Hold every reminder for a day after someone sounds unhappy or is chatting,
+   not sending a number: a reminder then is chasing, not helping. */
+const quietNudges = (mobile) => db.query(
+  `UPDATE whatsapp_sessions SET context = context || jsonb_build_object('no_nudge_at', now()), modified_at = now()
+    WHERE mobile = $1`, [mobile]).catch(() => {});
+
 async function handle(session, message, mobile) {
   const intent = intentOf(message);
   const state = session.state || 'new';
@@ -1036,6 +1061,25 @@ async function handle(session, message, mobile) {
       + 'Reply *START* any time to hear from us again.');
     return;
   }
+  /*
+   * "DON'T MESSAGE ME" IS STOP TOO (user, 2026-09-30). Someone wrote "Don't
+   * message me" after seeing the price; the bot read it as a vehicle number and
+   * the payment reminder went out anyway, which is what made them reply STOP.
+   * Plain-language refusals — English, Hindi and Hinglish — now opt out at once.
+   */
+  if (OPT_OUT_RE.test(intent.text || '')) {
+    await db.query(
+      `UPDATE whatsapp_sessions SET wa_opt_out_at = now(), modified_at = now()
+        WHERE mobile = $1`, [mobile]);
+    await funnel(mobile, 'opt_out', { said: String(intent.text).slice(0, 60) });
+    console.log('[wa] %s asked not to be messaged — treated as STOP', mobile);
+    await send.text(mobile,
+      'Understood 🙏 — GaadiPe will not message you any more.\n\n'
+      + 'Nothing is charged unless you pay. If you write to us, we will still reply. '
+      + 'Reply *START* any time to hear from us again.');
+    return;
+  }
+
   if (/^start\s*$/i.test(intent.text)) {
     const { rowCount } = await db.query(
       `UPDATE whatsapp_sessions SET wa_opt_out_at = NULL, modified_at = now()
@@ -1135,6 +1179,16 @@ async function handle(session, message, mobile) {
         await send.text(mobile, 'Send me the vehicle number — like *KA01XX1234* — and I will show you its full report.');
       }
       return;
+    }
+
+    /*
+     * Other template quick replies (user, 2026-09-30): "My reports" on an alert
+     * showed a paying customer the terms again. The payload is the button text,
+     * so it is matched by words.
+     */
+    if (!Object.values(BTN).includes(intent.id)) {
+      if (/^my (vehicle )?reports?$|^my vehicles?$/i.test(intent.text)) { await myVehicles(mobile, message); return; }
+      if (/^(support|help|contact( us)?)$/i.test(intent.text)) { await sendSupportLink(mobile); return; }
     }
 
     switch (intent.id) {
@@ -1570,10 +1624,18 @@ async function handle(session, message, mobile) {
         await send.text(mobile, 'No problem. Please send the vehicle number again.');
         return;
 
-      default:
-        // An unknown id means a button from an older version of the flow.
-        await start(mobile);
+      default: {
+        // An unknown id means a button from an older version of the flow, or a
+        // template quick reply. Someone who agreed to the Terms in force is
+        // never shown them again (user, 2026-09-30) — they get the menu.
+        const agreed = await agreedVersion(mobile);
+        if (agreed && agreed === await policyVersion()) {
+          await doors(mobile, 'What would you like to do? You can also just send a vehicle number, like *KA01XX1234*.');
+        } else {
+          await start(mobile);
+        }
         return;
+      }
     }
   }
 
@@ -1647,6 +1709,32 @@ async function handle(session, message, mobile) {
           'Our Terms have been updated since you last used GaadiPe.\n\n'
           + OWNER_TERMS,
           [{ id: BTN.AGREE_OWNER, title: 'Agree & continue' }]);
+        return;
+      }
+
+      /*
+       * NOT A VEHICLE NUMBER (user, 2026-09-30). Every number plate has a
+       * digit, so text without one is someone talking — "You are fraud",
+       * "Faltu Giri bakwas" — and answering "YO is not a State code" reads as
+       * mockery. Reply as a person would, and hold the reminders.
+       */
+      const said = String(intent.text || '').trim();
+      if (said && !/\d/.test(said)) {
+        await quietNudges(mobile);
+        const plan = await billing.reportPlan().catch(() => null);
+        const price = plan ? ` at ₹${Math.round(plan.price_paise / 100)}` : '';
+        if (UNHAPPY_RE.test(said)) {
+          await send.buttons(mobile,
+            'Sorry this was not what you expected 🙏\n\n'
+            + `The basic check is *free*. The full report is *optional*${price} — nothing is charged unless you choose to pay.\n\n`
+            + 'If you would rather not continue, that is completely fine. Reply *STOP* and we will not message you.',
+            [{ id: BTN.CHECK_ANOTHER, title: 'Check a vehicle' },
+             { id: BTN.FEEDBACK, title: 'Tell us why' }]);
+        } else {
+          await doors(mobile,
+            'I can check any Indian vehicle for you — just send its number, like *KA01XX1234*.\n\n'
+            + '_For anything else, tap More → Support._');
+        }
         return;
       }
 

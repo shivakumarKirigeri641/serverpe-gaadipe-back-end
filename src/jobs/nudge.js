@@ -44,6 +44,7 @@ async function terms(mins) {
         AND modified_at     <= now() - make_interval(mins => $1)
         AND last_inbound_at <= now() - make_interval(mins => $1)
         AND last_inbound_at >  now() - interval '23 hours'
+        AND ${NOT_HUSHED('whatsapp_sessions')}
       ORDER BY last_inbound_at LIMIT ${PER_TICK}`, [mins])).rows;
   let sent = 0;
   for (const s of due) {
@@ -72,6 +73,12 @@ async function terms(mins) {
 
 /* Agreed, then went quiet before sending a vehicle number (user, 2026-09-28):
    the most common reason is not knowing what to send. */
+/* Held for a day after someone wrote something that was not a vehicle number —
+   "You are fraud", "bakwas" (user, 2026-09-30). flow.js stamps no_nudge_at;
+   a reminder then is chasing someone who has said no. */
+const NOT_HUSHED = (t) =>
+  `COALESCE((${t}.context->>'no_nudge_at')::timestamptz, 'epoch') < now() - interval '24 hours'`;
+
 async function number(mins) {
   const due = (await db.query(
     `SELECT id, mobile, user_id FROM whatsapp_sessions
@@ -79,6 +86,12 @@ async function number(mins) {
         AND modified_at     <= now() - make_interval(mins => $1)
         AND last_inbound_at <= now() - make_interval(mins => $1)
         AND last_inbound_at >  now() - interval '23 hours'
+        AND ${NOT_HUSHED('whatsapp_sessions')}
+        -- A customer who has already bought knows how it works (user, 2026-09-30):
+        -- a paying customer got "send your number" after using the menu.
+        AND NOT EXISTS (SELECT 1 FROM payments x JOIN users u ON u.id = x.user_id
+                         WHERE u.mobile = whatsapp_sessions.mobile
+                           AND x.status = 'paid' AND x.amount_paise > 0)
       ORDER BY last_inbound_at LIMIT ${PER_TICK}`, [mins])).rows;
   let sent = 0;
   for (const s of due) {
@@ -113,6 +126,7 @@ async function payments(mins) {
         AND s.state = 'awaiting_payment' AND s.wa_opt_out_at IS NULL
         AND s.last_inbound_at <= now() - make_interval(mins => $1)
         AND s.last_inbound_at >  now() - interval '23 hours'
+        AND ${NOT_HUSHED('s')}
         -- only their latest checkout: an older link they replaced stays quiet
         AND NOT EXISTS (SELECT 1 FROM payments q WHERE q.user_id = p.user_id AND q.id > p.id)
       ORDER BY p.created_at LIMIT ${PER_TICK}`, [mins])).rows;
