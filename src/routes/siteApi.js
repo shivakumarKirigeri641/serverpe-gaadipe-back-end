@@ -19,6 +19,8 @@
  *   GET    /site/api/invoices         my invoices · /:id/file the PDF
  *   GET    /site/api/pricing          what a report costs, for the page to show
  *   GET    /site/api/stats            "GaadiPe so far" — public totals, no personal data
+ *   GET    /site/api/testimonials     approved feedback, as the admin edited it
+ *   POST   /site/api/feedback         a rating and a message from gaadipe.in/feedback
  *
  * THE SAME RULES AS THE BOT, DELIBERATELY REUSED: the quota that decides how
  * many free checks someone gets, the plate parser, the block list and the
@@ -98,6 +100,12 @@ router.get('/pricing', safe(async (_req, res) => {
   });
 }));
 
+/** "What customers say" — approved feedback only (src/site/testimonials.js). */
+router.get('/testimonials', safe(async (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=120');
+  res.json({ testimonials: await require('../site/testimonials').list() });
+}));
+
 /** "GaadiPe so far" — public totals for the home page (src/site/stats.js). */
 router.get('/stats', safe(async (_req, res) => {
   res.set('Cache-Control', 'public, max-age=300');
@@ -113,7 +121,7 @@ router.get('/stats', safe(async (_req, res) => {
  * alert show it without anything new.
  */
 const feedbackHits = new Map();
-router.post('/feedback', express.json({ limit: '8kb' }), safe(async (req, res) => {
+router.post('/feedback', safe(async (req, res) => {
   const b = req.body || {};
   if (b.website) return res.json({ ok: true }); // the honeypot: a person never fills it
   const ip = String(req.ip || '');

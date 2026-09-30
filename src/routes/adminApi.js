@@ -1127,6 +1127,7 @@ router.post('/policies/:slug', needs('settings'), safe(async (req, res) => {
 router.get('/feedback', safe(async (req, res) => {
   const { rows } = await db.query(
     `SELECT f.id, f.mobile, f.reg_no, f.body, f.created_at, f.rating, f.channel,
+            f.approved_at, f.public_name, f.public_text,
             u.id AS user_id, coalesce(u.wa_profile_name, f.name) AS name, count(*) OVER () AS total_rows
        FROM feedback f LEFT JOIN users u ON u.id = f.user_id
       ORDER BY f.id DESC LIMIT $1 OFFSET $2`,
@@ -1134,6 +1135,32 @@ router.get('/feedback', safe(async (req, res) => {
   res.json({ total: rows[0] ? Number(rows[0].total_rows) : 0,
              rows: rows.map(({ total_rows, ...r }) => ({ ...r, id: String(r.id),
                                     user_id: r.user_id ? String(r.user_id) : null })) });
+}));
+
+/*
+ * TESTIMONIALS (user, 2026-09-30): approve a note from the website feedback
+ * link and it appears on gaadipe.in — with the text and name the admin chose.
+ * WhatsApp feedback cannot be approved: nobody there was told it might be
+ * shown in public. Taking one down is immediate.
+ */
+router.post('/feedback/:id/approve', needs('settings'), safe(async (req, res) => {
+  const text = String(req.body?.text || '').trim().slice(0, 600);
+  const name = String(req.body?.name || '').trim().slice(0, 40);
+  if (text.length < 5 || !name) return res.status(400).json({ error: 'invalid', message: 'Add the text and the name to show.' });
+  const row = await db.one(
+    `UPDATE feedback SET approved_at = now(), approved_by = $2, public_text = $3, public_name = $4
+      WHERE id = $1 AND channel LIKE 'web%' AND rating IS NOT NULL RETURNING id`,
+    [req.params.id, req.admin.id, text, name]);
+  if (!row) return res.status(400).json({ error: 'not_allowed', message: 'Only rated feedback from the website link can be shown.' });
+  await auth.audit({ adminId: req.admin.id, action: 'testimonial_approved', ip: ipOf(req), detail: { feedback_id: req.params.id, name } });
+  require('../site/testimonials').forget();
+  res.json({ ok: true });
+}));
+router.post('/feedback/:id/unapprove', needs('settings'), safe(async (req, res) => {
+  await db.query(`UPDATE feedback SET approved_at = NULL, approved_by = NULL WHERE id = $1`, [req.params.id]);
+  await auth.audit({ adminId: req.admin.id, action: 'testimonial_removed', ip: ipOf(req), detail: { feedback_id: req.params.id } });
+  require('../site/testimonials').forget();
+  res.json({ ok: true });
 }));
 
 /* -------------------------------------------------------------- security */
