@@ -238,8 +238,39 @@ async function feed(since) {
           text: [who(r), r.came_from === 'whatsapp_ad' ? 'from your ad' : null].filter(Boolean).join(' · '), mobile: r.mobile }
       : { kind: 'check', id: `chk:${r.id}`, at: r.at, tone: 'info', title: `🔍 Vehicle checked${r.reg_no ? ` · ${r.reg_no}` : ''}`,
           text: who(r), mobile: r.mobile, reg_no: r.reg_no })),
+    ...(await milestones()),
   ].sort((a, b) => new Date(a.at) - new Date(b.at));
   return { items, at: new Date().toISOString() };
+}
+
+/*
+ * CUSTOMER MILESTONES (user, 2026-09-30): every hundred customers is a
+ * celebration in the panel, every thousand a bigger one. Counted like the Home
+ * tile — without anyone who said STOP — and each mark recorded once in
+ * event_log, so it fires once however many tabs are open. Marks from the last
+ * three days are always returned: the panel remembers which ones this browser
+ * has already celebrated, so one reached overnight still gets its moment when
+ * the admin next opens the panel.
+ */
+async function milestones() {
+  const { n } = await db.one(
+    `SELECT count(*)::int AS n FROM users u
+      WHERE NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)`);
+  const mark = Math.floor(n / 100) * 100;
+  if (mark >= 100) {
+    await db.query(
+      `INSERT INTO event_log (kind, detail)
+       SELECT 'customer_milestone', jsonb_build_object('customers', $1::int, 'at_count', $2::int)
+        WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE kind = 'customer_milestone' AND (detail->>'customers')::int = $1)`,
+      [mark, n]);
+  }
+  const { rows } = await db.query(
+    `SELECT created_at AS at, (detail->>'customers')::int AS customers FROM event_log
+      WHERE kind = 'customer_milestone' AND created_at > now() - interval '3 days'
+      ORDER BY created_at DESC LIMIT 1`);
+  return rows.map((r) => ({ kind: 'milestone', id: `ms:${r.customers}`, at: r.at, tone: 'good',
+    customers: r.customers, big: r.customers % 1000 === 0,
+    title: `🎉 ${r.customers.toLocaleString('en-IN')} customers!`, text: 'A new milestone for GaadiPe.' }));
 }
 
 async function badges() {
