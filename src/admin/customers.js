@@ -185,13 +185,14 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
             (SELECT count(DISTINCT coalesce(user_id::text, mobile)) FROM events, b
               WHERE occurred_at >= b.d - interval '1 day' AND occurred_at < now() - interval '1 day'
                 AND coalesce(user_id::text, mobile) IS NOT NULL)::int AS active_yesterday,
-            -- The all-time total now and at this time yesterday (user, 2026-09-30),
+            -- New customers today against the WHOLE of yesterday (user, 2026-09-30),
             -- both without anyone who has said STOP, like the total itself.
-            (SELECT count(*) FROM users u WHERE NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
-              WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL))::int AS customers,
-            (SELECT count(*) FROM users u WHERE u.created_at < now() - interval '1 day'
+            (SELECT count(*) FROM users u, b WHERE u.created_at >= b.d
                 AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
-              WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL))::int AS customers_yesterday`);
+              WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL))::int AS customers_today,
+            (SELECT count(*) FROM users u, b WHERE u.created_at >= b.d - interval '1 day' AND u.created_at < b.d
+                AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
+              WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL))::int AS customers_yesterday_full`);
   const where = await placesFor(rows);
   return {
     total,
