@@ -1126,8 +1126,8 @@ router.post('/policies/:slug', needs('settings'), safe(async (req, res) => {
 
 router.get('/feedback', safe(async (req, res) => {
   const { rows } = await db.query(
-    `SELECT f.id, f.mobile, f.reg_no, f.body, f.created_at,
-            u.id AS user_id, u.wa_profile_name AS name, count(*) OVER () AS total_rows
+    `SELECT f.id, f.mobile, f.reg_no, f.body, f.created_at, f.rating, f.channel,
+            u.id AS user_id, coalesce(u.wa_profile_name, f.name) AS name, count(*) OVER () AS total_rows
        FROM feedback f LEFT JOIN users u ON u.id = f.user_id
       ORDER BY f.id DESC LIMIT $1 OFFSET $2`,
     [Math.min(200, Number(req.query.limit) || 100), Number(req.query.offset) || 0]);

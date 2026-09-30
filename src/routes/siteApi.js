@@ -56,6 +56,8 @@ const router = express.Router();
  */
 router.use(async (req, res, next) => {
   try {
+    // Feedback is never paused: it is how we hear that something is wrong.
+    if (req.path === '/feedback') return next();
     const flags = require('../util/flags');
     if (await flags.on('website_flow')) return next();
     const action = req.method !== 'GET' || /check|vehicle|lookup|report|buy|order|pay/i.test(req.path);
@@ -100,6 +102,41 @@ router.get('/pricing', safe(async (_req, res) => {
 router.get('/stats', safe(async (_req, res) => {
   res.set('Cache-Control', 'public, max-age=300');
   res.json({ stats: await require('../site/stats').get() });
+}));
+
+/*
+ * FEEDBACK FROM A LINK (user, 2026-09-30): gaadipe.in/feedback, sent in
+ * broadcasts — a star rating and a message, no sign-in. The number is optional;
+ * when given and it belongs to a customer, the note is linked to them. A hidden
+ * field catches bots, and one address may send five an hour. It lands in the
+ * same feedback table as WhatsApp feedback, so the admin page and the email
+ * alert show it without anything new.
+ */
+const feedbackHits = new Map();
+router.post('/feedback', express.json({ limit: '8kb' }), safe(async (req, res) => {
+  const b = req.body || {};
+  if (b.website) return res.json({ ok: true }); // the honeypot: a person never fills it
+  const ip = String(req.ip || '');
+  const now = Date.now();
+  const recent = (feedbackHits.get(ip) || []).filter((t) => now - t < 3600e3);
+  if (recent.length >= 5) return res.status(429).json({ error: 'too_many', message: 'Thank you — we already have your feedback. Please try again later.' });
+
+  const rating = Number(b.rating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: 'rating', message: 'Please choose from 1 to 5 stars.' });
+  }
+  const body = String(b.message || '').trim().slice(0, 1000);
+  const name = String(b.name || '').trim().slice(0, 60) || null;
+  const digits = String(b.mobile || '').replace(/\D/g, '').slice(-10);
+  const mobile = /^[6-9]\d{9}$/.test(digits) ? digits : null;
+  const src = String(b.src || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 30);
+  const user = mobile ? await db.one(`SELECT id FROM users WHERE mobile = $1`, [mobile]) : null;
+
+  recent.push(now); feedbackHits.set(ip, recent);
+  await db.query(
+    `INSERT INTO feedback (user_id, mobile, body, rating, name, channel) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [user?.id || null, mobile, body || `${'★'.repeat(rating)} (no message)`, rating, name, src ? `web:${src}` : 'web']);
+  res.json({ ok: true });
 }));
 
 /* ────────────────────────────────────────── how a full report is unlocked ── */

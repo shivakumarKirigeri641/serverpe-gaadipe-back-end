@@ -261,20 +261,22 @@ async function contacts() {
 async function feedback() {
   if (!(await on('notify_feedback'))) return 0;
   const { rows } = await db.query(
-    `SELECT f.*, coalesce(u.display_name, u.wa_profile_name) AS shown_name FROM feedback f
+    `SELECT f.*, coalesce(u.display_name, u.wa_profile_name, f.name) AS shown_name FROM feedback f
        LEFT JOIN users u ON u.id = f.user_id
       WHERE f.created_at > now() - interval '2 days' AND ${notDone('feedback', 'f.id::text')}
       ORDER BY f.id LIMIT 20`);
   let n = 0;
   for (const f of rows) {
     n += await deliver('feedback', f.id, async () => ({
-      subject: `💬 Feedback · ${f.shown_name || T.mobile(f.mobile)}${f.reg_no ? ` · ${f.reg_no}` : ''}`,
+      subject: `💬 Feedback${f.rating ? ` ${'★'.repeat(f.rating)}${'☆'.repeat(5 - f.rating)}` : ''} · ${f.shown_name || T.mobile(f.mobile)}${f.reg_no ? ` · ${f.reg_no}` : ''}`,
       ...T.layout({
         badge: { text: 'New feedback', tone: 'info' },
         title: `Feedback from ${f.shown_name || T.mobile(f.mobile)}`,
         lead: `Sent ${T.ist(f.created_at)}${f.reg_no ? ` about ${f.reg_no}` : ''}.`,
         note: f.body,
-        sections: [{ heading: 'From', rows: [['Name', f.shown_name || 'Not given'], ['Mobile', T.mobile(f.mobile)], ['Vehicle', f.reg_no]] }],
+        sections: [{ heading: 'From', rows: [['Rating', f.rating ? `${'★'.repeat(f.rating)}${'☆'.repeat(5 - f.rating)} (${f.rating}/5)` : null],
+          ['Name', f.shown_name || 'Not given'], ['Mobile', f.mobile ? T.mobile(f.mobile) : 'Not given'], ['Vehicle', f.reg_no],
+          ['Came from', f.channel && f.channel !== 'whatsapp' ? `Website${f.channel.includes(':') ? ` (${f.channel.split(':')[1]})` : ''}` : 'WhatsApp']] }],
         cta: { label: 'Open feedback', path: '/feedback' },
       }),
     })) ? 1 : 0;
