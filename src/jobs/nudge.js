@@ -138,7 +138,8 @@ async function payments(mins) {
     const out = await send.text(p.mobile,
       `${p.reg_no ? `*${p.reg_no}* — your` : 'Your'} full report is waiting.\n\n`
       + `Pay ₹${Math.round(p.amount_paise / 100)} here (UPI, card, netbanking):\n${base}/pay/${p.checkout_token}\n\n`
-      + 'The report arrives in this chat the moment the payment goes through.\n\n'
+      + 'The report arrives in this chat the moment the payment goes through — '
+      + 'no RTO visit, no fuel, no follow-up calls.\n\n'
       + '_Reply STOP if you would rather not hear from us._');
     if (out?.ok) { sent += 1; mark(`nudge_pay:${p.id}`, 'whatsapp_reminder_sent', p.mobile, p.user_id, { kind: 'payment', payment_row: p.id }); }
   }
