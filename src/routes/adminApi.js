@@ -882,6 +882,52 @@ router.post('/vehicles/:reg/refresh', needs('vehicles.refresh'), safe(async (req
  * customer would be shown. `refresh=1` spends a fresh ULIP call, which is free
  * today and the reason this screen exists at all.
  */
+/*
+ * THE VEHICLES YOU CHECKED (user, 2026-10-01): every vehicle this admin has
+ * looked up here, newest first — from the audit trail, so nothing extra is
+ * stored — with what we hold on each: make and model, document expiries, the
+ * pending challans, and when the saved record was last fetched.
+ */
+router.get('/check/history', needs('lookup'), safe(async (req, res) => {
+  const { rows } = await db.query(
+    `WITH mine AS (
+       SELECT detail->>'reg_no' AS reg_no, count(*)::int AS times, max(created_at) AS last_at, min(created_at) AS first_at
+         FROM admin_audit WHERE admin_id = $1 AND action = 'admin_check' AND detail ? 'reg_no'
+        GROUP BY 1 ORDER BY max(created_at) DESC LIMIT 200)
+     SELECT m.*, v.id AS vehicle_id, v.maker, v.model, v.fuel, v.vehicle_class,
+            v.insurance_upto, v.pucc_upto, v.fitness_upto, v.tax_upto, v.reg_upto,
+            (SELECT s.fetched_at FROM vehicle_snapshots s WHERE s.vehicle_id = v.id AND s.dataset = 'rc') AS saved_at,
+            (SELECT (s.data->>'pending_count')::int FROM vehicle_snapshots s WHERE s.vehicle_id = v.id AND s.dataset = 'challan') AS challans_pending,
+            (SELECT s.data->>'status' FROM vehicle_snapshots s WHERE s.vehicle_id = v.id AND s.dataset = 'rc') AS rc_status
+       FROM mine m LEFT JOIN vehicles v ON v.reg_no = m.reg_no
+      ORDER BY m.last_at DESC`, [req.admin.id]);
+  res.json({ rows: rows.map((r) => ({ ...r, vehicle_id: r.vehicle_id ? String(r.vehicle_id) : null })) });
+}));
+
+/*
+ * A vehicle in full from what we already hold (user, 2026-10-01): the saved RC,
+ * eChallan and FASTag records, in the same shape as a live check — no ULIP
+ * call, so it opens instantly and still works while VAHAN is down.
+ */
+router.get('/check/:regNo/saved', needs('lookup'), safe(async (req, res) => {
+  const parsed = plate.parse(req.params.regNo);
+  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  const v = await db.one(`SELECT id FROM vehicles WHERE reg_no = $1`, [parsed.regNo]);
+  const { rows } = v ? await db.query(`SELECT dataset, data, source, fetched_at FROM vehicle_snapshots WHERE vehicle_id = $1`, [v.id]) : { rows: [] };
+  const by = Object.fromEntries(rows.map((r) => [r.dataset, r]));
+  if (!by.rc || !by.rc.data || !Object.keys(by.rc.data).length) {
+    return res.status(404).json({ success: false, error: 'not_saved', message: 'No saved record for this vehicle yet — check it live.' });
+  }
+  await auth.audit({ adminId: req.admin.id, action: 'admin_check', ip: ipOf(req), detail: { reg_no: parsed.regNo, saved: true } });
+  res.json({
+    success: true, saved: true, vehicle_number: parsed.regNo, source: `saved · ${by.rc.source || 'VAHAN'}`,
+    cached: true, age_minutes: Math.round((Date.now() - new Date(by.rc.fetched_at)) / 60000),
+    fetched_at: by.rc.fetched_at, latency_ms: 0, calls: [], ulip_calls_made: 0,
+    rc: by.rc.data, challans: by.challan?.data || null, fastag: by.fastag?.data || null,
+    challans_fetched_at: by.challan?.fetched_at || null, fastag_fetched_at: by.fastag?.fetched_at || null,
+  });
+}));
+
 router.get('/check/:regNo', needs('lookup'), safe(async (req, res) => {
   const parsed = plate.parse(req.params.regNo);
   if (!parsed.ok) {
@@ -893,6 +939,11 @@ router.get('/check/:regNo', needs('lookup'), safe(async (req, res) => {
   });
   await auth.audit({ adminId: req.admin.id, action: 'admin_check', ip: ipOf(req),
                      detail: { reg_no: parsed.regNo, refresh: req.query.refresh === '1' } });
+  // Kept, so it opens from "Vehicles you checked" next time without a call
+  // (user, 2026-10-01). Never in the way of the answer.
+  if (data?.success === true && data.rc && (data.rc.maker || data.rc.model)) {
+    require('../vehicle/store').record(null, data).catch((e) => console.error('[check] save:', e.message));
+  }
   res.json(data);
 }));
 
