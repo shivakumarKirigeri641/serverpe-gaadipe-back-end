@@ -13,7 +13,7 @@
  *   wa_check       a vehicle checked on WhatsApp — found, or not
  *   wa_opt_out     someone replied STOP
  *   left_at_pay    a ₹19 payment link opened and not paid within 30 minutes
- *   daily_summary  the day's figures, once, from 9 pm IST
+ *   daily_summary  the day's figures, once, at 11:55 pm IST (daily_summary_hour_ist)
  *
  * WHY A JOB AND NOT A CALL IN EACH FLOW: a payment is confirmed in four places
  * (checkout, webhook, reconciler, WhatsApp), and a mail server that is slow or
@@ -35,6 +35,20 @@ const device = require('../site/device');
 
 const MAX_ATTEMPTS = 5;
 const on = async (key) => String(await settings.get(key, 'true')).toLowerCase() !== 'false';
+
+/*
+ * Has the day reached this setting's time yet (IST)? The value is a time —
+ * "23:55" — or a plain hour, "21", as the older settings were. The daily
+ * summaries go at 11:55 pm (user, 2026-10-01) so they cover the whole day.
+ */
+async function reached(key, fallback) {
+  const raw = String(await settings.get(key, fallback) ?? fallback).trim();
+  const TIME = /^(\d{1,2})(?:[:.](\d{2}))?$/;
+  const m = TIME.exec(raw) || TIME.exec(fallback);
+  const at = Math.min(23, Number(m[1])) * 60 + Math.min(59, Number(m[2] || 0));
+  const now = new Date(Date.now() + 5.5 * 3600 * 1000);
+  return now.getUTCHours() * 60 + now.getUTCMinutes() >= at;
+}
 
 /** Claim (kind, ref) for sending; null if it was sent already or has given up. */
 async function claim(kind, ref) {
@@ -712,7 +726,7 @@ async function weeklyMoney({ force = false } = {}) {
 
 /*
  * THE DAY ON YOUR OWN WHATSAPP (user, 2026-10-01): at admin_whatsapp_summary_hour_ist
- * (9 pm), a short summary to each number in admin_whatsapp_numbers. WhatsApp
+ * (11:55 pm), a short summary to each number in admin_whatsapp_numbers. WhatsApp
  * only allows a free message inside the 24-hour window, so it goes when that
  * number has written to the bot in the last day — say "hi" once a day to keep
  * it coming; otherwise it is skipped (the email summary still arrives).
@@ -722,7 +736,7 @@ async function whatsappSummary() {
     .split(/[,\s;]+/).map((x) => x.replace(/\D/g, '').slice(-10)).filter((x) => x.length === 10);
   if (!numbers.length) return 0;
   const now = new Date(Date.now() + 5.5 * 3600 * 1000);
-  if (now.getUTCHours() < await settings.num('admin_whatsapp_summary_hour_ist', 21)) return 0;
+  if (!await reached('admin_whatsapp_summary_hour_ist', '23:55')) return 0;
   const today = now.toISOString().slice(0, 10);
   const claim = await db.one(
     `INSERT INTO event_log (kind, detail) SELECT 'admin_wa_summary', $1::jsonb
@@ -758,9 +772,8 @@ async function whatsappSummary() {
 
 async function dailySummary() {
   if (!(await on('daily_summary_email'))) return 0;
-  const hour = await settings.num('daily_summary_hour_ist', 21);
+  if (!await reached('daily_summary_hour_ist', '23:55')) return 0;
   const now = new Date(Date.now() + 5.5 * 3600 * 1000);
-  if (now.getUTCHours() < hour) return 0;
   const today = now.toISOString().slice(0, 10);
 
   return (await deliver('daily_summary', today, async () => {

@@ -47,7 +47,7 @@ const GROUPS = [
     ['whatsapp_messaging_limit', 'Meta messaging limit (people per 24 h)', 'As shown in WhatsApp Manager — 250, then 2,000 once upgraded.'],
     ['lookup_waitlist_enabled', 'Waiting list when vehicle records are down (true / false)', 'Saves the number and sends the check automatically once the service is back.'],
     ['admin_whatsapp_numbers', 'Daily summary to these WhatsApp numbers', 'Your own number(s), comma-separated. Sent only if that number messaged the bot in the last 24 hours.'],
-    ['admin_whatsapp_summary_hour_ist', 'Daily summary hour (IST, 0–23)', ''],
+    ['admin_whatsapp_summary_hour_ist', 'Daily summary time (IST, like 23:55)', 'A time, or just an hour: 21 = 9 pm.'],
   ]],
   // The Saturday money report (user, 2026-10-01).
   ['Weekly money report (Excel by email)', [
