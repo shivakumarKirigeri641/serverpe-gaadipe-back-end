@@ -71,6 +71,8 @@ async function post(payload, meta) {
   }
 
   let res, json;
+  const t0 = Date.now();
+  const status = require('../util/providerStatus');
   try {
     res = await fetch(url(), {
       method: 'POST',
@@ -80,6 +82,7 @@ async function post(payload, meta) {
     });
     json = await res.json().catch(() => ({}));
   } catch (e) {
+    status.record('whatsapp', { ok: false, ms: Date.now() - t0, error: e.message });
     await record({ mobile, type, body, templateName, error: e.message, payload });
     console.error('[wa] send failed:', e.message);
     return { ok: false, error: e.message };
@@ -87,6 +90,10 @@ async function post(payload, meta) {
 
   const waMessageId = json?.messages?.[0]?.id || null;
   const error = json?.error ? `${json.error.code}: ${json.error.message}` : null;
+  // The status strip: Meta itself failing (5xx, token, rate limit, service
+  // unavailable) is an outage; one customer's phone refusing a message is not.
+  const metaDown = Boolean(json?.error) && (res.status >= 500 || [190, 131000, 131016, 130429, 80007].includes(Number(json.error.code)));
+  status.record('whatsapp', { ok: !metaDown, ms: Date.now() - t0, error: metaDown ? error : null });
   await record({ mobile, type, body, templateName, waMessageId, error, payload });
 
   if (error) {

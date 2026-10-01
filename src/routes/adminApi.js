@@ -500,7 +500,11 @@ router.get('/feed', safe(async (req, res) => res.json(await alertCenter.feed(req
 /* The milestone celebration was shown to this admin (user, 2026-09-30). */
 router.post('/milestones/:customers/seen', safe(async (req, res) =>
   res.json({ ok: await alertCenter.seenMilestone(req.admin?.id, req.params.customers) })));
-router.get('/badges', safe(async (_req, res) => res.json(await alertCenter.badges())));
+router.get('/badges', safe(async (_req, res) => res.json({
+  ...(await alertCenter.badges()),
+  // The status strip (user, 2026-10-01): the outside services, as real calls find them.
+  providers: await require('../util/providerStatus').all(),
+})));
 
 /* ── the admin additions of 2026-10-01 (src/admin/opsExtras.js) ── */
 const extras = () => require('../admin/opsExtras');

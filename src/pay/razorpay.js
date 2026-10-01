@@ -73,6 +73,8 @@ const alertOn = (e, path) => require('../admin/alerts').raise({
 
 async function call(path, method = 'GET', body) {
   let res;
+  const t0 = Date.now();
+  const status = require('../util/providerStatus');
   try {
     res = await fetch(`https://api.razorpay.com/v1${path}`, {
       method,
@@ -81,6 +83,7 @@ async function call(path, method = 'GET', body) {
       signal: AbortSignal.timeout(20000),
     });
   } catch (err) {
+    status.record('razorpay', { ok: false, ms: Date.now() - t0, error: err.message });
     if (method === 'POST') await alertOn(err, path);
     throw err;
   }
@@ -89,9 +92,12 @@ async function call(path, method = 'GET', body) {
     const e = new Error(json.error.description || 'razorpay error');
     e.code = json.error.code;
     // A customer's own bad input is not an outage.
-    if (method === 'POST' && !/BAD_REQUEST_ERROR/.test(String(e.code || ''))) await alertOn(e, path);
+    const outage = !/BAD_REQUEST_ERROR/.test(String(e.code || ''));
+    status.record('razorpay', { ok: !outage, ms: Date.now() - t0, error: outage ? `${e.code}: ${e.message}` : null });
+    if (method === 'POST' && outage) await alertOn(e, path);
     throw e;
   }
+  status.record('razorpay', { ok: true, ms: Date.now() - t0 });
   if (method === 'POST') await require('../admin/alerts').clear('razorpay_api_failing', 'Razorpay accepted a request again').catch(() => {});
   return json;
 }

@@ -63,6 +63,12 @@ async function load(kind, regNo, refresh, debug = false) {
 
   const fn = kind === 'rc' ? vahan.fetchRc : kind === 'challan' ? echallan.fetchChallans : fastag.fetchFastag;
   const r = await fn(regNo, { includeRaw: debug });
+  // The status strip (user, 2026-10-01): a live call's outcome — "not found" is an answer.
+  require('../util/providerStatus').record({ rc: 'vahan', challan: 'echallan', fastag: 'fastag' }[kind], {
+    ok: Boolean(r.ok || r.notFound),
+    ms: (r.calls || []).reduce((a, c) => a + (Number(c.ms) || 0), 0) || null,
+    error: r.ok || r.notFound ? null : `${r.code || ''} ${r.error || ''}`.trim(),
+  });
 
   if (r.ok) {
     const value = { data: r.data, source: r.source || null };

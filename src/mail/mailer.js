@@ -49,6 +49,8 @@ async function send({ to, subject, html, text, attachments = [], replyTo, header
   if (!t) return { ok: false, error: 'mail is not configured (MAIL_HOST, NOREPLYMAIL, NOREPLYMAIL_PASSWORD)' };
   const recipients = to ? [].concat(to) : await adminRecipients();
   if (!recipients.length) return { ok: false, error: 'no recipient (set ADMINMAIL or admin_alert_emails)' };
+  const t0 = Date.now();
+  const status = require('../util/providerStatus');
   try {
     const info = await t.sendMail({
       from: { name: 'GaadiPe', address: process.env.NOREPLYMAIL },
@@ -60,8 +62,10 @@ async function send({ to, subject, html, text, attachments = [], replyTo, header
       ...(replyTo ? { replyTo } : {}),
       headers: { 'X-Auto-Response-Suppress': 'All', 'Auto-Submitted': 'auto-generated', ...headers },
     });
+    status.record('email', { ok: true, ms: Date.now() - t0 });
     return { ok: true, to: recipients.join(', '), id: info.messageId };
   } catch (e) {
+    status.record('email', { ok: false, ms: Date.now() - t0, error: e.message });
     return { ok: false, to: recipients.join(', '), error: e.message };
   }
 }
