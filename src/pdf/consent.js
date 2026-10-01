@@ -93,7 +93,7 @@ function consentBlock(doc, y, consent, { compact = false } = {}) {
      .text(
        'This document was supplied on that declaration. It is a reproduction of Government records '
        + '(VAHAN, e-Challan, NETC FASTag) for the stated purpose only; it is not a Government-issued '
-       + 'record. The owner’s name, chassis and engine numbers are not disclosed and document numbers '
+       + 'record. Personal details — the owner’s name, chassis and engine numbers and document numbers — '
        + 'are masked. The requester is solely responsible for any use of this content. The report is a '
        + 'digital supply delivered on payment, and the purchase is final and non-refundable under the '
        + `Refund Policy${v.refund ? ` v${v.refund}` : ''}. ServerPe App Solutions is not responsible for `

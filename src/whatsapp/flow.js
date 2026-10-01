@@ -945,7 +945,7 @@ async function reportMenu(mobile, regNo, data, bought) {
     + 'road tax, fitness or permit about to expire\n\n'
     // What the other way costs (user, 2026-09-30) — the same line as the website.
     + `🚫 RTO queue · 🚫 Fuel · 🚫 Follow-ups — *just ${price}* ✨\n\n`
-    + '_* Price includes GST. Owner details are never shown. Nothing renews automatically._',
+    + '_* Price includes GST. Personal details are masked. Nothing renews automatically._',
     [{ id: BTN.BUY_REPORT,    title: `Full report ${price}*` },
      { id: BTN.FEEDBACK,      title: 'Feedback' },
      { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);

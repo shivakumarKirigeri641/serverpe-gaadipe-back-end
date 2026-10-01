@@ -14,15 +14,17 @@
  * If a report is ever misused, "who obtained this and when" must be answerable
  * from the document itself.
  *
- * Masking is identical to the WhatsApp report — chassis and engine never
- * appear, owner and document numbers are masked. A PDF is more forwardable than
- * a chat message, not less, so it gets no extra latitude.
+ * Masking is identical to the WhatsApp report (user, 2026-10-01): personal
+ * details are masked as on Parivahan — the owner's name as ULIP stars it,
+ * chassis and engine with only their first character, document numbers with
+ * their last four. A PDF is more forwardable than a chat message, not less, so
+ * it gets no extra latitude.
  * ---------------------------------------------------------------------------
  */
 
 const PDFDocument = require('pdfkit');
 const T = require('./theme');
-const { maskName, maskNumber, titleCase, documentsOf, human } = require('../whatsapp/report');
+const { maskName, maskNumber, maskFirst, titleCase, documentsOf, human } = require('../whatsapp/report');
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -119,9 +121,11 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     /* ── ownership ── */
     y = T.ensureSpace(doc, y, 90);
     y = T.sectionTitle(doc, 'Ownership', y, T.BRAND.brand);
-    // No owner name, masked or not: the report is sold as everything except
-    // personal details, and a PDF is the most forwardable thing we produce.
+    // Personal details masked, as on Parivahan (user, 2026-10-01).
     y = T.kvCard(doc, [
+      ['Owner name (masked)', maskName(rc.owner_name) || '—'],
+      ['Chassis no. (masked)', maskFirst(rc.chassis) || '—'],
+      ['Engine no. (masked)', maskFirst(rc.engine) || '—'],
       ['Owner type', titleCase(rc.owner_type) || '—'],
       ['Ownership serial', rc.owner_serial ? `${rc.owner_serial}` : '—'],
       ['Financer', titleCase(rc.financer) || 'Not financed'],
@@ -315,8 +319,8 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
        .text(
          'Declaration: the requester confirmed that this vehicle and its owner are known to them, '
          + 'and that these details were requested for a lawful and legitimate purpose, taking full '
-         + 'responsibility for their use. The owner name is not shown, document numbers are masked, '
-         + 'and chassis and engine numbers are never disclosed.',
+         + 'responsibility for their use. Personal details are masked, as on the Government’s '
+         + 'Parivahan portal: the owner’s name, the chassis and engine numbers, and document numbers.',
          T.M, y + 4, { width: W, align: 'justify' });
 
     /* WHOSE COPY THIS IS (user, 2026-09-18): the buyer on every page, and a

@@ -12,13 +12,14 @@
  * compressed underneath. "Expired 10 months ago" produces a reaction;
  * "12-Nov-2025" requires arithmetic nobody does on a phone.
  *
- * Second, some fields are never shown to anyone. The gateway returns
- * owner_name, chassis and engine because ULIP does; they must not leave this
- * file. We cannot verify who owns a vehicle from its number, so showing the
- * owner's name to whoever typed it is indefensible — and a chassis number that
- * has never been displayed stays a shared secret only the real owner knows,
- * which is what makes it usable to verify ownership later. FASTag crossings are
- * withheld for a stronger reason: a crossing history is a movement log.
+ * Second, personal details are MASKED (user, 2026-10-01), as on the
+ * Government's Parivahan portal: the owner's name exactly as ULIP gives it —
+ * already starred, "R********I" — and the chassis and engine numbers with only
+ * their first character. ULIP stars the last five characters of both, so their
+ * start is all we hold; one character proves the record is there without
+ * giving away the number, which stays usable to verify ownership later. The
+ * address, contact and FASTag crossings are never shown: a crossing history is
+ * a movement log.
  * ---------------------------------------------------------------------------
  */
 
@@ -48,12 +49,17 @@ const NEVER_SHOW = [
   // but the owner's — a stranger typing a plate should not learn what someone
   // paid for their car.
   'sale_amount',
-  // Chassis and engine are the two that never appear in any form, masked or
-  // otherwise. They are the credentials used to transfer or claim against a
-  // vehicle, and a number that has never been shown stays something only the
-  // real owner knows — which is what makes it usable to verify ownership later.
+  // Chassis and engine never leave this file whole — not in logs, not
+  // forwarded. The paid report shows only their first character (maskFirst).
   'chassis', 'engine',
 ];
+
+/** "MZBEN813MKN123456" → "M••••••••••••••••": the first character, the rest hidden. */
+function maskFirst(value) {
+  const clean = String(value || '').replace(/\s+/g, '');
+  if (!clean || !/^[A-Z0-9]/i.test(clean)) return null;
+  return clean[0].toUpperCase() + '•'.repeat(Math.min(Math.max(clean.length - 1, 4), 16));
+}
 
 /**
  * Masking: show enough to recognise, never enough to use.
@@ -215,10 +221,9 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
   const place = String(rc.registered_at || '').replace(/\s+/g, ' ').trim();
   if (place) lines.push(`📍 ${titleCase(place)}`);
 
-  // 'masked' by default, 'hidden' to omit entirely, 'full' only if that is ever
-  // deliberately chosen. Chassis and engine are NOT settings — they are never
-  // shown in any mode, because that is what keeps them usable as the ownership
-  // challenge later.
+  // 'masked' by default (as ULIP gives it), 'hidden' to omit, 'full' only if
+  // ever deliberately chosen. Chassis and engine are NOT settings: first
+  // character only, always.
   const ownerLine = !detailed || owner === 'hidden' ? null
     : owner === 'full' ? rc.owner_name
     : maskName(rc.owner_name);
@@ -228,6 +233,10 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
     lines.push(`👤 ${ownerLine}${serial}`);
   } else if (Number(rc.owner_serial) > 0) {
     lines.push(`👤 ${ORDINAL[rc.owner_serial] || rc.owner_serial + 'th'} owner`);
+  }
+  if (detailed) {
+    const ids = [['Chassis', maskFirst(rc.chassis)], ['Engine', maskFirst(rc.engine)]].filter(([, v]) => v);
+    if (ids.length) lines.push(`🔩 ${ids.map(([k, v]) => `${k} ${v}`).join(' · ')}`);
   }
   if (detailed && rc.financer) lines.push(`🏦 Financed · ${titleCase(rc.financer)}`);
 
@@ -312,8 +321,8 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
     '━━━━━━━━━━━━━━━',
     `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · Government records_`,
     detailed
-      ? '_Owner details, chassis and engine numbers are never shown. Document numbers are masked._'
-      : '_Chassis, engine and owner details are never shown on a free check._');
+      ? '_🔒 Personal details are masked, as on the Government’s Parivahan portal._'
+      : '_🔒 Personal details are masked._');
 
   return lines.join('\n');
 }
@@ -434,12 +443,12 @@ async function buildFor(data, opts = {}) {
   const settings = require('../util/settings');
   return build(data, {
     ...opts,
-    // No owner name in any report, masked or not (user, 2026-09-30, migration 089);
-    // the owner count ("2nd owner") is still shown.
-    owner: await settings.get('owner_name_display', 'hidden'),
+    // The owner's name masked, as on Parivahan (user, 2026-10-01, migration 095 —
+    // which reverses 089's 'hidden').
+    owner: await settings.get('owner_name_display', 'masked'),
     docNumbers: await settings.get('document_numbers_display', 'masked'),
   });
 }
 
 module.exports = { build, buildFor, basic, attentionCount, attentionLabels, attentionSummary, safeRc, documentsOf, human,
-                   maskName, maskNumber, titleCase, NEVER_SHOW };
+                   maskName, maskNumber, maskFirst, titleCase, NEVER_SHOW };

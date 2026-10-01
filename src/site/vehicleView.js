@@ -6,7 +6,9 @@
  * showing paid detail.
  *
  * The rules:
- *   never, to anyone   chassis, engine, the owner's name
+ *   masked, paid only  the owner's name (as ULIP stars it), chassis and engine
+ *                      (first character only) — as on Parivahan (user, 2026-10-01)
+ *   never, to anyone   address, contact, FASTag crossings
  *   free               what the vehicle is, and WHICH documents have lapsed
  *   paid               every date, the challan list, financer, blacklist, NOC,
  *                      document references and FASTag
@@ -151,6 +153,9 @@ function full(data) {
   };
 
   out.ownership = {
+    owner_masked: report.maskName(rc.owner_name),
+    chassis_masked: report.maskFirst(rc.chassis),
+    engine_masked: report.maskFirst(rc.engine),
     owner_serial: rc.owner_serial ?? null,
     owner_type: rc.owner_type || null,
     financer: rc.financer || null,
