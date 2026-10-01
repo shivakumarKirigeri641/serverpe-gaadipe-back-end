@@ -42,6 +42,13 @@ const GROUPS = [
     ['report_valid_days', 'Report download window (days)', ''],
     ['vehicle_expiring_days', '“Expiring soon” means within (days)', ''],
   ]],
+  // The Saturday money report (user, 2026-10-01).
+  ['Weekly money report (Excel by email)', [
+    ['finance_weekly_email', 'Send it (true / false)', 'Every week, the Excel of the week just ended.'],
+    ['finance_report_emails', 'Send to', 'One or more addresses, separated by commas.'],
+    ['finance_weekly_day', 'Day (0 = Sunday … 6 = Saturday)', 'The week reported is the seven days before that day.'],
+    ['finance_weekly_hour_ist', 'From hour (IST, 0–23)', ''],
+  ]],
 ];
 
 const HISTORY_ACTIONS = ['settings_changed', 'plan_changed', 'plan_updated', 'gst_rate_changed', 'flag_changed', 'alert_muted', 'alert_unmuted'];

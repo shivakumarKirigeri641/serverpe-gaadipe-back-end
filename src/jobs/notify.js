@@ -650,6 +650,63 @@ async function security() {
 
 /* ──────────────────────────────────────────────────────── daily summary ── */
 
+/*
+ * THE WEEKLY MONEY REPORT (user, 2026-10-01): every Saturday from 9 am IST,
+ * the Excel of the week just ended (Saturday to Friday) to finance_report_emails
+ * — gross, GST, Razorpay, WhatsApp by category, vehicle API, SMS, fleets, net.
+ * Once per week, whatever the number of servers or ticks (admin_notifications).
+ */
+async function weeklyMoney({ force = false } = {}) {
+  if (!force && !(await on('finance_weekly_email'))) return 0;
+  const now = new Date(Date.now() + 5.5 * 3600 * 1000);
+  const dayWanted = await settings.num('finance_weekly_day', 6);       // 6 = Saturday
+  const hour = await settings.num('finance_weekly_hour_ist', 9);
+  if (!force && (now.getUTCDay() !== dayWanted || now.getUTCHours() < hour)) return 0;
+  const weekly = require('../finance/weekly');
+  const { from } = weekly.lastWeek();
+  const to = String(await settings.get('finance_report_emails', '')).split(/[,\s]+/).filter((x) => /@/.test(x));
+  const send = async () => {
+    const r = await weekly.build();
+    const c = r.cur; const p = r.prev;
+    const ch = (a, b) => (b ? ` (${a >= b ? '▲' : '▼'} ${Math.abs(Math.round(((a - b) / Math.abs(b)) * 100))}% vs last week)` : '');
+    return {
+      ...(to.length ? { to } : {}),
+      subject: `📊 GaadiPe weekly money · ${r.label} · net ${T.rupees(c.net)}`,
+      attachments: [{ filename: r.filename, content: r.xlsx,
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }],
+      ...T.layout({
+        badge: { text: 'Weekly money report', tone: c.net >= 0 ? 'good' : 'watch' },
+        title: `Week of ${r.label}`,
+        lead: `${c.payments} report${c.payments === 1 ? '' : 's'} paid${c.fleet_payments ? ` and ${c.fleet_payments} fleet payment${c.fleet_payments === 1 ? '' : 's'}` : ''}. The full detail — by day, by payment and by WhatsApp template — is in the attached Excel.`,
+        sections: [
+          { heading: 'Money in', rows: [
+            ['Gross received (incl. GST)', `${T.rupees(c.gross)}${ch(c.gross, p.gross)}`],
+            ['GST collected', `${T.rupees(c.gst)} (CGST ${T.rupees(c.cgst)} · SGST ${T.rupees(c.sgst)}${c.igst ? ` · IGST ${T.rupees(c.igst)}` : ''})`],
+            ['Net sales (excl. GST)', T.rupees(c.net_sales)],
+            ['Refunds', c.refunds ? T.rupees(c.refunds) : null],
+          ] },
+          { heading: 'Costs', rows: [
+            [`Razorpay fee + GST`, T.rupees(c.rzp_fee + c.rzp_gst)],
+            [`WhatsApp utility · ${c.wa_utility.n} × ₹${(r.rates.wa_utility_paise / 100).toFixed(2)}`, T.rupees(c.wa_utility.cost)],
+            [`WhatsApp marketing · ${c.wa_marketing.n} × ₹${(r.rates.wa_marketing_paise / 100).toFixed(2)}`, T.rupees(c.wa_marketing.cost)],
+            ['Vehicle records API', `${T.rupees(c.api_cost)} · ${c.api_calls} calls`],
+            ['SMS sign-in codes', c.sms ? T.rupees(c.sms_cost) : null],
+            ['Total costs', T.rupees(c.costs)],
+          ] },
+          { heading: 'Result', rows: [
+            ['Net profit', `${T.rupees(c.net)}${ch(c.net, p.net)}`],
+            ['Margin on net sales', c.margin != null ? `${c.margin}%` : '—'],
+          ] },
+        ],
+        note: 'Meta ads spend is not included. GST collected is owed to the Government; ask your CA about input credit on Razorpay’s GST.',
+        cta: { label: 'Open Business', path: '/business' },
+      }),
+    };
+  };
+  if (force) { const mail = await send(); return (await mailer.send(mail)).ok ? 1 : 0; }
+  return (await deliver('finance_weekly', from.toISOString().slice(0, 10), send)) ? 1 : 0;
+}
+
 async function dailySummary() {
   if (!(await on('daily_summary_email'))) return 0;
   const hour = await settings.num('daily_summary_hour_ist', 21);
@@ -722,7 +779,7 @@ async function runOnce() {
   if (!mailer.configured()) return { skipped: 'mail not configured' };
   const out = {};
   for (const [k, fn] of Object.entries({ signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
-                                            leftAtPayment, alertMails, security, dailySummary })) {
+                                            leftAtPayment, alertMails, security, dailySummary, weeklyMoney })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
   const total = Object.values(out).reduce((t, v) => t + (Number(v) || 0), 0);
@@ -748,4 +805,4 @@ function start(everySeconds = 30) {
 }
 
 module.exports = { start, runOnce, signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
-                   leftAtPayment, security, dailySummary };
+                   leftAtPayment, security, dailySummary, weeklyMoney };
