@@ -257,7 +257,7 @@ async function intel(q = {}) {
     range: { label: r.label },
     most_searched: vehicles.rows.map((x) => ({ ...veh(x), n: x.n, people: x.people, last: x.last })),
     repeated: vehicles.rows.filter((x) => x.n >= 2).map((x) => ({ ...veh(x), n: x.n, people: x.people })),
-    rtos: rtos.rows, makers: makers.rows, models: models.rows,
+    rtos: await require('./geo').labelRtos(rtos.rows), makers: makers.rows, models: models.rows,
     person_many_vehicles: perPerson.rows.map((x) => ({ customer: maskMobile(x.person), ref: x.user_id ? `u${x.user_id}` : null, vehicles: x.vehicles, n: x.n })),
     vehicle_many_people: perVehicle.rows.map((x) => ({ ...veh(x), people: x.people, n: x.n })),
   };

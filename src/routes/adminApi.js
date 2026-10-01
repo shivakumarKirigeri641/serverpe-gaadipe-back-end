@@ -506,6 +506,8 @@ router.get('/badges', safe(async (_req, res) => res.json(await alertCenter.badge
 router.get('/geo/states', safe(async (req, res) => res.json(await require('../admin/geo').states(periodOf(req.query)))));
 router.get('/geo/states/:code', safe(async (req, res) => res.json(
   await require('../admin/geo').rtos(req.params.code, periodOf(req.query)))));
+/* Every RTO in India, with this period's activity (user, 2026-10-01). */
+router.get('/geo/rtos', safe(async (req, res) => res.json(await require('../admin/geo').allRtos(periodOf(req.query)))));
 
 /* One person, start to finish, and the CSV exports (phase 3,
    src/admin/journey.js). Both show personal data, so both are audited. */

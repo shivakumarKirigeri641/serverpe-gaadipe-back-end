@@ -271,7 +271,12 @@ async function list(q = {}, admin = {}) {
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY x.${SORTS[sortKey]} ${dir} NULLS LAST, x.id DESC
       LIMIT ${limit} OFFSET ${offset}`, args);
-  return { total: rows[0] ? Number(rows[0].total_rows) : 0, rows: rows.map(rowOut), view: q.view || null, soon_days: args[0] };
+  // Each row's RTO office beside its code (user, 2026-10-01).
+  const geo = require('./geo');
+  const names = await geo.rtoNames([...new Set(rows.map((r) => geo.rtoCode(r.reg_no)).filter(Boolean))]);
+  return { total: rows[0] ? Number(rows[0].total_rows) : 0,
+    rows: rows.map((r) => ({ ...rowOut(r), rto_name: names[geo.rtoCode(r.reg_no)] || null })),
+    view: q.view || null, soon_days: args[0] };
 }
 
 /* ─────────────────────────────── the numbers ─────────────────────────────── */
@@ -717,6 +722,7 @@ async function profile(input, { admin, canSensitive, canApi } = {}) {
       variant: null, fuel: v.fuel || rc?.fuel || null, vehicle_class: v.vehicle_class || rc?.vehicle_class || null,
       category: rc?.vehicle_category || null, age_years: age, state: reg.slice(0, 2),
       rto: /^[A-Z]{2}\d{2}/.test(reg) ? reg.slice(0, 4) : reg.slice(0, 2), registered_at: rc?.registered_at || null,
+      rto_name: await require('./geo').rtoNameOf(reg).catch(() => null),
       first_seen: v.first_seen_at, last_seen: v.last_seen_at, last_updated: checked,
     },
     overall, details, documents: docsOut, soon_days: soon, challans, blacklist, loan,

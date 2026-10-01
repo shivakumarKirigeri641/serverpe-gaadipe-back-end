@@ -188,7 +188,8 @@ async function payments() {
               ['Take-home (before messaging)', T.rupees(split.take_home_paise)],
             ] },
             { heading: 'Vehicle', rows: veh ? [
-              ['Registration', veh.reg_no], ['Make · model', [veh.maker, veh.model].filter(Boolean).join(' · ')],
+              ['Registration', veh.reg_no], ['RTO', await rtoLine(veh.reg_no)],
+              ['Make · model', [veh.maker, veh.model].filter(Boolean).join(' · ')],
               ['Fuel · class', [veh.fuel, veh.vehicle_class].filter(Boolean).join(' · ')],
             ] : [['Registration', 'Not recorded']] },
             { heading: 'Documents issued', rows: [
@@ -329,6 +330,16 @@ async function whoIs(mobile) {
 }
 const nameOf = (w, mobile) => w?.display_name || w?.profile_name || T.mobile(mobile);
 
+/* "KA01 · Bengaluru Central, HSR Layout" — the plate's RTO and its office
+   (user, 2026-10-01); just the code if the list has no name for it. */
+async function rtoLine(reg) {
+  const geo = require('../admin/geo');
+  const code = geo.rtoCode(reg);
+  if (!code) return null;
+  const name = await geo.rtoNameOf(reg).catch(() => null);
+  return name ? `${code} · ${name}` : code;
+}
+
 /*
  * MORE ABOUT A NEW CONTACT (user, 2026-09-30) — everything we know, without
  * guessing. WhatsApp shares no location, so "where" comes from what they did:
@@ -453,6 +464,7 @@ async function waChecks() {
             sections: [
               { heading: 'Vehicle', rows: [
                 ['Number', d.reg_no],
+                ['RTO', d.reg_no ? await rtoLine(d.reg_no) : null],
                 ['Make · model', v ? [v.maker, v.model].filter(Boolean).join(' · ') : '—'],
                 ['Fuel · type', v ? [v.fuel, v.vehicle_class].filter(Boolean).join(' · ') : '—'],
                 ['Result', outcome],

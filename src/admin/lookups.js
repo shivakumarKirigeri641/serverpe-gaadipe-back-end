@@ -75,7 +75,9 @@ async function summary(q = {}) {
       success_pct: n.searches ? Math.round((n.found / n.searches) * 1000) / 10 : null,
       api,
     },
-    by_day: byDay.rows, by_state: byState.rows, by_rto: byRto.rows, by_class: byClass.rows, by_maker: byMaker.rows,
+    by_day: byDay.rows, by_state: byState.rows, by_class: byClass.rows, by_maker: byMaker.rows,
+    // With each RTO's office name beside its code (user, 2026-10-01).
+    by_rto: await require('./geo').labelRtos(byRto.rows),
   };
 }
 

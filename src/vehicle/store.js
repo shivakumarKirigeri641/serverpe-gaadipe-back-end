@@ -100,6 +100,25 @@ async function upsertVehicle(regNo, rc = {}) {
   return rows[0];
 }
 
+/*
+ * AN RTO THE LIST DOES NOT HAVE (user, 2026-10-01). Every record names the
+ * office the vehicle is registered at now ("SIRSI RTO, Karnataka"). That is
+ * NOT a reliable name for the plate's code — a KA01 car moved to Rajajinagar
+ * says "Bengaluru West" — so it never overrides the RTO list (migration 092).
+ * It only adds a code the list lacked, so no plate is left without a name.
+ * Never in the way of the lookup itself.
+ */
+async function learnRto(regNo, registeredAt) {
+  const { rtoCode } = require('../admin/geo');
+  const code = rtoCode(regNo);
+  const name = String(registeredAt || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  if (!code || !name || code.startsWith('BH')) return;
+  await db.query(
+    `INSERT INTO rtos (code, state_code, vahan_name, vahan_at, source)
+          VALUES ($1, left($1, 2), $2, now(), 'vahan')
+     ON CONFLICT (code) DO NOTHING`, [code, name]);
+}
+
 /** Keep the whole response so a wrong mapping can be re-derived for free. */
 async function saveSnapshot(vehicleId, dataset, data, { source, ttlMinutes = 60 * 24 } = {}) {
   await db.query(
@@ -242,6 +261,7 @@ async function record(userId, data) {
   const vehicle = await upsertVehicle(data.vehicle_number, data.rc || {});
   await saveSnapshot(vehicle.id, 'rc', data.rc || {},
     { source: data.source, ttlMinutes: 60 * 24 * 7 });
+  learnRto(data.vehicle_number, data.rc?.registered_at).catch(() => {});
   if (data.challans) {
     await saveSnapshot(vehicle.id, 'challan', data.challans, { ttlMinutes: 60 * 12 });
   }
