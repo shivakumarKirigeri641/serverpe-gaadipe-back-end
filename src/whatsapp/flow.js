@@ -845,12 +845,26 @@ async function deliverReport(mobile, regNo, message) {
     // (jobs/notify.js) — a lookup that fails is a customer who got nothing.
     await funnel(mobile, 'lookup_failed', { reg_no: regNo, reason: notFound ? 'not_found' : 'service_error' });
     await setState(mobile, 'owner_start', notFound ? 'vehicle not found' : 'lookup failed');
-    await send.text(mobile, notFound
-      ? `I could not find any Government record for *${regNo}*.\n\n`
+    if (notFound) {
+      await send.text(mobile, `I could not find any Government record for *${regNo}*.\n\n`
         + 'Please check the number and send it again. Very new vehicles can take '
-        + 'a few weeks to appear.'
-      : 'Sorry, the vehicle service is busy right now. Please send the number '
-        + 'again in a minute.');
+        + 'a few weeks to appear.');
+      return;
+    }
+    /*
+     * THE WAITING LIST (user, 2026-10-01): when the Government records service
+     * is down, the number is kept and the check is sent here automatically once
+     * it is back (jobs/waitlist.js) — nobody has to keep trying.
+     */
+    const listed = await settings.bool('lookup_waitlist_enabled', true)
+      && await db.query(
+        `INSERT INTO lookup_waitlist (mobile, reg_no, user_id) VALUES ($1, $2, $3)
+         ON CONFLICT (mobile, reg_no) WHERE status = 'waiting' DO NOTHING`, [mobile, regNo, user.id])
+        .then(() => true).catch((e) => { console.error('[wa] waitlist:', e.message); return false; });
+    await send.text(mobile, listed
+      ? `The Government vehicle records service is not responding right now — this is on their side, not your number. 🙏\n\n`
+        + `I have saved *${regNo}* and will send you its details *here, automatically*, as soon as the service is back. No need to send it again.`
+      : 'Sorry, the vehicle service is busy right now. Please send the number again in a little while.');
     return;
   }
 
@@ -1835,4 +1849,7 @@ async function handle(session, message, mobile) {
   }
 }
 
-module.exports = { handle, welcome, recordConsent, BTN };
+/** The free check for a number on the waiting list, now the records are back (jobs/waitlist.js). */
+const checkFromWaitlist = (mobile, regNo) => openVehicle(mobile, regNo, { type: 'system' }, 'waitlist: records service back');
+
+module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN };

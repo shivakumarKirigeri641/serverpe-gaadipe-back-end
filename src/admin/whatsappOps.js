@@ -78,4 +78,4 @@ async function economics() {
   };
 }
 
-module.exports = { economics };
+module.exports = { economics, rates };

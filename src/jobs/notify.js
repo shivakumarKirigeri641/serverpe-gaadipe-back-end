@@ -696,15 +696,64 @@ async function weeklyMoney({ force = false } = {}) {
           { heading: 'Result', rows: [
             ['Net profit', `${T.rupees(c.net)}${ch(c.net, p.net)}`],
             ['Margin on net sales', c.margin != null ? `${c.margin}%` : '—'],
+            ['Meta ads spend', c.ads ? T.rupees(c.ads) : 'Not entered — Ad spend page'],
+            ['Net profit after ads', c.ads ? T.rupees(c.net_after_ads) : null],
+            ['Ads cost per paying customer', c.ads_per_paying ? T.rupees(c.ads_per_paying) : null],
           ] },
         ],
-        note: 'Meta ads spend is not included. GST collected is owed to the Government; ask your CA about input credit on Razorpay’s GST.',
+        note: 'GST collected is owed to the Government; ask your CA about input credit on Razorpay’s GST.',
         cta: { label: 'Open Profitability', path: '/profitability' },
       }),
     };
   };
   if (force) { const mail = await send(); return (await mailer.send(mail)).ok ? 1 : 0; }
   return (await deliver('finance_weekly', from.toISOString().slice(0, 10), send)) ? 1 : 0;
+}
+
+/*
+ * THE DAY ON YOUR OWN WHATSAPP (user, 2026-10-01): at admin_whatsapp_summary_hour_ist
+ * (9 pm), a short summary to each number in admin_whatsapp_numbers. WhatsApp
+ * only allows a free message inside the 24-hour window, so it goes when that
+ * number has written to the bot in the last day — say "hi" once a day to keep
+ * it coming; otherwise it is skipped (the email summary still arrives).
+ */
+async function whatsappSummary() {
+  const numbers = String(await settings.get('admin_whatsapp_numbers', ''))
+    .split(/[,\s;]+/).map((x) => x.replace(/\D/g, '').slice(-10)).filter((x) => x.length === 10);
+  if (!numbers.length) return 0;
+  const now = new Date(Date.now() + 5.5 * 3600 * 1000);
+  if (now.getUTCHours() < await settings.num('admin_whatsapp_summary_hour_ist', 21)) return 0;
+  const today = now.toISOString().slice(0, 10);
+  const claim = await db.one(
+    `INSERT INTO event_log (kind, detail) SELECT 'admin_wa_summary', $1::jsonb
+      WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE kind = 'admin_wa_summary' AND detail->>'day' = $2) RETURNING id`,
+    [JSON.stringify({ day: today }), today]);
+  if (!claim) return 0;
+  const send = require('../whatsapp/send');
+  const d = await db.one(
+    `WITH b AS (SELECT date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' AS t)
+     SELECT (SELECT count(*) FROM users u, b WHERE u.created_at >= b.t AND NOT u.is_internal)::int AS joined,
+            (SELECT count(DISTINCT mobile) FROM whatsapp_messages, b WHERE direction = 'in' AND created_at >= b.t)::int AS chatted,
+            (SELECT count(*) FROM events, b WHERE name = 'vehicle_search_success' AND occurred_at >= b.t)::int AS checks,
+            (SELECT count(*) FROM events, b WHERE name = 'vehicle_search_failed' AND occurred_at >= b.t)::int AS failed,
+            (SELECT count(*) FROM payments, b WHERE status = 'paid' AND amount_paise > 0 AND paid_at >= b.t)::int AS paid,
+            (SELECT coalesce(sum(amount_paise), 0) FROM payments, b WHERE status = 'paid' AND paid_at >= b.t)::int AS revenue,
+            (SELECT count(*) FROM event_log, b WHERE kind = 'funnel' AND detail->>'step' = 'opt_out' AND created_at >= b.t)::int AS stops,
+            (SELECT count(*) FROM lookup_waitlist WHERE status = 'waiting')::int AS waiting`);
+  const text = `📊 *GaadiPe today* · ${today}\n\n`
+    + `👋 New customers: *${d.joined}*\n💬 Chatted: *${d.chatted}*\n🔍 Checks: *${d.checks}*${d.failed ? ` (${d.failed} failed)` : ''}\n`
+    + `💳 Paid: *${d.paid}* · *${T.rupees(d.revenue)}*\n`
+    + (d.stops ? `🛑 STOP: ${d.stops}\n` : '')
+    + (d.waiting ? `⏳ Waiting for vehicle records: ${d.waiting}\n` : '')
+    + '\n_Reply "hi" any time to keep this daily summary coming._';
+  let sent = 0;
+  for (const m of numbers) {
+    if (!(await send.windowOpen(m))) { console.log('[notify] WhatsApp summary to …%s skipped: no message from that number in 24 hours', m.slice(-4)); continue; }
+    const out = await send.text(m, text);
+    if (out?.ok) sent += 1;
+  }
+  await db.query(`UPDATE event_log SET detail = detail || $2::jsonb WHERE id = $1`, [claim.id, JSON.stringify({ sent })]);
+  return sent;
 }
 
 async function dailySummary() {
@@ -779,7 +828,7 @@ async function runOnce() {
   if (!mailer.configured()) return { skipped: 'mail not configured' };
   const out = {};
   for (const [k, fn] of Object.entries({ signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
-                                            leftAtPayment, alertMails, security, dailySummary, weeklyMoney })) {
+                                            leftAtPayment, alertMails, security, dailySummary, weeklyMoney, whatsappSummary })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
   const total = Object.values(out).reduce((t, v) => t + (Number(v) || 0), 0);
@@ -805,4 +854,4 @@ function start(everySeconds = 30) {
 }
 
 module.exports = { start, runOnce, signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
-                   leftAtPayment, security, dailySummary, weeklyMoney };
+                   leftAtPayment, security, dailySummary, weeklyMoney, whatsappSummary };

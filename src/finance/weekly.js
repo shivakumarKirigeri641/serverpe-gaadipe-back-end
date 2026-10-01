@@ -103,6 +103,10 @@ async function figures(from, to) {
   // period), plus the fleets' own net.
   t.net = money.net_paise + (fl.gross - fl.gst - fl.fee - fl.feeGst);
   t.margin = t.net_sales > 0 ? Math.round((t.net / t.net_sales) * 1000) / 10 : null;
+  // Ads, as entered on the Ad spend page (user, 2026-10-01).
+  t.ads = await require('../admin/opsExtras').spendBetween(from, to).catch(() => 0);
+  t.net_after_ads = t.net - t.ads;
+  t.ads_per_paying = t.ads && t.payments ? Math.round(t.ads / t.payments) : null;
 
   // One row per IST day.
   const days = [];
@@ -196,8 +200,12 @@ async function workbook(cur, prev, { from, to }) {
   line('Net profit (after GST, refunds and costs)', t.net, p.net, { bold: true });
   const m = s.addRow(['Margin on net sales', t.margin != null ? t.margin / 100 : null, p.margin != null ? p.margin / 100 : null]);
   m.getCell(2).numFmt = '0.0%'; m.getCell(3).numFmt = '0.0%';
+  section('After ads');
+  line('Meta ads spend (Ad spend page)', t.ads, p.ads);
+  line('Net profit after ads', t.net_after_ads, p.net_after_ads, { bold: true });
+  line('Ads cost per paying customer', t.ads_per_paying || 0, p.ads_per_paying || 0);
   s.addRow([]);
-  s.addRow(['Not included: Meta ads spend and other costs paid outside GaadiPe. GST collected is owed to the Government; Razorpay’s GST may be claimable as input credit — ask your CA.']).font = { italic: true, color: { argb: 'FF6B7C79' } };
+  s.addRow(['Not included: costs paid outside GaadiPe other than the ad spend entered on the Ad spend page. GST collected is owed to the Government; Razorpay’s GST may be claimable as input credit — ask your CA.']).font = { italic: true, color: { argb: 'FF6B7C79' } };
 
   // Daily
   const d = wb.addWorksheet('Daily');

@@ -321,7 +321,17 @@ async function badges() {
             (SELECT count(*) FROM payments WHERE status = 'created' AND created_at > now() - interval '30 minutes')::int AS payments_pending,
             -- The Vehicles menu item: today's vehicle lookups (IST day).
             (SELECT count(*) FROM events WHERE name IN ('vehicle_search_success', 'vehicle_search_failed')
-                AND occurred_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS vehicles_today`);
+                AND occurred_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS vehicles_today,
+            -- THE OUTAGE BANNER (user, 2026-10-01): vehicle records down = of the
+            -- last six lookups in an hour, three or more failed on the service's
+            -- side and the newest of them did; and how many customers are waiting.
+            (SELECT count(*) FILTER (WHERE failed) >= 3 AND coalesce(bool_or(failed) FILTER (WHERE rn = 1), false) FROM (
+               SELECT (name = 'vehicle_search_failed' AND coalesce(error_code, '') <> 'not_found') AS failed,
+                      row_number() OVER (ORDER BY occurred_at DESC) AS rn
+                 FROM events WHERE name IN ('vehicle_search_success', 'vehicle_search_failed')
+                  AND occurred_at > now() - interval '60 minutes'
+                ORDER BY occurred_at DESC LIMIT 6) x) AS records_down,
+            (SELECT count(*) FROM lookup_waitlist WHERE status = 'waiting')::int AS waitlist`);
 }
 
 module.exports = { seenMilestone, check, list, ack, resolve, feed, badges, raise, clear };

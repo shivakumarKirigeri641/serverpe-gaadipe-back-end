@@ -502,6 +502,36 @@ router.post('/milestones/:customers/seen', safe(async (req, res) =>
   res.json({ ok: await alertCenter.seenMilestone(req.admin?.id, req.params.customers) })));
 router.get('/badges', safe(async (_req, res) => res.json(await alertCenter.badges())));
 
+/* ── the admin additions of 2026-10-01 (src/admin/opsExtras.js) ── */
+const extras = () => require('../admin/opsExtras');
+const fail = (res, e) => res.status(e.status || 500).json({ error: 'failed', message: e.message });
+router.get('/waitlist', safe(async (_req, res) => res.json(await extras().waitlist())));
+router.get('/ad-spend', needs('dashboard.view'), safe(async (req, res) =>
+  res.json(await extras().adSpend({ days: req.query.days, product: req.query.product === 'quizpe' ? 'quizpe' : 'gaadipe' }))));
+router.post('/ad-spend', needs('settings'), safe(async (req, res) => {
+  try {
+    await extras().saveAdSpend(req.body || {}, req.admin.id);
+    await auth.audit({ adminId: req.admin.id, action: 'ad_spend_saved', ip: ipOf(req), detail: req.body || {} });
+    res.json({ ok: true });
+  } catch (e) { fail(res, e); }
+}));
+router.delete('/ad-spend/:id', needs('settings'), safe(async (req, res) => {
+  await extras().removeAdSpend(req.params.id);
+  await auth.audit({ adminId: req.admin.id, action: 'ad_spend_removed', ip: ipOf(req), detail: { id: req.params.id } });
+  res.json({ ok: true });
+}));
+router.get('/why-not-paid', needs('dashboard.view'), safe(async (req, res) => res.json(await extras().whyNotPaid({ days: req.query.days }))));
+router.get('/whatsapp/limit', safe(async (_req, res) => res.json(await extras().waLimit())));
+router.get('/whatsapp/broadcast-costs', needs('dashboard.view'), safe(async (_req, res) => res.json(await extras().broadcastCosts())));
+router.post('/whatsapp/reply', needs('settings'), safe(async (req, res) => {
+  try {
+    const out = await extras().reply(req.body?.mobile, req.body?.text, req.admin.id);
+    await auth.audit({ adminId: req.admin.id, action: 'whatsapp_reply', ip: ipOf(req),
+      detail: { mobile: String(req.body?.mobile || '').slice(-4), length: String(req.body?.text || '').length } });
+    res.json(out);
+  } catch (e) { fail(res, e); }
+}));
+
 /* Where the vehicles are: by state, then by RTO (phase 7, src/admin/geo.js). */
 router.get('/geo/states', safe(async (req, res) => res.json(await require('../admin/geo').states(periodOf(req.query)))));
 router.get('/geo/states/:code', safe(async (req, res) => res.json(

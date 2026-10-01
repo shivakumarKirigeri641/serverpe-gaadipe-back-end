@@ -42,6 +42,13 @@ const GROUPS = [
     ['report_valid_days', 'Report download window (days)', ''],
     ['vehicle_expiring_days', '“Expiring soon” means within (days)', ''],
   ]],
+  // WhatsApp limits, the outage waiting list and the summary on your own WhatsApp (user, 2026-10-01).
+  ['WhatsApp & outages', [
+    ['whatsapp_messaging_limit', 'Meta messaging limit (people per 24 h)', 'As shown in WhatsApp Manager — 250, then 2,000 once upgraded.'],
+    ['lookup_waitlist_enabled', 'Waiting list when vehicle records are down (true / false)', 'Saves the number and sends the check automatically once the service is back.'],
+    ['admin_whatsapp_numbers', 'Daily summary to these WhatsApp numbers', 'Your own number(s), comma-separated. Sent only if that number messaged the bot in the last 24 hours.'],
+    ['admin_whatsapp_summary_hour_ist', 'Daily summary hour (IST, 0–23)', ''],
+  ]],
   // The Saturday money report (user, 2026-10-01).
   ['Weekly money report (Excel by email)', [
     ['finance_weekly_email', 'Send it (true / false)', 'Every week, the Excel of the week just ended.'],

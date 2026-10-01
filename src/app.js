@@ -238,6 +238,8 @@ app.listen(config.port, () => {
   require('./jobs/fleet').start(Number(process.env.FLEET_TICK_SECONDS) || 300);
   // A paid report issued while e-Challan was down: completed when it answers.
   require('./jobs/challanFollowup').start(Number(process.env.CHALLAN_FOLLOWUP_TICK_SECONDS) || 300);
+  // Numbers sent while vehicle records were down: checked and sent once they are back.
+  require('./jobs/waitlist').start(Number(process.env.WAITLIST_TICK_SECONDS) || 300);
 
 
   // Page, click and action history is kept activity_retention_days, then deleted.
