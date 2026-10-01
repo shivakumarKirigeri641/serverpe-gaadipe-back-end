@@ -151,6 +151,8 @@ async function journey(q) {
       first_seen: times.length ? new Date(Math.min(...times)) : who.user?.created_at || null,
       last_active: times.length ? new Date(Math.max(...times)) : null,
       in_window: who.session?.last_inbound_at ? Date.now() - new Date(who.session.last_inbound_at) < 24 * 3600e3 : false,
+      // When their 24-hour window closes, for the reply box (user, 2026-10-01).
+      last_inbound_at: who.session?.last_inbound_at || null,
       opted_out: !!who.session?.wa_opt_out_at,
       state: who.session?.state || null,
       visitors: vids,
