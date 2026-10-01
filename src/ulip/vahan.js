@@ -160,21 +160,64 @@ function mapXml(regNo, xml) {
   });
 }
 
+/*
+ * READ WHATEVER ARRIVES (user, 2026-10-01). A "found" answer whose body we
+ * could not read was passed on as a success with an empty record — so new
+ * numbers showed no make, model or type while cached ones looked fine. Now the
+ * body is read in any form ULIP sends — XML, JSON text or an object, keys as
+ * rc_maker_desc or rcMakerDesc, flat or one level down — and a record with
+ * nothing in it is a FAILURE: never cached, never shown, the other dataset
+ * tried. Its shape (field names only) is logged so a format change is visible.
+ */
+const norm = (k) => String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+function readAny(payload) {
+  let p = payload;
+  if (typeof p === 'string') {
+    const s = p.trim();
+    if (s.startsWith('<')) return { xml: s };
+    if (s.startsWith('{') || s.startsWith('[')) { try { p = JSON.parse(s); } catch { return null; } } else return null;
+  }
+  if (Array.isArray(p)) p = p[0];
+  if (!p || typeof p !== 'object') return null;
+  const flat = {};
+  for (const [k, v] of Object.entries(p)) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      for (const [k2, v2] of Object.entries(v)) if (v2 == null || typeof v2 !== 'object') flat[norm(k2)] ??= v2;
+    } else flat[norm(k)] = v;
+  }
+  return { obj: new Proxy(flat, { get: (t, prop) => (typeof prop === 'string' ? t[norm(prop)] : undefined) }), keys: Object.keys(flat) };
+}
+const usable = (d) => Boolean(d && (d.maker || d.model || d.vehicle_class || d.reg_date));
+const shapeOf = (payload) => {
+  if (payload == null) return 'empty';
+  if (typeof payload === 'string') return `text(${payload.length}) "${payload.slice(0, 20).replace(/[A-Za-z0-9]/g, 'x')}…"`;
+  return `${Array.isArray(payload) ? 'array' : 'object'} keys=[${Object.keys(Array.isArray(payload) ? payload[0] || {} : payload).slice(0, 25).join(',')}]`;
+};
+
+function mapAny(regNo, payload) {
+  const r = readAny(payload);
+  if (!r) return null;
+  return r.xml ? mapXml(regNo, r.xml) : mapJson(regNo, r.obj);
+}
+
 async function tryV4(regNo) {
   const r = await post('VAHAN/04', { vehiclenumber: regNo });
-  if (r.outcome === OUTCOME.FOUND && r.payload && typeof r.payload === 'object') {
-    return { ...r, data: mapJson(regNo, r.payload), source: 'VAHAN/04' };
+  if (r.outcome === OUTCOME.FOUND) {
+    const data = mapAny(regNo, r.payload);
+    if (usable(data)) return { ...r, data, source: 'VAHAN/04' };
+    console.warn(`[vahan] VAHAN/04 ${regNo}: "found" but unreadable or empty — ${shapeOf(r.payload)}`);
+    return { ...r, outcome: OUTCOME.RETRY, code: 'EMPTY_RECORD', message: 'VAHAN/04 returned no usable record', data: null, source: 'VAHAN/04' };
   }
   return { ...r, data: null, source: 'VAHAN/04' };
 }
 
 async function tryV1(regNo) {
   const r = await post('VAHAN/01', { vehiclenumber: regNo });
-  if (r.outcome === OUTCOME.FOUND && typeof r.payload === 'string' && r.payload.includes('<')) {
-    // A genuine miss can also arrive as XML with no registration number.
-    const data = mapXml(regNo, r.payload);
-    if (data.reg_no) return { ...r, data, source: 'VAHAN/01' };
-    return { ...r, outcome: OUTCOME.NOT_FOUND, code: '231', message: 'Vehicle Details not Found', data: null, source: 'VAHAN/01' };
+  if (r.outcome === OUTCOME.FOUND) {
+    const data = mapAny(regNo, r.payload);
+    if (usable(data)) return { ...r, data, source: 'VAHAN/01' };
+    console.warn(`[vahan] VAHAN/01 ${regNo}: "found" but unreadable or empty — ${shapeOf(r.payload)}`);
+    return { ...r, outcome: OUTCOME.RETRY, code: 'EMPTY_RECORD', message: 'VAHAN/01 returned no usable record', data: null, source: 'VAHAN/01' };
   }
   return { ...r, data: null, source: 'VAHAN/01' };
 }
@@ -227,4 +270,4 @@ async function fetchRc(regNo, _opts = {}) {
            error: 'VAHAN is not responding. Please try again in a few minutes.', calls };
 }
 
-module.exports = { fetchRc, mapJson, mapXml, parseDate };
+module.exports = { fetchRc, mapJson, mapXml, mapAny, usable, parseDate };

@@ -833,6 +833,12 @@ async function deliverReport(mobile, regNo, message) {
   await quota.record(user.id, regNo,
     { repeat: q.repeat, found: data?.success === true });
 
+  // A "success" with no make, model or class is not a record (user, 2026-10-01):
+  // it showed customers a blank free check. Treated as the service being busy.
+  if (data && data.success === true && !(data.rc && (data.rc.maker || data.rc.model || data.rc.vehicle_class))) {
+    console.error('[wa] lookup for %s came back with an empty record (source %s)', regNo, data.source);
+    data = { success: false, error: 'empty_record' };
+  }
   if (!data || data.success !== true) {
     const notFound = data?.error === 'vehicle_not_found';
     // Recorded like a successful check, so the admin hears about it too
