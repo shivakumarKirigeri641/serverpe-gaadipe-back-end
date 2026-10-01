@@ -1006,6 +1006,20 @@ router.post('/blocks/:id/release', needs('block'), safe(async (req, res) => {
   res.json(out);
 }));
 
+/* ------------------------------------- owner verification (src/owners/verify.js) */
+
+router.get('/owner-claims', safe(async (req, res) => res.json(await require('../owners/verify').list({
+  status: ['pending', 'verified', 'failed', 'locked', 'rejected', 'revoked'].includes(req.query.status) ? req.query.status : null,
+  q: req.query.q || null,
+}))));
+router.post('/owner-claims/:id/:action(approve|reject|revoke|unlock)', needs('block'), safe(async (req, res) => {
+  const out = await require('../owners/verify').review({
+    id: req.params.id, action: req.params.action, note: req.body?.note, adminId: req.admin.id, ip: ipOf(req),
+  });
+  if (!out.ok) return res.status(400).json({ error: 'bad_action', message: out.message });
+  res.json(out);
+}));
+
 /* ----------------------------------------------------- reports & invoices */
 
 router.get('/reports', safe(async (req, res) => {

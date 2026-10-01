@@ -30,6 +30,8 @@ const FLAGS = {
     about: 'Lookups reach the Government records. Off: every lookup answers “service temporarily unavailable” — including the panel’s own checks.' },
   report_generation: { key: 'flag_report_generation', default: true, label: 'Report generation', danger: true,
     about: 'Paid reports are issued. Off: a paying customer is told the report is not ready and can ask again; “Paid reports not generated” alerts will fire.' },
+  owner_verification: { key: 'flag_owner_verification', default: false, label: 'Owner verification',
+    about: 'Customers can prove a vehicle is theirs on WhatsApp (chassis number plus policy or engine number from the RC), get an “Owner verified” badge and hide the vehicle from other people’s checks. Off: the option is not offered; vehicles already hidden stay hidden.' },
   maintenance_mode: { key: 'maintenance_mode', default: false, label: 'Maintenance mode', danger: true, inverted: true,
     about: 'On: customers are told GaadiPe is under maintenance on WhatsApp and the website, and no new checkout opens. The admin panel keeps working.' },
 };

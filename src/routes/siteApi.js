@@ -576,6 +576,11 @@ router.post('/check', safe(async (req, res) => {
     return res.status(403).json({ error: 'blocked',
       message: 'This vehicle cannot be checked. If it is yours, please write to support@gaadipe.in.' });
   }
+  // Hidden by its verified owner (src/owners/verify.js); the owner still sees it.
+  if (await require('../owners/verify').hiddenFrom(req.user.mobile, parsed.regNo)) {
+    return res.status(403).json({ error: 'blocked',
+      message: 'The owner of this vehicle keeps its details private. If it is yours, please write to support@gaadipe.in.' });
+  }
 
   const q = await quota.check(req.user.id, parsed.regNo);
   if (!q.allowed) {

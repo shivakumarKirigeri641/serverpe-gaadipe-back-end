@@ -22,7 +22,9 @@
  *   feedback         waiting for the person to type their feedback
  *   trial_active     one or more vehicles are being watched
  *   checkout_review  order summary shown; waiting for agree-and-pay
- *   verify_rc        waiting for the first characters of the chassis number
+ *   owner_verify_reg      owner verification: which vehicle (src/owners/verify.js)
+ *   owner_verify_chassis  …the chassis number from the RC
+ *   owner_verify_second   …the policy or engine number, then the verdict
  *   awaiting_payment a payment link was sent; waiting for the webhook
  *   partner_start    agreed — ready for the partner flow (next to build)
  *
@@ -48,7 +50,7 @@ const settings = require('../util/settings');
 const quota = require('../util/quota');
 const razorpay = require('../pay/razorpay');
 const billing = require('../pay/billing');
-const verify = require('../vehicle/verify');
+const owners = require('../owners/verify');
 const reports = require('../pay/report');
 const refer = require('../referrals/gaadipe');
 
@@ -77,6 +79,9 @@ const BTN = {
   INVOICE: 'invoice',
   MENU: 'menu',
   FLEET: 'fleet',
+  OWNER_VERIFY: 'owner_verify',
+  OWNER_HIDE: 'owner_hide',
+  OWNER_SHOW: 'owner_show',
 };
 
 const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
@@ -254,6 +259,8 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
       { id: BTN.DOWNLOAD_REPORT, title: 'My reports',       description: 'Send my report PDF again' },
       { id: BTN.INVOICE,         title: 'My GST invoice',   description: 'The tax invoice for a payment' },
       { id: BTN.FEEDBACK,        title: 'Feedback',         description: 'Tell us what is wrong or missing' },
+      ...(await owners.enabled()
+        ? [{ id: BTN.OWNER_VERIFY, title: 'I own a vehicle', description: 'Verify it with your RC — badge, and hide it from others' }] : []),
     ],
   });
   // A list needs an open 24-hour window; if it is shut, buttons would fail too,
@@ -803,10 +810,101 @@ async function quotaMessage(q) {
  * someone whose trial is already running on another vehicle is the kind of
  * detail that makes a bot feel like a form rather than a service.
  */
+/* ───────────── OWNER VERIFICATION (user, 2026-10-01, src/owners/verify.js) ───────────── */
+
+const istTime = (at) => new Date(at).toLocaleString('en-IN', {
+  timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit',
+});
+
+/** "Which vehicle is yours?" — with a one-tap answer for the vehicle they last checked. */
+async function askOwnedVehicle(mobile, lead = null) {
+  if (!await owners.enabled()) {
+    await doors(mobile, 'Owner verification is not open yet. You can still check any vehicle.');
+    return;
+  }
+  const mine = await owners.mine(mobile);
+  const last = await pendingReg(mobile);
+  await setState(mobile, 'owner_verify_reg', 'asked which vehicle');
+  const body = (lead ? `${lead}\n\n` : '')
+    + '🔐 *Verify you own a vehicle*\n\n'
+    + 'Two quick steps with your RC (registration certificate). Once verified you get the *Owner verified* badge, '
+    + 'and you can *hide the vehicle from other people\'s checks*.\n\n'
+    + (mine.length ? `Already verified: ${mine.map((m) => `*${m.reg_no}*${m.hidden_at ? ' (hidden)' : ''}`).join(', ')} — send one to hide or show it.\n\n` : '')
+    + 'Send the *vehicle number*, like *KA01XX1234*.';
+  if (last && !mine.some((m) => m.reg_no === last)) {
+    await send.buttons(mobile, body, [{ id: `ownv:${last}`, title: `It is ${last}`.slice(0, 20) }]);
+  } else {
+    await send.text(mobile, body);
+  }
+}
+
+async function startOwnerClaim(mobile, regNo, message) {
+  if (!await owners.enabled()) { await askOwnedVehicle(mobile); return; }
+  const user = await store.upsertUser(mobile, { name: message?.profile?.name, waId: message?.from });
+  let r = await owners.begin({ userId: user.id, mobile, regNo });
+  if (!r.ok && r.reason === 'no_record') {
+    // Never checked here before: the RC is what the answers are compared with.
+    const data = await gateway.full(regNo).catch(() => null);
+    if (data?.success === true) {
+      await store.record(user.id, data).catch(() => {});
+      r = await owners.begin({ userId: user.id, mobile, regNo });
+    } else if (data?.error === 'vehicle_not_found') {
+      r = { ok: false, reason: 'not_found' };
+    } else {
+      r = { ok: false, reason: 'busy' };
+    }
+  }
+  await db.query(
+    `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+    [mobile, JSON.stringify({ ov_reg: regNo, ov_claim: r.claimId || null })]);
+
+  if (r.ok) {
+    await setState(mobile, 'owner_verify_chassis', 'claim started');
+    await funnel(mobile, 'owner_verify_started', { reg_no: regNo });
+    await send.text(mobile,
+      `🔐 Verifying *${regNo}*\n\n`
+      + '*Step 1 of 2:* type the full *chassis number* (Chassis No.) from your RC — usually 17 letters and numbers.\n\n'
+      + '_What you type is only compared with the Government record — it is never stored or shown._');
+    return;
+  }
+  await setState(mobile, 'owner_menu', `owner verification: ${r.reason}`);
+  if (r.reason === 'already') {
+    const hidden = (await owners.mine(mobile)).find((m) => m.reg_no === regNo)?.hidden_at;
+    await send.buttons(mobile,
+      `✅ *${regNo}* is already *Owner verified* on this number, and it is ${hidden ? '*hidden* from' : '*visible* in'} other people's checks.`,
+      [{ id: hidden ? BTN.OWNER_SHOW : BTN.OWNER_HIDE, title: hidden ? 'Show it again' : 'Hide from others' },
+        { id: BTN.CHECK_ANOTHER, title: 'Check vehicle' }]);
+    return;
+  }
+  await doors(mobile, {
+    off: 'Owner verification is not open yet. You can still check any vehicle.',
+    not_found: `I could not find a Government record for *${regNo}*. Please check the number.`,
+    busy: 'The Government vehicle records service is not responding right now. Please try again in a little while.',
+    not_checkable: `The Government record for *${regNo}* does not hold enough of the chassis and policy details to verify it here.\n\n`
+      + 'Email a photo of your RC to support@gaadipe.in with the subject *Owner verification* and we will verify it by hand.',
+    locked: `Too many tries for *${regNo}*. You can try again after *${istTime(r.lockedUntil)}*.`,
+    vehicle_busy: `Verification for *${regNo}* is paused for today. Please try again tomorrow, or email a photo of your RC to support@gaadipe.in.`,
+    too_many: 'Verification is paused on this number for today. Please try again tomorrow.',
+  }[r.reason] || 'Sorry, that could not be started. Please try again later.');
+}
+
 async function deliverReport(mobile, regNo, message) {
   const user = await store.upsertUser(mobile, {
     name: message?.profile?.name, waId: message?.from,
   });
+
+  /*
+   * NOT SHOWN: a vehicle the admin blocked (an owner's objection, DPDP), or
+   * one its verified owner chose to hide (src/owners/verify.js). Asked before
+   * the quota and the lookup, so nothing is spent.
+   */
+  if (await require('../admin/blocks').isBlocked('vehicle', regNo) || await owners.hiddenFrom(mobile, regNo)) {
+    await setState(mobile, 'owner_start', 'vehicle private');
+    await funnel(mobile, 'vehicle_private', { reg_no: regNo });
+    await send.text(mobile, `🔒 The owner of *${regNo}* keeps its details private, so GaadiPe cannot show them.\n\n`
+      + 'If this vehicle is yours, write to support@gaadipe.in. You can send another vehicle number any time.');
+    return;
+  }
 
   // Asked before the call, not after: the point is to not spend the lookup.
   const q = await quota.check(user.id, regNo);
@@ -880,7 +978,9 @@ async function deliverReport(mobile, regNo, message) {
   // how many things need attention — not which.
   const bought = await reports.validFor(user.id, regNo);
   const plan = bought ? null : await billing.reportPlan();
-  await send.text(mobile, bought
+  // The verified owner's badge (src/owners/verify.js), on their own vehicle.
+  const badge = await owners.isOwner(mobile, regNo) ? '✅ *Owner verified* — your vehicle\n\n' : '';
+  await send.text(mobile, badge + (bought
     ? await report.buildFor(data, { detailed: true })
     : report.basic(data, {
       ...(plan ? { price: `₹${Math.round(plan.price_paise / 100)}` } : {}),
@@ -890,7 +990,7 @@ async function deliverReport(mobile, regNo, message) {
       // Back to 'count' (user, 2026-09-30, migration 088): naming them gave the
       // answer away and people stopped paying.
       detail: String(await settings.get('whatsapp_free_view_detail', 'count')).toLowerCase(),
-    }));
+    })));
   await setState(mobile, 'owner_menu', 'basic details sent');
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
   await reportMenu(mobile, regNo, data, bought);
@@ -1162,6 +1262,11 @@ async function handle(session, message, mobile) {
       return;
     }
 
+    if (String(intent.id || '').startsWith('ownv:')) {
+      await startOwnerClaim(mobile, intent.id.slice(5), message);
+      return;
+    }
+
     if (String(intent.id || '').startsWith('veh:')) {
       await openVehicle(mobile, intent.id.slice(4), message, 'chosen from list');
       return;
@@ -1273,31 +1378,26 @@ async function handle(session, message, mobile) {
         return;
       }
 
-      case BTN.VERIFY_RC: {
-        const user = await store.upsertUser(mobile);
-        const reg = await pendingReg(mobile);
-        const vehicle = reg
-          ? await db.one('SELECT id, reg_no FROM vehicles WHERE reg_no = $1', [reg]) : null;
-        if (!vehicle) {
-          await send.text(mobile, 'Please send the vehicle number first.');
+      // The old "RC verified" button, from messages sent long ago, opens the
+      // owner verification that replaced it.
+      case BTN.VERIFY_RC:
+      case BTN.OWNER_VERIFY:
+        await askOwnedVehicle(mobile);
+        return;
+
+      case BTN.OWNER_HIDE:
+      case BTN.OWNER_SHOW: {
+        const reg = (await sessionContext(mobile)).ov_reg || (await owners.mine(mobile))[0]?.reg_no;
+        const hide = intent.id === BTN.OWNER_HIDE;
+        if (!reg || !await owners.setHidden(mobile, reg, hide)) {
+          await doors(mobile, 'I could not find a verified vehicle on this number. Tap *More* → *I own a vehicle* to verify one.');
           return;
         }
-        if (!await verify.challengeable(vehicle.id)) {
-          await send.text(mobile,
-            'This vehicle cannot be verified — the Government record does not '
-            + 'include enough of the chassis number.');
-          return;
-        }
-        const need = await settings.num('verify_prefix_length', 5);
-        await db.query(
-          'UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1',
-          [mobile, JSON.stringify({ verify_reg: vehicle.reg_no })]);
-        await setState(mobile, 'verify_rc', 'awaiting chassis prefix');
-        await send.text(mobile,
-          `To add a *RC verified* badge to *${vehicle.reg_no}*, send the first `
-          + `*${need} characters* of the chassis number from your RC.\n\n`
-          + 'It is printed on your registration certificate, and stamped on the vehicle.\n\n'
-          + '_GaadiPe never displays chassis numbers — which is exactly why this works._');
+        await send.buttons(mobile, hide
+          ? `🙈 Done — *${reg}* is now *hidden*. Other people checking it on GaadiPe are told the owner keeps it private. You still see it.`
+          : `👀 Done — *${reg}* can be checked by others again.`,
+        [{ id: hide ? BTN.OWNER_SHOW : BTN.OWNER_HIDE, title: hide ? 'Show it again' : 'Hide from others' },
+          { id: BTN.CHECK_ANOTHER, title: 'Check vehicle' }]);
         return;
       }
 
@@ -1678,6 +1778,11 @@ async function handle(session, message, mobile) {
     await sendReports(mobile);
     return;
   }
+  // Owner verification by word as well as from the menu — only while it is on.
+  if (/^(verify|verify owner|i own (a|my|this) vehicle|owner verification)\s*$/i.test(intent.text) && await owners.enabled()) {
+    await askOwnedVehicle(mobile);
+    return;
+  }
 
   // "hi" always returns to the start, from any state. Every reply in this file
   // tells people to do it, so it has to work everywhere — including when
@@ -1784,43 +1889,61 @@ async function handle(session, message, mobile) {
       return;
     }
 
-    case 'verify_rc': {
-      const user = await store.upsertUser(mobile);
-      const ctx = await sessionContext(mobile);
-      const vehicle = ctx.verify_reg
-        ? await db.one('SELECT id, reg_no FROM vehicles WHERE reg_no = $1', [ctx.verify_reg]) : null;
-      if (!vehicle) {
-        await setState(mobile, 'owner_start', 'verification lost');
-        await send.text(mobile, 'Please send the vehicle number again.');
-        return;
-      }
+    // A chat left in the old "RC verified" step starts the new one.
+    case 'verify_rc':
+      await askOwnedVehicle(mobile);
+      return;
 
-      const r = await verify.attempt(user.id, vehicle.id, intent.text);
-      if (r.ok) {
-        await setState(mobile, 'owner_menu', 'rc verified');
-        const limit = await settings.num('free_checks_per_day_verified', 25);
-        await send.buttons(mobile,
-          `✅ *${vehicle.reg_no}* is now *RC verified*.\n\n`
-          + 'The badge appears on your reports, and you now get '
-          + `${limit} free checks a day.`,
-          [{ id: BTN.ENROLLED,      title: 'Enrolled vehicles' },
-           { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
+    case 'owner_verify_reg': {
+      const parsed = plate.parse(intent.text);
+      if (!parsed.ok) {
+        await send.text(mobile, 'Please send the vehicle number as it is on the RC — like *KA01XX1234*. Send *hi* to stop.');
         return;
       }
-      if (r.reason === 'locked' || r.reason === 'locked_now') {
-        await setState(mobile, 'owner_menu', 'verification locked');
-        await send.text(mobile,
-          'That did not match, and there have been too many attempts. '
-          + 'Please try again tomorrow.\n\n'
-          + 'Everything else keeps working as normal.');
+      await startOwnerClaim(mobile, parsed.regNo, message);
+      return;
+    }
+
+    case 'owner_verify_chassis': {
+      const ctx = await sessionContext(mobile);
+      const r = ctx.ov_claim ? await owners.answerChassis(ctx.ov_claim, intent.text) : { ok: false };
+      if (!r.ok) { await askOwnedVehicle(mobile, 'That verification timed out — let us start again.'); return; }
+      await setState(mobile, 'owner_verify_second', 'chassis given');
+      await send.text(mobile, {
+        policy: '*Step 2 of 2:* type your *insurance policy number* — it is on your insurance paper or e-policy.',
+        engine: '*Step 2 of 2:* type the *engine number* (Engine No.) from your RC.',
+      }[r.second] || '*Step 2 of 2:* type your *insurance policy number* (from your insurance paper) — or, if you do not have it, the *engine number* from your RC.');
+      return;
+    }
+
+    case 'owner_verify_second': {
+      const ctx = await sessionContext(mobile);
+      const r = ctx.ov_claim ? await owners.answerSecond(ctx.ov_claim, intent.text) : { ok: false, reason: 'lost' };
+      const reg = ctx.ov_reg;
+      if (r.ok) {
+        await setState(mobile, 'owner_menu', 'owner verified');
+        await funnel(mobile, 'owner_verified', { reg_no: reg });
+        await send.buttons(mobile,
+          `✅ *${reg}* is now *Owner verified* — it matched the Government record.\n\n`
+          + 'You will see the badge when you check it. If you like, you can *hide it from other people\'s checks* — '
+          + 'they will be told the owner keeps it private, and you will still see it.',
+          [{ id: BTN.OWNER_HIDE, title: 'Hide from others' }, { id: BTN.CHECK_ANOTHER, title: 'Check vehicle' }]);
+        return;
+      }
+      if (r.reason === 'lost') { await askOwnedVehicle(mobile, 'That verification timed out — let us start again.'); return; }
+      await setState(mobile, 'owner_menu', `owner verification ${r.reason}`);
+      await funnel(mobile, 'owner_verify_failed', { reg_no: reg, locked: r.reason === 'locked' });
+      if (r.reason === 'locked') {
+        await doors(mobile,
+          `❌ That did not match the Government record for *${reg}*, and that was the last try for now.\n\n`
+          + `You can try again after *${istTime(r.lockedUntil)}*. If the RC is yours and it still does not match, `
+          + 'email a photo of the RC to support@gaadipe.in and we will check it by hand.');
         return;
       }
       await send.buttons(mobile,
-        `That does not match our records. ${r.attemptsLeft} attempt`
-        + `${r.attemptsLeft === 1 ? '' : 's'} left.\n\n`
-        + 'Send the first characters of the chassis number exactly as printed on '
-        + 'the RC.',
-        [{ id: BTN.CHECK_ANOTHER, title: 'Do this later' }]);
+        `❌ That did not match the Government record for *${reg}*. ${r.attemptsLeft} tr${r.attemptsLeft === 1 ? 'y' : 'ies'} left.\n\n`
+        + 'Check the numbers on your RC and insurance paper — letters and numbers exactly as printed — and try again.',
+        [{ id: `ownv:${reg}`, title: 'Try again' }, { id: BTN.MENU, title: 'More' }]);
       return;
     }
 
