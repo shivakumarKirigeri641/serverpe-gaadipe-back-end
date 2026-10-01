@@ -148,10 +148,16 @@ async function allRtos(q = {}) {
     for (const f of ['lookups', 'reports', 'payments', 'revenue_paise']) t[f] += x[f];
   }
   const zero = { lookups: 0, reports: 0, payments: 0, revenue_paise: 0 };
+  // A code with activity that neither the list nor any record names (a new
+  // RTO, or only failed lookups so far): still shown, by its number (user,
+  // 2026-10-01). Bharat-series plates have no RTO and are left out.
+  const known = new Set(list.rows.map((x) => x.code));
+  const unknown = Object.keys(act).filter((k) => /^[A-Z]{2}\d{2}$/.test(k) && !known.has(k) && !k.startsWith('BH'))
+    .map((k) => ({ code: k, state_code: k.slice(0, 2), office: null, district: null, notes: null, source: 'activity' }));
   return {
     range: { label: r.label },
     names: STATES,
-    rtos: list.rows.map((x) => ({
+    rtos: [...list.rows, ...unknown].map((x) => ({
       code: x.code, state: x.state_code, state_name: STATES[x.state_code] || x.state_code,
       office: x.office, district: x.district, notes: x.notes, source: x.source,
       ...(act[x.code] || zero),
