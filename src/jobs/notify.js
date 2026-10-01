@@ -699,7 +699,7 @@ async function weeklyMoney({ force = false } = {}) {
           ] },
         ],
         note: 'Meta ads spend is not included. GST collected is owed to the Government; ask your CA about input credit on Razorpay’s GST.',
-        cta: { label: 'Open Business', path: '/business' },
+        cta: { label: 'Open Profitability', path: '/profitability' },
       }),
     };
   };
