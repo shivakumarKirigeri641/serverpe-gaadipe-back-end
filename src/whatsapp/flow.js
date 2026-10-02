@@ -959,10 +959,14 @@ async function deliverReport(mobile, regNo, message) {
         `INSERT INTO lookup_waitlist (mobile, reg_no, user_id) VALUES ($1, $2, $3)
          ON CONFLICT (mobile, reg_no) WHERE status = 'waiting' DO NOTHING`, [mobile, regNo, user.id])
         .then(() => true).catch((e) => { console.error('[wa] waitlist:', e.message); return false; });
+    // Both ULIP and the paid backup failed (user, 2026-10-02): often a mistyped
+    // number rather than an outage, so ask them to check it — and still keep it.
     await send.text(mobile, listed
-      ? `The Government vehicle records service is not responding right now — this is on their side, not your number. 🙏\n\n`
-        + `I have saved *${regNo}* and will send you its details *here, automatically*, as soon as the service is back. No need to send it again.`
-      : 'Sorry, the vehicle service is busy right now. Please send the number again in a little while.');
+      ? `I couldn't get the details for *${regNo}* right now. 🙏\n\n`
+        + 'Please check the number is typed correctly and send it again.\n\n'
+        + 'If it is correct, I have saved it and will send the details *here, automatically*, once the records service responds.'
+      : `I couldn't get the details for *${regNo}* right now. 🙏\n\n`
+        + 'Please check the number is typed correctly, or send it again in a little while.');
     return;
   }
 
