@@ -1134,6 +1134,33 @@ const OPT_OUT_RE = new RegExp([
   '\\b(band|bandh) karo\\b', '\\bmessage band\\b', '\\bpareshan mat\\b',
 ].join('|'), 'i');
 
+/*
+ * AFTER STOP, ONE QUESTION (user, 2026-10-02). STOP takes effect first — the
+ * Terms promise it, Meta's rules and the DPDP Act expect it — and only then one
+ * message asks why, with an Undo for anyone who did not mean it. Nothing more
+ * is sent unless they answer: this reply is inside the window they opened.
+ */
+const STOP_WHY = {
+  'stopwhy:many': 'Too many messages',
+  'stopwhy:useless': 'Not useful for me',
+  'stopwhy:price': 'Price is too high',
+  'stopwhy:data': 'Wrong or missing data',
+  'stopwhy:other': 'Something else',
+};
+const STOP_AFTER = 'If you write to us, we will still reply. Reply *START* any time to hear from us again.';
+async function stopped(mobile, lead) {
+  const out = await send.list(mobile, {
+    body: `${lead}\n\n${STOP_AFTER}\n\n_May we ask why? One tap helps us improve._ 🙏`,
+    button: 'Tell us why',
+    sectionTitle: 'Why STOP?',
+    rows: [
+      ...Object.entries(STOP_WHY).map(([id, title]) => ({ id, title })),
+      { id: 'stop_undo', title: 'Undo — keep messages', description: 'I did not mean to stop' },
+    ],
+  }).catch(() => ({ ok: false }));
+  if (!out?.ok) await send.text(mobile, `${lead}\n\n${STOP_AFTER}`);
+}
+
 /* Unhappy words — the person is not asking for a vehicle (user, 2026-09-30). */
 const UNHAPPY_RE = /\b(fraud|froud|scam|cheat(er|ing)?|chor|loot|bakwas|bakvas|faltu|bekar|bekaar|worst|useless|waste|fake|dhoka|thag)\b/i;
 
@@ -1178,16 +1205,32 @@ async function handle(session, message, mobile) {
    * marketing templates. send.js refuses every template to a number that said
    * STOP; this records it and says so.
    */
+  // The answer to "May we ask why?" after STOP (stopped() above), or its Undo.
+  if (STOP_WHY[intent.id] || intent.id === 'stop_undo') {
+    if (intent.id === 'stop_undo') {
+      await db.query(`UPDATE whatsapp_sessions SET wa_opt_out_at = NULL, modified_at = now() WHERE mobile = $1`, [mobile]);
+      await funnel(mobile, 'opt_in', { undo: true });
+      console.log('[wa] %s undid STOP', mobile);
+      await doors(mobile, 'Welcome back 👋 — GaadiPe will message you again. Reply *STOP* any time.');
+      return;
+    }
+    if (intent.id === 'stopwhy:other') {
+      await setState(mobile, 'stop_reason', 'asked why STOP');
+      await send.text(mobile, 'Please tell us in one line what went wrong — every message is read. 🙏');
+      return;
+    }
+    await funnel(mobile, 'opt_out_reason', { reason: STOP_WHY[intent.id] });
+    await send.text(mobile, 'Thank you for telling us 🙏 — it really helps. You will not hear from us unless you write.');
+    return;
+  }
+
   if (/^(stop|unsubscribe|stop promotions)\s*$/i.test(intent.text)) {
     await db.query(
       `UPDATE whatsapp_sessions SET wa_opt_out_at = now(), modified_at = now()
         WHERE mobile = $1`, [mobile]);
     await funnel(mobile, 'opt_out');
     console.log('[wa] %s replied STOP — no more messages from us', mobile);
-    await send.text(mobile,
-      'Done ✅ — GaadiPe will not message you any more.\n\n'
-      + 'If you write to us, we will still reply. '
-      + 'Reply *START* any time to hear from us again.');
+    await stopped(mobile, 'Done ✅ — GaadiPe will not message you any more.');
     return;
   }
   /*
@@ -1196,16 +1239,14 @@ async function handle(session, message, mobile) {
    * the payment reminder went out anyway, which is what made them reply STOP.
    * Plain-language refusals — English, Hindi and Hinglish — now opt out at once.
    */
-  if (OPT_OUT_RE.test(intent.text || '')) {
+  // (Not while they are typing why they said STOP — "stop messaging me" is then the reason.)
+  if (state !== 'stop_reason' && OPT_OUT_RE.test(intent.text || '')) {
     await db.query(
       `UPDATE whatsapp_sessions SET wa_opt_out_at = now(), modified_at = now()
         WHERE mobile = $1`, [mobile]);
     await funnel(mobile, 'opt_out', { said: String(intent.text).slice(0, 60) });
     console.log('[wa] %s asked not to be messaged — treated as STOP', mobile);
-    await send.text(mobile,
-      'Understood 🙏 — GaadiPe will not message you any more.\n\n'
-      + 'Nothing is charged unless you pay. If you write to us, we will still reply. '
-      + 'Reply *START* any time to hear from us again.');
+    await stopped(mobile, 'Understood 🙏 — GaadiPe will not message you any more. Nothing is charged unless you pay.');
     return;
   }
 
@@ -1805,6 +1846,14 @@ async function handle(session, message, mobile) {
       // Re-offer rather than scold.
       await start(mobile);
       return;
+
+    // The "Something else" reason after STOP (stopped() above): stored, thanked, done.
+    case 'stop_reason': {
+      await funnel(mobile, 'opt_out_reason', { reason: 'Something else', said: String(intent.text || `[${message.type}]`).slice(0, 300) });
+      await setState(mobile, 'owner_start', 'STOP reason given');
+      await send.text(mobile, 'Thank you for telling us 🙏 — it really helps. You will not hear from us unless you write.');
+      return;
+    }
 
     // Whatever they type next is the feedback — including something that looks
     // like a vehicle number. "hi" above still gets them out.

@@ -523,6 +523,29 @@ async function waOptOut() {
       };
     }) ? 1 : 0;
   }
+  // Why they said STOP, when they answer the one question after it (user, 2026-10-02).
+  for (const e of await funnelEvents('opt_out_reason', 'wa_opt_out_reason')) {
+    const mobile = e.detail?.mobile;
+    n += await deliver('wa_opt_out_reason', e.id, async () => {
+      const w = await whoIs(mobile);
+      return {
+        subject: `🛑 Why STOP · ${nameOf(w, mobile)}: ${e.detail?.reason || '—'}`,
+        ...T.layout({
+          badge: { text: 'STOP reason', tone: 'wrong' },
+          title: `${nameOf(w, mobile)}: ${e.detail?.reason || '—'}`,
+          lead: `${T.ist(e.created_at)}. Their answer to "May we ask why?" after STOP.`,
+          sections: [{ heading: 'What they said', rows: [
+            ['Reason', e.detail?.reason || '—'],
+            ...(e.detail?.said ? [['In their words', e.detail.said]] : []),
+            ['Mobile', T.mobile(mobile)],
+            ['Vehicles checked', String(w?.vehicles ?? 0)],
+            ['Paid before', w?.paid ? `Yes (${w.paid})` : 'No'],
+          ] }],
+          cta: { label: 'Open Live', path: '/live' },
+        }),
+      };
+    }) ? 1 : 0;
+  }
   return n;
 }
 
