@@ -221,11 +221,10 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
   const place = String(rc.registered_at || '').replace(/\s+/g, ' ').trim();
   if (place) lines.push(`📍 ${titleCase(place)}`);
 
-  // 'masked' by default (as ULIP gives it), 'hidden' to omit, 'full' only if
-  // ever deliberately chosen. Chassis and engine are NOT settings: first
-  // character only, always.
+  // 'masked' (as ULIP gives it) or 'hidden'. There is no 'full' (user,
+  // 2026-10-02: "never show unmasked details") — a setting of 'full' is read
+  // as masked. Chassis and engine are NOT settings: first character only, always.
   const ownerLine = !detailed || owner === 'hidden' ? null
-    : owner === 'full' ? rc.owner_name
     : maskName(rc.owner_name);
   if (ownerLine) {
     const serial = Number(rc.owner_serial) > 0
@@ -248,8 +247,8 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
 
   // Extra detail per document, where it helps someone act: which insurer to
   // call, which policy to quote. Numbers are masked to their last four.
-  const num = (v) => (!detailed || docNumbers === 'hidden' ? null
-    : docNumbers === 'full' ? (v || null) : maskNumber(v));
+  // Masked or hidden, never in full ('full' is read as masked).
+  const num = (v) => (!detailed || docNumbers === 'hidden' ? null : maskNumber(v));
   const extra = {
     Insurance: [rc.insurance_company ? titleCase(rc.insurance_company) : null,
                 num(rc.insurance_policy)].filter(Boolean).join(' · '),
