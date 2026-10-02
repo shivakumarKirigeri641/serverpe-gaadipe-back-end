@@ -226,7 +226,7 @@ async function tryV1(regNo) {
  * Fetch RC, with the fallback rule described at the top of this file.
  * `calls` lists every physical request made, so cost stays measurable.
  */
-async function fetchRc(regNo, _opts = {}) {
+async function fetchRc(regNo, opts = {}) {
   const calls = [];
   const primaryIsXml = config.ulip.vahanPrimary === '01';
 
@@ -247,7 +247,7 @@ async function fetchRc(regNo, _opts = {}) {
   // A login failure is not worth a fallback: both datasets sit behind the same
   // token, so the second call would fail identically and burn another attempt.
   if (String(first.message || '').includes('ULIP login failed')) {
-    return backup(regNo, calls, { ok: false, notFound: false, data: null, source: null, code: 'AUTH',
+    return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null, code: 'AUTH',
              error: 'Cannot authenticate with ULIP. Check credentials and that this host is whitelisted.', calls });
   }
 
@@ -265,7 +265,7 @@ async function fetchRc(regNo, _opts = {}) {
              code: second.code, error: second.message || 'Vehicle not found in VAHAN', calls };
   }
 
-  return backup(regNo, calls, { ok: false, notFound: false, data: null, source: null,
+  return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null,
            code: second.code || first.code,
            error: 'VAHAN is not responding. Please try again in a few minutes.', calls });
 }
@@ -275,7 +275,9 @@ async function fetchRc(regNo, _opts = {}) {
  * Only ever reached after ULIP failed — never after its "not found". When the
  * backup is off, over its daily limit, or fails too, ULIP's failure stands.
  */
-async function backup(regNo, calls, failure) {
+async function backup(regNo, calls, opts, failure) {
+  // The waiting list asks only "is ULIP back?" — never the paid backup (noBackup).
+  if (opts.noBackup) return failure;
   const b = await require('../vehicle/rcBackup').lookup(regNo).catch((e) => {
     console.error('[vahan] backup threw:', e.message);
     return null;

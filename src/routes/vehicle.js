@@ -49,7 +49,7 @@ const notFound = (res, regNo, message) =>
  * One dataset, cache-first.
  * Returns { data, source, cached, age_minutes, calls } or an error shape.
  */
-async function load(kind, regNo, refresh, debug = false) {
+async function load(kind, regNo, refresh, debug = false, noBackup = false) {
   const key = `${kind}:${regNo}`;
 
   if (!refresh && !debug) {
@@ -62,7 +62,7 @@ async function load(kind, regNo, refresh, debug = false) {
   }
 
   const fn = kind === 'rc' ? vahan.fetchRc : kind === 'challan' ? echallan.fetchChallans : fastag.fetchFastag;
-  const r = await fn(regNo, { includeRaw: debug });
+  const r = await fn(regNo, { includeRaw: debug, noBackup });
   // The status strip (user, 2026-10-01): a live call's outcome — "not found" is an answer.
   // The VAHAN light is ULIP's own: an answer from the paid RC backup does not
   // turn it green (the backup has its own light).
@@ -114,19 +114,21 @@ function check(req, res) {
   return { regNo,
            refresh: String(req.query.refresh || '') === '1',
            debug: String(req.query.debug || '') === '1',
+           // backup=0: ULIP only, never the paid RC backup (jobs/waitlist.js asks whether ULIP is back).
+           noBackup: String(req.query.backup || '') === '0',
            allChallans: String(req.query.challans || '') === 'all' };
 }
 
 /* ------------------------------------------------------------------ full */
 router.get('/vehicle/:regNo', async (req, res) => {
   const ctx = check(req, res); if (!ctx) return;
-  const { regNo, refresh, debug, allChallans } = ctx;
+  const { regNo, refresh, debug, allChallans, noBackup } = ctx;
   const started = Date.now();
 
   try {
     // RC first and alone: if the vehicle does not exist there is no point
     // spending calls on challans and FASTag for it.
-    const rc = await load('rc', regNo, refresh, debug);
+    const rc = await load('rc', regNo, refresh, debug, noBackup);
     if (rc.notFound) return notFound(res, regNo, rc.error);
     if (rc.failed) {
       return res.status(503).json({ success: false, error: 'upstream_unavailable',

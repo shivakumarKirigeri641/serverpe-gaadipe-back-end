@@ -33,8 +33,10 @@ async function tick() {
       `SELECT id, mobile, reg_no FROM lookup_waitlist WHERE status = 'waiting' ORDER BY created_at LIMIT 40`)).rows;
     if (!waiting.length) return { waiting: 0 };
 
-    // Is the service back? One live lookup tells.
-    const probe = await gateway.full(waiting[0].reg_no, { refresh: 1 }).catch(() => null);
+    // Is the service back? One live lookup tells — ULIP only (backup=0): asking the
+    // paid RC backup every five minutes for a number it cannot answer would spend
+    // the day's backup limit on nobody (user, 2026-10-02, PB10HC4992).
+    const probe = await gateway.full(waiting[0].reg_no, { refresh: 1, backup: 0 }).catch(() => null);
     if (!usable(probe)) return { waiting: waiting.length, back: false };
 
     console.log(`[waitlist] vehicle records are back — sending ${waiting.length} waiting check(s)`);
