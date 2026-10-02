@@ -149,7 +149,9 @@ async function checkOne(w) {
 
   let data;
   try {
-    data = await gateway.full(w.reg_no);
+    // ULIP only, never the paid RC backup (user, 2026-10-02): while VAHAN is
+    // down the saved RC stands in and challans and FASTag are still checked.
+    data = await gateway.full(w.reg_no, { backup: 0, rc_saved: 1 });
   } catch (e) {
     data = null;
   }

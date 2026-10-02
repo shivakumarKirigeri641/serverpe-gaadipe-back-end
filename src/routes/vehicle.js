@@ -116,20 +116,33 @@ function check(req, res) {
            debug: String(req.query.debug || '') === '1',
            // backup=0: ULIP only, never the paid RC backup (jobs/waitlist.js asks whether ULIP is back).
            noBackup: String(req.query.backup || '') === '0',
+           // rc_saved=1: if the live RC fails, carry on with the RC we last saved
+           // (jobs/watch.js — challans and FASTag are still checked live).
+           rcSaved: String(req.query.rc_saved || '') === '1',
            allChallans: String(req.query.challans || '') === 'all' };
 }
 
 /* ------------------------------------------------------------------ full */
 router.get('/vehicle/:regNo', async (req, res) => {
   const ctx = check(req, res); if (!ctx) return;
-  const { regNo, refresh, debug, allChallans, noBackup } = ctx;
+  const { regNo, refresh, debug, allChallans, noBackup, rcSaved } = ctx;
   const started = Date.now();
 
   try {
     // RC first and alone: if the vehicle does not exist there is no point
     // spending calls on challans and FASTag for it.
-    const rc = await load('rc', regNo, refresh, debug, noBackup);
+    let rc = await load('rc', regNo, refresh, debug, noBackup);
     if (rc.notFound) return notFound(res, regNo, rc.error);
+    // Monitoring (user, 2026-10-02): VAHAN down is no reason to stop checking
+    // challans — the RC saved at the last lookup stands in, marked rc_saved.
+    if (rc.failed && rcSaved) {
+      const saved = await require('../db').one(
+        `SELECT s.data, s.source FROM vehicle_snapshots s JOIN vehicles v ON v.id = s.vehicle_id
+          WHERE v.reg_no = $1 AND s.dataset = 'rc'`, [regNo]).catch(() => null);
+      if (saved?.data && (saved.data.maker || saved.data.model)) {
+        rc = { data: saved.data, source: saved.source || null, cached: true, rcSaved: true, calls: rc.calls };
+      }
+    }
     if (rc.failed) {
       return res.status(503).json({ success: false, error: 'upstream_unavailable',
         vehicle_number: regNo, message: rc.error, calls: rc.calls });
@@ -151,6 +164,7 @@ router.get('/vehicle/:regNo', async (req, res) => {
       fetched_at: new Date().toISOString(),
       latency_ms: Date.now() - started,
       rc: rc.data,
+      ...(rc.rcSaved ? { rc_saved: true } : {}),
       // A dataset that failed is reported as null with a reason, rather than
       // failing the whole document — an RC with no challan data is still useful.
       challans: challan.failed ? null
