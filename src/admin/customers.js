@@ -73,6 +73,9 @@ const SEGMENTS = {
   // Replied STOP (user, 2026-09-30): left out of every other view and of the
   // total; this is where they are seen. A search by number still finds them.
   stopped:      `ws.wa_opt_out_at IS NOT NULL`,
+  // Said STOP once, and messages are on again — START, or Undo (user, 2026-10-02).
+  came_back:    `ws.wa_opt_out_at IS NULL AND EXISTS (SELECT 1 FROM event_log eo WHERE eo.kind = 'funnel'
+                  AND eo.detail->>'step' = 'opt_out' AND eo.detail->>'mobile' = u.mobile)`,
   suspicious:   `(EXISTS (SELECT 1 FROM blocks b2 WHERE b2.kind = 'mobile' AND b2.value = u.mobile AND b2.released_at IS NULL)
                   OR coalesce(pu.vehicles_checked, 0) >= 25)`,
 };
@@ -140,6 +143,17 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
                  WHEN ws.id IS NOT NULL THEN 'inactive'
                  ELSE 'none' END                                    AS wa_status,
             -- Why they said STOP, when they answered (user, 2026-10-02).
+            -- For "Came back after STOP": when they stopped and came back, how, and why they had stopped.
+            ${segment === 'came_back' ? `(SELECT max(e.created_at) FROM event_log e WHERE e.kind = 'funnel'
+               AND e.detail->>'step' = 'opt_out' AND e.detail->>'mobile' = u.mobile) AS stopped_at,
+            (SELECT count(*)::int FROM event_log e WHERE e.kind = 'funnel'
+               AND e.detail->>'step' = 'opt_out' AND e.detail->>'mobile' = u.mobile) AS times_stopped,
+            (SELECT json_build_object('at', e.created_at, 'how', CASE WHEN e.detail->>'undo' = 'true' THEN 'Undo' ELSE 'START' END)
+               FROM event_log e WHERE e.kind = 'funnel' AND e.detail->>'step' = 'opt_in' AND e.detail->>'mobile' = u.mobile
+              ORDER BY e.id DESC LIMIT 1) AS came_back,
+            (SELECT e.detail->>'reason' FROM event_log e WHERE e.kind = 'funnel'
+               AND e.detail->>'step' = 'opt_out_reason' AND e.detail->>'mobile' = u.mobile
+              ORDER BY e.id DESC LIMIT 1) AS earlier_reason,` : ''}
             CASE WHEN ws.wa_opt_out_at IS NOT NULL THEN (
               SELECT e.detail->>'reason' FROM event_log e
                WHERE e.kind = 'funnel' AND e.detail->>'step' = 'opt_out_reason' AND e.detail->>'mobile' = u.mobile
