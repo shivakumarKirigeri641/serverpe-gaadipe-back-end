@@ -540,7 +540,7 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
     return res.status(data?.error === 'vehicle_not_found' ? 404 : 503).json({
       error: data?.error || 'unavailable',
       message: data?.error === 'vehicle_not_found' ? (data?.message || 'No Government record was found for this number.')
-        : `We couldn't get the details for ${parsed.regNo} right now. Please check the number is typed correctly and try again in a little while.`,
+        : `The vehicle records server is down right now. Please try again in a little while — if the number was typed wrongly, correct it and try again.`,
     });
   }
 
@@ -603,7 +603,7 @@ router.post('/check', safe(async (req, res) => {
       error: data?.error || 'unavailable',
       message: data?.error === 'vehicle_not_found'
         ? `No Government record was found for ${parsed.regNo}. Very new vehicles can take a few weeks to appear.`
-        : `We couldn't get the details for ${parsed.regNo} right now. Please check the number is typed correctly and try again in a little while.`,
+        : `The vehicle records server is down right now. Please try again in a little while — if the number was typed wrongly, correct it and try again.`,
     });
   }
 

@@ -959,14 +959,15 @@ async function deliverReport(mobile, regNo, message) {
         `INSERT INTO lookup_waitlist (mobile, reg_no, user_id) VALUES ($1, $2, $3)
          ON CONFLICT (mobile, reg_no) WHERE status = 'waiting' DO NOTHING`, [mobile, regNo, user.id])
         .then(() => true).catch((e) => { console.error('[wa] waitlist:', e.message); return false; });
-    // Both ULIP and the paid backup failed (user, 2026-10-02): often a mistyped
-    // number rather than an outage, so ask them to check it — and still keep it.
+    // Both ULIP and the paid backup failed (user, 2026-10-02): the vehicle
+    // records server is down. Kept on the waiting list; a short line covers the
+    // mistyped number, which looks the same from here.
     await send.text(mobile, listed
-      ? `I couldn't get the details for *${regNo}* right now. 🙏\n\n`
-        + 'Please check the number is typed correctly and send it again.\n\n'
-        + 'If it is correct, I have saved it and will send the details *here, automatically*, once the records service responds.'
-      : `I couldn't get the details for *${regNo}* right now. 🙏\n\n`
-        + 'Please check the number is typed correctly, or send it again in a little while.');
+      ? `⚠️ The vehicle records server is down right now. 🙏\n\n`
+        + `I have saved *${regNo}* and will send its details *here, automatically*, as soon as it is back — no need to send it again.\n\n`
+        + '_If the number was typed wrongly, just send the correct one._'
+      : `⚠️ The vehicle records server is down right now. 🙏\n\n`
+        + 'Please send the number again in a little while.');
     return;
   }
 
