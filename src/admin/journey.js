@@ -154,6 +154,12 @@ async function journey(q) {
       // When their 24-hour window closes, for the reply box (user, 2026-10-01).
       last_inbound_at: who.session?.last_inbound_at || null,
       opted_out: !!who.session?.wa_opt_out_at,
+      // Why, if they answered the question after STOP (user, 2026-10-02).
+      stop_reason: who.session?.wa_opt_out_at && who.mobile ? await db.one(
+        `SELECT detail->>'reason' AS reason, detail->>'said' AS said FROM event_log
+          WHERE kind = 'funnel' AND detail->>'step' = 'opt_out_reason' AND detail->>'mobile' = $1
+            AND created_at >= $2::timestamptz - interval '1 minute'
+          ORDER BY id DESC LIMIT 1`, [who.mobile, who.session.wa_opt_out_at]).catch(() => null) : null,
       state: who.session?.state || null,
       visitors: vids,
       place, device,

@@ -139,6 +139,17 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
                  WHEN ws.last_inbound_at > now() - interval '24 hours' THEN 'active'
                  WHEN ws.id IS NOT NULL THEN 'inactive'
                  ELSE 'none' END                                    AS wa_status,
+            -- Why they said STOP, when they answered (user, 2026-10-02).
+            CASE WHEN ws.wa_opt_out_at IS NOT NULL THEN (
+              SELECT e.detail->>'reason' FROM event_log e
+               WHERE e.kind = 'funnel' AND e.detail->>'step' = 'opt_out_reason' AND e.detail->>'mobile' = u.mobile
+                 AND e.created_at >= ws.wa_opt_out_at - interval '1 minute'
+               ORDER BY e.id DESC LIMIT 1) END                      AS stop_reason,
+            CASE WHEN ws.wa_opt_out_at IS NOT NULL THEN (
+              SELECT e.detail->>'said' FROM event_log e
+               WHERE e.kind = 'funnel' AND e.detail->>'step' = 'opt_out_reason' AND e.detail->>'mobile' = u.mobile
+                 AND e.created_at >= ws.wa_opt_out_at - interval '1 minute'
+               ORDER BY e.id DESC LIMIT 1) END                      AS stop_said,
             coalesce((SELECT v.first_touch->>'source' FROM visitors v
                        WHERE v.mobile = u.mobile ORDER BY v.first_seen_at LIMIT 1),
                      CASE WHEN ws.attribution->>'channel' = 'whatsapp_ad' THEN 'meta_ads' END,
@@ -194,9 +205,21 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
                 AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
               WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL))::int AS customers_yesterday_full`);
   const where = await placesFor(rows);
+  // The STOP reasons at a glance, for the "Said STOP" list (user, 2026-10-02):
+  // each person's latest answer, among everyone still stopped.
+  const stopReasons = segment === 'stopped' ? (await db.query(
+    `SELECT coalesce(r.reason, 'No answer') AS reason, count(*)::int AS n
+       FROM whatsapp_sessions ws
+       LEFT JOIN LATERAL (SELECT e.detail->>'reason' AS reason FROM event_log e
+                           WHERE e.kind = 'funnel' AND e.detail->>'step' = 'opt_out_reason' AND e.detail->>'mobile' = ws.mobile
+                             AND e.created_at >= ws.wa_opt_out_at - interval '1 minute'
+                           ORDER BY e.id DESC LIMIT 1) r ON true
+      WHERE ws.wa_opt_out_at IS NOT NULL
+      GROUP BY 1 ORDER BY 2 DESC`)).rows : null;
   return {
     total,
     today,
+    stop_reasons: stopReasons,
     rows: rows.map(({ total_rows, ...r }) => ({
       ...r,
       place: where.get(String(r.id)) || null,
