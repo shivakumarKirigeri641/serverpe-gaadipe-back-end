@@ -963,10 +963,10 @@ async function deliverReport(mobile, regNo, message) {
     // records server is down. Kept on the waiting list; a short line covers the
     // mistyped number, which looks the same from here.
     await send.text(mobile, listed
-      ? `⚠️ The vehicle records server is down right now. 🙏\n\n`
+      ? `⚠️ The Government vehicle records server is down right now, and the concerned authority is working on it. 🙏\n\n`
         + `I have saved *${regNo}* and will send its details *here, automatically*, as soon as it is back — no need to send it again.\n\n`
         + '_If the number was typed wrongly, just send the correct one._'
-      : `⚠️ The vehicle records server is down right now. 🙏\n\n`
+      : `⚠️ The Government vehicle records server is down right now, and the concerned authority is working on it. 🙏\n\n`
         + 'Please send the number again in a little while.');
     return;
   }
