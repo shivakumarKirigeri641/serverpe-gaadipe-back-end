@@ -48,9 +48,15 @@ const rupees = (paise) => '₹' + Math.round((paise || 0) / 100).toLocaleString(
  */
 const printable = (v) => {
   if (v === null || v === undefined) return v;
-  return String(v)
-    // Keep Latin, general punctuation, ₹, bullets; drop everything else.
-    .replace(/[^\u0009\u000A\u0020-\u024F\u2010-\u2027\u2030-\u205E\u20B9\u2022]/g, ' ')
+  const s = String(v);
+  // Indian scripts now have fonts (pdf/fonts.js, 2026-10-02). Text with an
+  // English wording beside it still keeps only the English — the same offence
+  // twice does not fit a table cell — but text ONLY in Tamil, Hindi and so on
+  // is kept, rather than printed as nothing.
+  const keepIndic = (s.match(/[A-Za-z]/g) || []).length < 8;
+  return s
+    // Keep Latin, general punctuation, ₹, bullets (and Indian scripts, as above); drop everything else.
+    .replace(keepIndic ? /[^\u0009\u000A\u0020-\u024F\u0900-\u0D7F\u200C\u200D\u2010-\u2027\u2030-\u205E\u20B9\u2022]/g : /[^\u0009\u000A\u0020-\u024F\u2010-\u2027\u2030-\u205E\u20B9\u2022]/g, ' ')
     .replace(/\s{2,}/g, ' ')
     .replace(/(\s*[\/\-–—|,;:]\s*){2,}/g, ' / ')     // "/ -" left between removed words
     .replace(/[\s\/\-–—|,;:]+$/g, '')                 // …and at the end
@@ -358,7 +364,8 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
  * what the PDF shows changes; a still-valid report printed with an older
  * layout is re-printed from its own snapshot the next time it is downloaded
  * (pay/rebuild.js). 2 = personal details masked, as on Parivahan (2026-10-01).
+ * 3 = Indian scripts drawn (Tamil, Hindi and the rest), not dropped (2026-10-02).
  */
-const LAYOUT = 2;
+const LAYOUT = 3;
 
 module.exports = { buildVehicleReport, LAYOUT };
