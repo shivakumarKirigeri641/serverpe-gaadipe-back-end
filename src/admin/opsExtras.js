@@ -128,7 +128,9 @@ async function waLimit() {
     `SELECT count(DISTINCT mobile)::int AS used FROM whatsapp_messages
       WHERE direction = 'out' AND message_type = 'template' AND created_at > now() - interval '24 hours'
         AND coalesce(error_message, '') = ''`);
-  return { limit, used: r.used, remaining: Math.max(0, limit - r.used),
+  // Live from Meta (jobs/metaStatus.js): the tier, quality and account checks.
+  const meta = await require('../jobs/metaStatus').current().catch(() => null);
+  return { limit, used: r.used, remaining: Math.max(0, limit - r.used), meta,
     note: 'GaadiPe’s number only. QuizPe shares the same Meta limit and is not counted here — WhatsApp Manager shows the total.' };
 }
 
