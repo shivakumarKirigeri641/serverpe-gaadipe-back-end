@@ -353,4 +353,12 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     doc.end();
   });
 
-module.exports = { buildVehicleReport };
+/*
+ * THE LAYOUT VERSION, stamped on each report as pdf_layout. Raise it whenever
+ * what the PDF shows changes; a still-valid report printed with an older
+ * layout is re-printed from its own snapshot the next time it is downloaded
+ * (pay/rebuild.js). 2 = personal details masked, as on Parivahan (2026-10-01).
+ */
+const LAYOUT = 2;
+
+module.exports = { buildVehicleReport, LAYOUT };

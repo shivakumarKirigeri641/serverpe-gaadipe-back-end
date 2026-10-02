@@ -728,7 +728,7 @@ async function sendReports(mobile) {
   }
 
   const { rows } = await db.query(
-    `SELECT r.report_number, r.pdf_path, r.reg_no, r.created_at, r.valid_until,
+    `SELECT r.id, r.report_number, r.pdf_path, r.reg_no, r.created_at, r.valid_until,
             r.access_token, s.ends_on, s.is_active
        FROM vehicle_reports r
        LEFT JOIN subscriptions s ON s.id = r.subscription_id
@@ -1098,8 +1098,13 @@ async function sendValidReport(mobile, r) {
   const caption = `📋 ${r.report_number} — ${r.reg_no}\nDownload again until ${ends}`
     + (link ? `\n${link}` : '');
 
-  const sent = r.pdf_path
-    ? await send.document(mobile, r.pdf_path, { filename: `${r.report_number}.pdf`, caption })
+  // Rebuilt first if missing or printed with an older layout (pay/rebuild.js).
+  const file = r.id ? await require('../pay/rebuild').ensureFile('vehicle_reports', r.id).catch((e) => {
+    console.error('[wa] report %s rebuild: %s', r.report_number, e.message);
+    return r.pdf_path;
+  }) : r.pdf_path;
+  const sent = file
+    ? await send.document(mobile, file, { filename: `${r.report_number}.pdf`, caption })
     : { ok: false };
   if (!sent.ok) {
     await send.text(mobile, `${caption}\n\n_The file could not be attached${link ? ' — use the link above' : ''}._`);

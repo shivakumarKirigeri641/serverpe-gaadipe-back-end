@@ -588,7 +588,7 @@ router.post('/pay/:token/verify', express.json(), safe(async (req, res) => {
  */
 router.get('/report/:token', safe(async (req, res) => {
   const r = await db.one(
-    `SELECT report_number, reg_no, pdf_path, valid_until
+    `SELECT id, report_number, reg_no, pdf_path, valid_until
        FROM vehicle_reports WHERE access_token = $1`, [req.params.token]);
 
   if (!r || !r.valid_until) {
@@ -607,6 +607,9 @@ router.get('/report/:token', safe(async (req, res) => {
         : "Check the vehicle again on GaadiPe for today's records. Your copy was also emailed to you when you bought it."}</p>
       ${wayOut(`${SITE_URL}/app/vehicle/${encodeURIComponent(r.reg_no || '')}`, { web: 'Check it again' })}</div>`));
   }
+  // Rebuilt first if missing or printed with an older layout (pay/rebuild.js).
+  r.pdf_path = await require('../pay/rebuild').ensureFile('vehicle_reports', r.id)
+    .catch((e) => { console.error('[report] %s rebuild: %s', r.report_number, e.message); return r.pdf_path; });
   if (!r.pdf_path || !fs.existsSync(r.pdf_path)) {
     console.error('[report] %s file missing at %s', r.report_number, r.pdf_path);
     return res.status(404).send(page('Not available', `<div class="card">

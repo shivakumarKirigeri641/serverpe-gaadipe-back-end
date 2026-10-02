@@ -19,7 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const db = require('../db');
-const { buildVehicleReport } = require('../pdf/vehicleReport');
+const { buildVehicleReport, LAYOUT } = require('../pdf/vehicleReport');
 
 const DIR = path.join(__dirname, '..', 'uploads', 'reports');
 
@@ -125,7 +125,7 @@ async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data
   fs.mkdirSync(DIR, { recursive: true });
   const file = path.join(DIR, `${row.report_number}.pdf`);
   fs.writeFileSync(file, pdf);
-  await db.query(`UPDATE vehicle_reports SET pdf_path = $2 WHERE id = $1`, [row.id, file]);
+  await db.query(`UPDATE vehicle_reports SET pdf_path = $2, pdf_layout = $3 WHERE id = $1`, [row.id, file, LAYOUT]);
 
   console.log('[report] %s for %s (%d bytes)', row.report_number, regNo, pdf.length);
   return { report: { ...row, pdf_path: file }, pdf };
@@ -147,8 +147,8 @@ async function rebuild(row, data) {
   fs.mkdirSync(DIR, { recursive: true });
   const file = row.pdf_path || path.join(DIR, `${row.report_number}.pdf`);
   fs.writeFileSync(file, pdf);
-  await db.query(`UPDATE vehicle_reports SET snapshot = $2, pdf_path = $3 WHERE id = $1`,
-    [row.id, JSON.stringify(data), file]);
+  await db.query(`UPDATE vehicle_reports SET snapshot = $2, pdf_path = $3, pdf_layout = $4 WHERE id = $1`,
+    [row.id, JSON.stringify(data), file, LAYOUT]);
   return { ...row, snapshot: data, pdf_path: file };
 }
 
