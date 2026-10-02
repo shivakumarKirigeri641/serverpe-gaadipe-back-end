@@ -199,7 +199,7 @@ async function checkedBy(userId, limit = 9) {
  */
 const DATASET_OF = (path) => {
   const p = String(path || '').toUpperCase();
-  if (p.startsWith('VAHAN')) return 'rc';
+  if (p.startsWith('VAHAN') || p === 'RCBACKUP') return 'rc';
   if (p.startsWith('ECHALLAN')) return 'challan';
   if (p.startsWith('FASTAG')) return 'fastag';
   return 'other';
@@ -228,9 +228,10 @@ async function recordCalls(userId, vehicleId, data) {
 
   for (const c of calls) {
     const dataset = DATASET_OF(c.path);
-    const cost = COST_KEY[dataset]
-      ? await settings.num(COST_KEY[dataset], 0)
-      : 0;
+    // The paid RC backup (vehicle/rcBackup.js) has its own price.
+    const cost = c.path === 'RCBACKUP' ? await settings.num('rc_backup_cost_paise', 300)
+      : COST_KEY[dataset] ? await settings.num(COST_KEY[dataset], 0)
+        : 0;
     const row = await db.one(
       `INSERT INTO api_calls
          (user_id, vehicle_id, reg_no, dataset, provider_path, cache_hit,

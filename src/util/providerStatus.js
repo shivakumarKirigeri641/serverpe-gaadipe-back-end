@@ -17,7 +17,7 @@
 const db = require('../db');
 
 const LABEL = {
-  vahan: 'VAHAN (RC)', echallan: 'eChallan', fastag: 'FASTag', whatsapp: 'WhatsApp', razorpay: 'Razorpay', email: 'Email',
+  vahan: 'VAHAN (RC)', rc_backup: 'RC backup', echallan: 'eChallan', fastag: 'FASTag', whatsapp: 'WhatsApp', razorpay: 'Razorpay', email: 'Email',
 };
 
 function record(provider, { ok, ms = null, error = null } = {}) {
@@ -45,7 +45,15 @@ async function all() {
   const by = Object.fromEntries(rows.map((r) => [r.provider, r]));
   const lastIn = await db.one(`SELECT max(created_at) AS at FROM whatsapp_messages WHERE direction = 'in'`).catch(() => null);
   const now = Date.now();
-  return Object.keys(LABEL).map((key) => {
+  // The RC backup shows only once it is set up on this server.
+  const backup = require('../vehicle/rcBackup');
+  const keys = Object.keys(LABEL).filter((k) => k !== 'rc_backup' || by.rc_backup || backup.configured());
+  // The paid backup's day so far: calls, limit, spend, and whether it is switched on.
+  const backupDay = keys.includes('rc_backup')
+    ? { ...(await backup.today().catch(() => ({}))), on: await backup.enabled().catch(() => false),
+        cost_paise: await require('./settings').num('rc_backup_cost_paise', 300) }
+    : null;
+  return keys.map((key) => {
     const r = by[key];
     const lastAt = r ? Math.max(r.last_ok_at ? new Date(r.last_ok_at).getTime() : 0, r.last_fail_at ? new Date(r.last_fail_at).getTime() : 0) : 0;
     const recent = Array.isArray(r?.recent) ? r.recent : [];
@@ -65,6 +73,7 @@ async function all() {
       last_ms: r?.last_ms ?? null, consecutive_fails: r?.consecutive_fails || 0,
       recent_ok: recent.slice(0, 10).filter((x) => x === true).length, recent_total: recent.slice(0, 10).length,
       ...(key === 'whatsapp' ? { last_inbound_at: lastIn?.at || null } : {}),
+      ...(key === 'rc_backup' ? { backup: backupDay } : {}),
     };
   });
 }

@@ -64,10 +64,13 @@ async function load(kind, regNo, refresh, debug = false) {
   const fn = kind === 'rc' ? vahan.fetchRc : kind === 'challan' ? echallan.fetchChallans : fastag.fetchFastag;
   const r = await fn(regNo, { includeRaw: debug });
   // The status strip (user, 2026-10-01): a live call's outcome — "not found" is an answer.
+  // The VAHAN light is ULIP's own: an answer from the paid RC backup does not
+  // turn it green (the backup has its own light).
   require('../util/providerStatus').record({ rc: 'vahan', challan: 'echallan', fastag: 'fastag' }[kind], {
-    ok: Boolean(r.ok || r.notFound),
+    ok: Boolean((r.ok || r.notFound) && !r.ulipFailed && r.source !== 'RCBACKUP'),
     ms: (r.calls || []).reduce((a, c) => a + (Number(c.ms) || 0), 0) || null,
-    error: r.ok || r.notFound ? null : `${r.code || ''} ${r.error || ''}`.trim(),
+    error: (r.ok || r.notFound) && !r.ulipFailed && r.source !== 'RCBACKUP' ? null
+      : `${(r.calls || []).filter((c) => c.path !== 'RCBACKUP').map((c) => c.code).filter(Boolean).join(' / ') || r.code || ''} ${r.ulipFailed || r.source === 'RCBACKUP' ? '(answered by the RC backup)' : r.error || ''}`.trim(),
   });
 
   if (r.ok) {

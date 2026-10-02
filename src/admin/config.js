@@ -49,6 +49,11 @@ const GROUPS = [
     ['admin_whatsapp_numbers', 'Daily summary to these WhatsApp numbers', 'Your own number(s), comma-separated. Sent only if that number messaged the bot in the last 24 hours.'],
     ['admin_whatsapp_summary_hour_ist', 'Daily summary time (IST, like 23:55)', 'A time, or just an hour: 21 = 9 pm.'],
   ]],
+  // The paid RC backup when ULIP's VAHAN fails (user, 2026-10-02; switch: Feature flags → RC backup).
+  ['RC backup provider', [
+    ['rc_backup_cost_paise', 'Cost per call (paise)', '300 = ₹3. Used in the money reports.'],
+    ['rc_backup_daily_limit', 'Most calls per day', 'Past it, ULIP’s failure stands until midnight. 200 calls = ₹600.'],
+  ]],
   // The Saturday money report (user, 2026-10-01).
   ['Weekly money report (Excel by email)', [
     ['finance_weekly_email', 'Send it (true / false)', 'Every week, the Excel of the week just ended.'],

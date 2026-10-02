@@ -247,8 +247,8 @@ async function fetchRc(regNo, _opts = {}) {
   // A login failure is not worth a fallback: both datasets sit behind the same
   // token, so the second call would fail identically and burn another attempt.
   if (String(first.message || '').includes('ULIP login failed')) {
-    return { ok: false, notFound: false, data: null, source: null, code: 'AUTH',
-             error: 'Cannot authenticate with ULIP. Check credentials and that this host is whitelisted.', calls };
+    return backup(regNo, calls, { ok: false, notFound: false, data: null, source: null, code: 'AUTH',
+             error: 'Cannot authenticate with ULIP. Check credentials and that this host is whitelisted.', calls });
   }
 
   // Anything else — mapping error, timeout, 5xx — is worth a second try on the
@@ -265,9 +265,31 @@ async function fetchRc(regNo, _opts = {}) {
              code: second.code, error: second.message || 'Vehicle not found in VAHAN', calls };
   }
 
-  return { ok: false, notFound: false, data: null, source: null,
+  return backup(regNo, calls, { ok: false, notFound: false, data: null, source: null,
            code: second.code || first.code,
-           error: 'VAHAN is not responding. Please try again in a few minutes.', calls };
+           error: 'VAHAN is not responding. Please try again in a few minutes.', calls });
+}
+
+/*
+ * ULIP FAILED, SO THE PAID BACKUP (user, 2026-10-02; vehicle/rcBackup.js).
+ * Only ever reached after ULIP failed — never after its "not found". When the
+ * backup is off, over its daily limit, or fails too, ULIP's failure stands.
+ */
+async function backup(regNo, calls, failure) {
+  const b = await require('../vehicle/rcBackup').lookup(regNo).catch((e) => {
+    console.error('[vahan] backup threw:', e.message);
+    return null;
+  });
+  if (!b) return failure;
+  calls.push({ path: 'RCBACKUP', outcome: b.outcome, code: b.code, ms: b.ms });
+  if (b.outcome === 'FOUND') {
+    console.warn(`[vahan] ${regNo} served by the RC backup after ULIP failed (${failure.code})`);
+    return { ok: true, data: b.data, source: 'RCBACKUP', fallback: true, ulipFailed: true, calls };
+  }
+  if (b.outcome === 'NOT_FOUND') {
+    return { ok: false, notFound: true, data: null, source: 'RCBACKUP', code: b.code, error: 'Vehicle not found', calls };
+  }
+  return { ...failure, calls };
 }
 
 module.exports = { fetchRc, mapJson, mapXml, mapAny, usable, parseDate };
