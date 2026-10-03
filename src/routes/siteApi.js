@@ -144,6 +144,9 @@ router.post('/feedback', safe(async (req, res) => {
   await db.query(
     `INSERT INTO feedback (user_id, mobile, body, rating, name, channel) VALUES ($1, $2, $3, $4, $5, $6)`,
     [user?.id || null, mobile, body || `${'★'.repeat(rating)} (no message)`, rating, name, src ? `web:${src}` : 'web']);
+  // 1–2 stars, or angry words, reach the admin at once (util/unhappy.js).
+  const why = Number(rating) <= 2 ? 'low rating' : require('../util/unhappy').kind(body);
+  if (why && mobile) require('../util/unhappy').flag({ mobile, said: body || `${rating}★`, why, source: 'the website feedback page', rating }).catch(() => {});
   res.json({ ok: true });
 }));
 

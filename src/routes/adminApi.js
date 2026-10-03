@@ -506,12 +506,27 @@ router.get('/badges', safe(async (_req, res) => res.json({
   providers: await require('../util/providerStatus').all(),
   // Hot leads waiting for a reply (2026-10-03) — the menu's badge.
   hot_leads: (await require('../admin/opsExtras').hotLeads().catch(() => ({ leads: [] }))).leads.length,
+  data_requests: (await db.one(`SELECT count(*)::int AS n FROM data_requests WHERE status = 'pending'`).catch(() => ({ n: 0 }))).n,
 })));
 
 /* ── the admin additions of 2026-10-01 (src/admin/opsExtras.js) ── */
 const extras = () => require('../admin/opsExtras');
 const fail = (res, e) => res.status(e.status || 500).json({ error: 'failed', message: e.message });
 router.get('/waitlist', safe(async (_req, res) => res.json(await extras().waitlist())));
+// Data deletion requests (user, 2026-10-03; DPDP) — erasing is irreversible, so it needs Settings rights.
+const dataReq = () => require('../admin/dataRequests');
+router.get('/data-requests', needs('dashboard.view'), safe(async (req, res) => res.json(await dataReq().list({ status: req.query.status || null }))));
+router.post('/data-requests/:id/erase', needs('settings'), safe(async (req, res) => {
+  if (req.body?.confirm !== true) return res.status(400).json({ error: 'confirm', message: 'Confirm first — this cannot be undone.' });
+  const out = await dataReq().erase({ id: req.params.id, adminId: req.admin.id, ip: ipOf(req) });
+  if (!out.ok) return res.status(400).json({ error: 'closed', message: out.message });
+  res.json(out);
+}));
+router.post('/data-requests/:id/reject', needs('settings'), safe(async (req, res) => {
+  const out = await dataReq().reject({ id: req.params.id, adminId: req.admin.id, ip: ipOf(req), note: req.body?.note });
+  if (!out.ok) return res.status(400).json({ error: 'closed', message: out.message });
+  res.json(out);
+}));
 // Hot leads and what each ad brought (user, 2026-10-03).
 router.get('/hot-leads', needs('dashboard.view'), safe(async (_req, res) => res.json(await extras().hotLeads())));
 router.get('/ad-return', needs('dashboard.view'), safe(async (req, res) => res.json(await extras().adReturn({ days: req.query.days }))));

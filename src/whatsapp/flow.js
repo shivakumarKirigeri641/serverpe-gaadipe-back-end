@@ -1229,6 +1229,34 @@ async function handle(session, message, mobile) {
     return;
   }
 
+  /*
+   * UNHAPPY? TELL THE ADMIN (user, 2026-10-03, util/unhappy.js). Money
+   * worries, anger or "no report" in any message reach the admin at once —
+   * the bot's own reply below is unchanged.
+   */
+  if (intent.kind === 'text' && intent.text) {
+    const why = require('../util/unhappy').kind(intent.text);
+    if (why) require('../util/unhappy').flag({ mobile, said: intent.text, why }).catch(() => {});
+  }
+
+  /*
+   * "DELETE MY DATA" (user, 2026-10-03; DPDP Act). A request for the admin
+   * (admin/dataRequests.js), and a plain answer: what will be deleted and what
+   * the law makes GaadiPe keep. Messages from GaadiPe stop once it is done.
+   */
+  if (/\b(delete|remove|erase|wipe|clear)\b[\w\s']{0,25}\b(data|details|information|info|account|records?)\b|\bdata\s+(delete|hatao|mitao|remove)\b/i.test(intent.text || '')) {
+    const user = await store.upsertUser(mobile).catch(() => null);
+    const r = await require('../admin/dataRequests').request({ mobile, userId: user?.id, said: intent.text });
+    await funnel(mobile, 'data_delete_request', { created: r.created });
+    await send.text(mobile, r.created
+      ? '✅ Your request to delete your personal data is received.\n\n'
+        + 'We will delete your name, chats, feedback and the vehicles you checked, and confirm it here. '
+        + 'Payment records and GST invoices are kept for the period the law requires.\n\n'
+        + 'If you sent this by mistake, just write to us.'
+      : 'Your request to delete your personal data is already with us — we will confirm here once it is done. 🙏');
+    return;
+  }
+
   if (/^(stop|unsubscribe|stop promotions)\s*$/i.test(intent.text)) {
     await db.query(
       `UPDATE whatsapp_sessions SET wa_opt_out_at = now(), modified_at = now()
