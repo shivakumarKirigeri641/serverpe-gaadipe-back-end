@@ -181,8 +181,46 @@ function read(http, json, regNo) {
  * Ask the backup. Returns null when it may not be used (off, not configured,
  * day's limit reached), else { outcome, data, code, message, ms }.
  */
+/*
+ * THE CUT-OUT (user, 2026-10-03). When the backup itself is failing, every
+ * call is ₹3 for nothing. After rc_backup_pause_after (5) failures in a row —
+ * across at least 3 different vehicles, so a few mistyped numbers cannot trip
+ * it — it pauses for rc_backup_pause_minutes (30) and the admin is told. A
+ * "not found" is an answer, not a failure. The pause survives a restart.
+ */
+let failRun = [];
+async function pausedUntil() {
+  const v = await settings.get('rc_backup_paused_until', '');
+  const t = v ? new Date(v) : null;
+  return t && t > new Date() ? t : null;
+}
+async function noteResult(regNo, failed) {
+  if (!failed) {
+    if (failRun.length >= 1) failRun = [];
+    return;
+  }
+  failRun.push(regNo);
+  const after = await settings.num('rc_backup_pause_after', 5);
+  if (failRun.length < after || new Set(failRun).size < 3) return;
+  const minutes = await settings.num('rc_backup_pause_minutes', 30);
+  const until = new Date(Date.now() + minutes * 60000);
+  failRun = [];
+  await db.query(
+    `INSERT INTO app_settings (key, value) VALUES ('rc_backup_paused_until', $1)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, modified_at = now()`, [until.toISOString()]);
+  settings.refresh();
+  console.warn('[rc-backup] %d failures in a row — paused until %s', after, until.toISOString());
+  await require('../util/adminPing').ping({
+    key: 'rc_backup_paused', severity: 'warning', source: 'vehicle_api',
+    title: '⏸ RC backup paused',
+    text: `The paid RC backup failed ${after} times in a row, so it is paused for ${minutes} minutes to stop paying ₹3 for failures. `
+      + 'Customers are saved to the waiting list meanwhile. It switches back on by itself.',
+  });
+}
+
 async function lookup(regNo) {
   if (!await enabled()) return null;
+  if (await pausedUntil()) return null;
   const t = await today();
   if (!t.left) {
     console.warn('[rc-backup] daily limit of %d reached — not used for %s', t.limit, regNo);
@@ -199,7 +237,8 @@ async function lookup(regNo) {
   }
   out.ms = Date.now() - t0;
   status.record('rc_backup', { ok: out.outcome !== 'RETRY', ms: out.ms, error: out.outcome === 'RETRY' ? `${out.code}: ${out.message}` : null });
+  await noteResult(regNo, out.outcome === 'RETRY').catch(() => {});
   return out;
 }
 
-module.exports = { lookup, enabled, configured, today, PATH, _test: { maskName, maskTail, maskAddress, read } };
+module.exports = { lookup, enabled, configured, today, pausedUntil, PATH, _test: { maskName, maskTail, maskAddress, read } };

@@ -242,6 +242,8 @@ app.listen(config.port, () => {
   require('./jobs/waitlist').start(Number(process.env.WAITLIST_TICK_SECONDS) || 300);
   // The WhatsApp account as Meta sees it — limit tier, quality — read hourly.
   require('./jobs/metaStatus').start(Number(process.env.META_STATUS_TICK_SECONDS) || 3600);
+  // ULIP's VAHAN, asked every 15 minutes (free): "VAHAN is back" the moment it is.
+  require('./jobs/vahanWatch').start(Number(process.env.VAHAN_WATCH_TICK_SECONDS) || 900);
 
 
   // Page, click and action history is kept activity_retention_days, then deleted.

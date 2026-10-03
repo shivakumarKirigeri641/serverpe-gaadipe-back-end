@@ -50,6 +50,15 @@ const blocks = require('../admin/blocks');
 const allowed = (mobile) => !wa.allowedRecipients.length
   || wa.allowedRecipients.includes(String(mobile).replace(/\D/g, '').slice(-10));
 
+/** A full chassis number in a message, or null. 17 characters, at least 2 letters and 5 digits, no stars. */
+function unmasked(payload) {
+  const text = JSON.stringify(payload || {}).replace(/https?:\/\/[^\s"]+/g, ' ');
+  for (const t of text.toUpperCase().match(/\b[A-HJ-NPR-Z0-9]{17}\b/g) || []) {
+    if ((t.match(/[A-Z]/g) || []).length >= 2 && (t.match(/[0-9]/g) || []).length >= 5) return t;
+  }
+  return null;
+}
+
 async function post(payload, meta) {
   const { mobile, type, body, templateName } = meta;
 
@@ -63,6 +72,25 @@ async function post(payload, meta) {
   if (await blocks.isBlocked('mobile', mobile)) {
     console.warn('[wa] %s is blocked — not sending %s', mobile, type);
     return { ok: false, error: 'blocked' };
+  }
+
+  /*
+   * THE PERSONAL-DATA GUARD (user, 2026-10-03: "never show unmasked
+   * details"). Every message is read here, at the one door, for what looks
+   * like a full chassis number (17 letters and digits, unstarred). One is
+   * never sent: the message is stopped and the admin told at once. Links are
+   * left out of the reading — a report link's token is not a chassis.
+   */
+  const leak = unmasked(payload);
+  if (leak) {
+    console.error('[wa] BLOCKED a message to …%s: it held what looks like a full chassis number', String(mobile).slice(-4));
+    await record({ mobile, type, body, templateName, error: 'pii_blocked', payload: { blocked: true } }).catch(() => {});
+    require('../util/adminPing').ping({
+      key: 'pii_blocked', severity: 'critical', source: 'whatsapp',
+      title: '🛑 Message stopped: personal data',
+      text: `A ${type} message to ••••${String(mobile).slice(-4)} held what looks like a full chassis number (${leak.slice(0, 1)}•••••••••••••••). It was not sent. Check what produced it.`,
+    }).catch(() => {});
+    return { ok: false, error: 'pii_blocked' };
   }
 
   if (!wa.token || !wa.phoneNumberId) {
@@ -323,4 +351,4 @@ async function optedOut(mobile) {
   return Boolean(row);
 }
 
-module.exports = { text, buttons, list, document, template, windowOpen, toWaId, allowed, optedOut };
+module.exports = { _unmasked: unmasked, text, buttons, list, document, template, windowOpen, toWaId, allowed, optedOut };

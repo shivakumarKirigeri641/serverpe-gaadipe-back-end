@@ -258,7 +258,36 @@ function apiEvent(id, { userId, regNo, ok, dataset, cacheHit, cost, ms, code }) 
 }
 
 /** Store a whole gateway response: vehicle row, snapshots and the link. */
+/*
+ * THE PERSONAL-DATA GUARD, AT THE STORE (user, 2026-10-03). Whatever the
+ * source, an RC is kept only masked: the owner's name starred, the last five
+ * characters of chassis and engine starred. ULIP and the RC backup both do
+ * this already; anything that slips through is masked here and the admin told.
+ */
+function guardRc(rc, regNo) {
+  if (!rc || typeof rc !== 'object') return rc;
+  const { maskName, maskTail } = require('./rcBackup')._test;
+  const fixed = [];
+  const out = { ...rc };
+  for (const k of ['chassis', 'engine']) {
+    const v = String(out[k] || '');
+    if (v.replace(/\s/g, '').length >= 8 && !/[*•]/.test(v)) { out[k] = maskTail(v); fixed.push(k); }
+  }
+  const name = String(out.owner_name || '');
+  if (/[A-Za-z]{3,}/.test(name) && !/[*•]/.test(name)) { out.owner_name = maskName(name); fixed.push('owner name'); }
+  if (fixed.length) {
+    console.error('[store] %s arrived with an unmasked %s — masked before saving', regNo, fixed.join(', '));
+    require('../util/adminPing').ping({
+      key: 'pii_unmasked_source', severity: 'critical', source: 'vehicle_api',
+      title: '🛑 Unmasked personal data arrived',
+      text: `The record for ${regNo} came with an unmasked ${fixed.join(', ')}. It was masked before saving and nothing was shown, but the source should be checked.`,
+    }).catch(() => {});
+  }
+  return out;
+}
+
 async function record(userId, data) {
+  data = { ...data, rc: guardRc(data.rc, data.vehicle_number) };
   const vehicle = await upsertVehicle(data.vehicle_number, data.rc || {});
   await saveSnapshot(vehicle.id, 'rc', data.rc || {},
     { source: data.source, ttlMinutes: 60 * 24 * 7 });
