@@ -524,6 +524,17 @@ router.delete('/ad-spend/:id', needs('settings'), safe(async (req, res) => {
   await auth.audit({ adminId: req.admin.id, action: 'ad_spend_removed', ip: ipOf(req), detail: { id: req.params.id } });
   res.json({ ok: true });
 }));
+/* The Graphs section (user, 2026-10-03): a page's series, and the drill-down under a mark. */
+router.get('/graphs/:page/drill', needs('dashboard.view'), safe(async (req, res) => {
+  const fn = require('../admin/graphs').DRILLS[req.params.page];
+  if (!fn) return res.status(404).json({ error: 'not_found', message: 'No such graph.' });
+  res.json(await fn(req.query));
+}));
+router.get('/graphs/:page', needs('dashboard.view'), safe(async (req, res) => {
+  const fn = require('../admin/graphs').PAGES[req.params.page];
+  if (!fn) return res.status(404).json({ error: 'not_found', message: 'No such graph.' });
+  res.json(await fn(req.query));
+}));
 router.get('/why-not-paid', needs('dashboard.view'), safe(async (req, res) => res.json(await extras().whyNotPaid({ days: req.query.days }))));
 router.get('/whatsapp/limit', safe(async (_req, res) => res.json(await extras().waLimit())));
 router.get('/whatsapp/broadcast-costs', needs('dashboard.view'), safe(async (_req, res) => res.json(await extras().broadcastCosts())));
