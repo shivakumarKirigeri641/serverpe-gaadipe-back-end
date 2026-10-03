@@ -289,6 +289,10 @@ async function whatsapp({ days }) {
   const n = span(days);
   const R = await ledger.rates();
   const cat = `upper(coalesce((SELECT t.category FROM wa_templates t WHERE t.template_name = m.template_name LIMIT 1), ''))`;
+  // As Meta bills (2026-10-03): refused templates and utility ones inside an open window are free.
+  const ok = `coalesce(m.error_message, '') = ''`;
+  const win = `EXISTS (SELECT 1 FROM whatsapp_messages wi WHERE wi.mobile = m.mobile AND wi.direction = 'in'
+                      AND wi.created_at <= m.created_at AND wi.created_at > m.created_at - interval '24 hours')`;
   const { rows } = await db.query(
     `WITH ${DAYS},
        x AS (SELECT ${dayOf('m.created_at')} AS d,
@@ -296,9 +300,9 @@ async function whatsapp({ days }) {
                     count(*) FILTER (WHERE m.direction = 'out' AND m.message_type <> 'template') AS replies,
                     count(*) FILTER (WHERE m.direction = 'out' AND m.message_type = 'template') AS templates,
                     count(DISTINCT m.mobile) FILTER (WHERE m.direction = 'in') AS people,
-                    coalesce(sum(CASE WHEN m.direction = 'out' AND m.message_type = 'template' AND ${cat} = 'MARKETING' THEN ${Number(R.wa_marketing_paise) || 0} END), 0) AS marketing,
-                    coalesce(sum(CASE WHEN m.direction = 'out' AND m.message_type = 'template' AND ${cat} = 'UTILITY' THEN ${Number(R.wa_utility_paise) || 0} END), 0) AS utility,
-                    coalesce(sum(CASE WHEN m.direction = 'out' AND m.message_type = 'template' AND ${cat} NOT IN ('MARKETING', 'UTILITY') THEN ${Number(R.wa_rate_paise) || 0} END), 0) AS other
+                    coalesce(sum(CASE WHEN m.direction = 'out' AND m.message_type = 'template' AND ${ok} AND ${cat} = 'MARKETING' THEN ${Number(R.wa_marketing_paise) || 0} END), 0) AS marketing,
+                    coalesce(sum(CASE WHEN m.direction = 'out' AND m.message_type = 'template' AND ${ok} AND ${cat} = 'UTILITY' AND NOT ${win} THEN ${Number(R.wa_utility_paise) || 0} END), 0) AS utility,
+                    coalesce(sum(CASE WHEN m.direction = 'out' AND m.message_type = 'template' AND ${ok} AND ${cat} NOT IN ('MARKETING', 'UTILITY') THEN ${Number(R.wa_rate_paise) || 0} END), 0) AS other
                FROM whatsapp_messages m WHERE ${since('m.created_at')} GROUP BY 1)
      SELECT days.d, coalesce(x.inbound, 0)::int AS inbound, coalesce(x.replies, 0)::int AS replies,
             coalesce(x.templates, 0)::int AS templates, coalesce(x.people, 0)::int AS people,

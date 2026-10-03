@@ -172,7 +172,11 @@ async function broadcastCosts() {
       GROUP BY b.id ORDER BY b.id DESC LIMIT 100`);
   const months = await db.query(
     `SELECT to_char(m.created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM') AS month,
-            upper(coalesce(t.category, 'UNKNOWN')) AS category, count(*)::int AS n
+            upper(coalesce(t.category, 'UNKNOWN')) AS category,
+            count(*) FILTER (WHERE coalesce(m.error_message, '') = ''
+                 AND NOT (upper(coalesce(t.category, '')) = 'UTILITY' AND EXISTS (
+                   SELECT 1 FROM whatsapp_messages wi WHERE wi.mobile = m.mobile AND wi.direction = 'in'
+                      AND wi.created_at <= m.created_at AND wi.created_at > m.created_at - interval '24 hours')))::int AS n
        FROM whatsapp_messages m
        LEFT JOIN LATERAL (SELECT category FROM wa_templates x WHERE x.template_name = m.template_name LIMIT 1) t ON true
       WHERE m.direction = 'out' AND m.message_type = 'template' AND m.created_at > now() - interval '12 months'

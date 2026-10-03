@@ -63,9 +63,19 @@ async function rates() {
  */
 function waCostSql(alias, R) {
   const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-  return `coalesce(sum(CASE upper(coalesce((SELECT t.category FROM wa_templates t WHERE t.template_name = ${alias}.template_name LIMIT 1), ''))
-            WHEN 'MARKETING' THEN ${n(R.wa_marketing_paise)} WHEN 'UTILITY' THEN ${n(R.wa_utility_paise)}
-            WHEN 'AUTHENTICATION' THEN ${n(R.wa_auth_paise)} ELSE ${n(R.wa_rate_paise)} END), 0)`;
+  /*
+   * AS META BILLS IT (user, 2026-10-03): a template Meta refused (an error
+   * recorded on it) costs nothing, and a utility template sent while the
+   * customer's 24-hour window was open is free. Marketing and authentication
+   * are charged window or not.
+   */
+  const inWindow = `EXISTS (SELECT 1 FROM whatsapp_messages wi WHERE wi.mobile = ${alias}.mobile AND wi.direction = 'in'
+                      AND wi.created_at <= ${alias}.created_at AND wi.created_at > ${alias}.created_at - interval '24 hours')`;
+  return `coalesce(sum(CASE WHEN coalesce(${alias}.error_message, '') <> '' THEN 0 ELSE
+            CASE upper(coalesce((SELECT t.category FROM wa_templates t WHERE t.template_name = ${alias}.template_name LIMIT 1), ''))
+            WHEN 'MARKETING' THEN ${n(R.wa_marketing_paise)}
+            WHEN 'UTILITY' THEN CASE WHEN ${inWindow} THEN 0 ELSE ${n(R.wa_utility_paise)} END
+            WHEN 'AUTHENTICATION' THEN ${n(R.wa_auth_paise)} ELSE ${n(R.wa_rate_paise)} END END), 0)`;
 }
 
 /*

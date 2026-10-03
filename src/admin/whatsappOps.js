@@ -31,7 +31,14 @@ async function rates() {
 
 async function windowFigures(from, to, R) {
   const [cat, conv, money, delivered] = await Promise.all([
-    db.query(`SELECT coalesce(upper(t.category), 'OTHER') AS category, count(*)::int AS n
+    // Billed as Meta bills (2026-10-03): refused templates and utility ones inside
+    // an open 24-hour window cost nothing; "sent" keeps the full count.
+    db.query(`SELECT coalesce(upper(t.category), 'OTHER') AS category,
+                     count(*) FILTER (WHERE coalesce(m.error_message, '') = ''
+                 AND NOT (upper(coalesce(t.category, '')) = 'UTILITY' AND EXISTS (
+                   SELECT 1 FROM whatsapp_messages wi WHERE wi.mobile = m.mobile AND wi.direction = 'in'
+                      AND wi.created_at <= m.created_at AND wi.created_at > m.created_at - interval '24 hours')))::int AS n,
+                     count(*)::int AS sent
                 FROM whatsapp_messages m LEFT JOIN wa_templates t ON t.template_name = m.template_name
                WHERE m.direction = 'out' AND m.message_type = 'template' AND m.created_at >= $1 AND m.created_at < $2
                GROUP BY 1`, [from, to]),
@@ -44,7 +51,7 @@ async function windowFigures(from, to, R) {
     ledger.entries({ from, to }),
     db.one(`SELECT count(*)::int AS n FROM events WHERE name = 'report_delivered' AND channel = 'whatsapp' AND occurred_at >= $1 AND occurred_at < $2`, [from, to]),
   ]);
-  const categories = cat.rows.map((c) => ({ category: c.category, messages: c.n, rate_paise: R[c.category] ?? R.OTHER, cost_paise: c.n * (R[c.category] ?? R.OTHER) }));
+  const categories = cat.rows.map((c) => ({ category: c.category, messages: c.n, sent: c.sent, free: c.sent - c.n, rate_paise: R[c.category] ?? R.OTHER, cost_paise: c.n * (R[c.category] ?? R.OTHER) }));
   const cost = categories.reduce((s, c) => s + c.cost_paise, 0);
   const wa = money.rows.filter((x) => x.channel === 'whatsapp');
   const t = ledger.total(wa);
