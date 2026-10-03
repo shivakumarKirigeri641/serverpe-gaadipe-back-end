@@ -217,7 +217,22 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
               WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL))::int AS customers_today,
             (SELECT count(*) FROM users u, b WHERE u.created_at >= b.d - interval '1 day' AND u.created_at < b.d
                 AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
-              WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL))::int AS customers_yesterday_full`);
+              WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL))::int AS customers_yesterday_full,
+            -- Full reports bought, and vehicle checks (user, 2026-10-03): all time,
+            -- today, and the whole of yesterday (IST). A report counts once paid; a
+            -- check is a customer's lookup on WhatsApp or the website (util/quota.js),
+            -- a repeat of the same vehicle inside its window not counted again.
+            (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
+              WHERE p.status = 'paid' AND p.amount_paise > 0)::int AS reports_total,
+            (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id, b
+              WHERE p.status = 'paid' AND p.amount_paise > 0 AND r.created_at >= b.d)::int AS reports_today,
+            (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id, b
+              WHERE p.status = 'paid' AND p.amount_paise > 0
+                AND r.created_at >= b.d - interval '1 day' AND r.created_at < b.d)::int AS reports_yesterday_full,
+            (SELECT count(*) FROM event_log WHERE kind = 'vehicle_check')::int AS checks_total,
+            (SELECT count(*) FROM event_log, b WHERE kind = 'vehicle_check' AND created_at >= b.d)::int AS checks_today,
+            (SELECT count(*) FROM event_log, b WHERE kind = 'vehicle_check'
+                AND created_at >= b.d - interval '1 day' AND created_at < b.d)::int AS checks_yesterday_full`);
   const where = await placesFor(rows);
   // The STOP reasons at a glance, for the "Said STOP" list (user, 2026-10-02):
   // each person's latest answer, among everyone still stopped.
