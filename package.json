@@ -29,7 +29,8 @@
     "geoip-lite": "^1.4.10",
     "nodemailer": "^6.10.1",
     "pdfkit": "^0.20.2",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "playwright-core": "^1.63.0"

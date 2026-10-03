@@ -524,6 +524,16 @@ router.delete('/ad-spend/:id', needs('settings'), safe(async (req, res) => {
   await auth.audit({ adminId: req.admin.id, action: 'ad_spend_removed', ip: ipOf(req), detail: { id: req.params.id } });
   res.json({ ok: true });
 }));
+/* Phone notifications (user, 2026-10-03, src/util/push.js): this admin's devices. */
+const push = () => require('../util/push');
+router.get('/push/key', safe(async (_req, res) => res.json({ key: await push().publicKey() })));
+router.get('/push/devices', safe(async (req, res) => res.json({ devices: await push().list(req.admin.id) })));
+router.post('/push/subscribe', safe(async (req, res) => res.json(await push().subscribe(req.admin.id, req.body?.subscription, req.body?.device))));
+router.post('/push/unsubscribe', safe(async (req, res) => res.json(await push().unsubscribe(String(req.body?.endpoint || '')))));
+router.post('/push/test', safe(async (req, res) => res.json({
+  sent: await push().toAdmins({ adminId: req.admin.id, title: '🔔 GaadiPe notifications are on', body: 'Payments, feedback, milestones and outages will arrive here.', tag: 'test' }),
+})));
+
 /* The Graphs section (user, 2026-10-03): a page's series, and the drill-down under a mark. */
 router.get('/graphs/:page/drill', needs('dashboard.view'), safe(async (req, res) => {
   const fn = require('../admin/graphs').DRILLS[req.params.page];

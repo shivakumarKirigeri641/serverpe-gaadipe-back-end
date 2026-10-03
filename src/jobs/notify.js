@@ -864,7 +864,7 @@ async function runOnce() {
   if (!mailer.configured()) return { skipped: 'mail not configured' };
   const out = {};
   for (const [k, fn] of Object.entries({ signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
-                                            leftAtPayment, alertMails, security, dailySummary, weeklyMoney, whatsappSummary })) {
+                                            leftAtPayment, alertMails, security, dailySummary, weeklyMoney, whatsappSummary, weeklyDigest })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
   const total = Object.values(out).reduce((t, v) => t + (Number(v) || 0), 0);
@@ -872,16 +872,101 @@ async function runOnce() {
   return out;
 }
 
+/*
+ * MONDAY: WHAT CHANGED (user, 2026-10-03). From 9 am IST on Mondays, once:
+ * last week (Mon–Sun) against the week before — customers, checks, paid
+ * reports, revenue, conversion, margin, STOP rate and the top STOP reason —
+ * with one line on what moved most. To the admin's WhatsApp (in its window),
+ * email when configured, and the phone.
+ */
+async function weeklyDigest() {
+  const now = new Date(Date.now() + 5.5 * 3600 * 1000);
+  if (now.getUTCDay() !== 1 || now.getUTCHours() < await settings.num('weekly_digest_hour_ist', 9)) return 0;
+  const week = now.toISOString().slice(0, 10);
+  const claim = await db.one(
+    `INSERT INTO event_log (kind, detail) SELECT 'admin_weekly_digest', $1::jsonb
+      WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE kind = 'admin_weekly_digest' AND detail->>'week' = $2) RETURNING id`,
+    [JSON.stringify({ week }), week]);
+  if (!claim) return 0;
+  const R = await require('../finance/ledger').rates();
+  const span = async (fromDays, toDays) => db.one(
+    `WITH b AS (SELECT (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') - ($1 || ' days')::interval) AT TIME ZONE 'Asia/Kolkata' AS a,
+                       (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') - ($2 || ' days')::interval) AT TIME ZONE 'Asia/Kolkata' AS z)
+     SELECT (SELECT count(*) FROM users, b WHERE created_at >= b.a AND created_at < b.z)::int AS customers,
+            (SELECT count(*) FROM event_log, b WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND created_at >= b.a AND created_at < b.z)::int AS checks,
+            (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id, b
+              WHERE p.status = 'paid' AND p.amount_paise > 0 AND r.created_at >= b.a AND r.created_at < b.z)::int AS reports,
+            (SELECT coalesce(sum(amount_paise), 0) FROM payments, b WHERE status = 'paid' AND amount_paise > 0 AND paid_at >= b.a AND paid_at < b.z)::bigint AS revenue,
+            (SELECT count(DISTINCT detail->>'mobile') FROM event_log, b WHERE kind = 'funnel' AND detail->>'step' = 'hi' AND created_at >= b.a AND created_at < b.z)::int AS hi,
+            (SELECT count(DISTINCT user_id) FROM payments, b WHERE status = 'paid' AND amount_paise > 0 AND paid_at >= b.a AND paid_at < b.z)::int AS payers,
+            (SELECT count(*) FROM event_log, b WHERE kind = 'funnel' AND detail->>'step' = 'opt_out' AND created_at >= b.a AND created_at < b.z)::int AS stops,
+            (SELECT coalesce(sum(cost_paise), 0) FROM api_calls, b WHERE created_at >= b.a AND created_at < b.z)::bigint AS api,
+            (SELECT ${require('../finance/ledger').waCostSql('m', R)} FROM whatsapp_messages m, b
+              WHERE m.direction = 'out' AND m.message_type = 'template' AND m.created_at >= b.a AND m.created_at < b.z)::bigint AS wa,
+            (SELECT coalesce(sum(amount_paise), 0) FROM ad_spend, b WHERE product = 'gaadipe' AND day >= (b.a AT TIME ZONE 'Asia/Kolkata')::date AND day < (b.z AT TIME ZONE 'Asia/Kolkata')::date)::bigint AS ads,
+            (SELECT e.detail->>'reason' FROM event_log e, b WHERE e.kind = 'funnel' AND e.detail->>'step' = 'opt_out_reason' AND e.created_at >= b.a AND e.created_at < b.z
+              GROUP BY 1 ORDER BY count(*) DESC LIMIT 1) AS top_reason`, [String(fromDays), String(toDays)]);
+  // Today is Monday: last week is 7..0 days back; the week before 14..7.
+  const [a, b] = await Promise.all([span(7, 0), span(14, 7)]);
+  const g = Number(R.gst_percent || 18) / 100; const fee = (Number(R.fee_percent || 2) / 100) * (1 + Number(R.fee_gst_percent || 18) / 100);
+  const derive = (x) => {
+    const rev = Number(x.revenue);
+    const left = rev - (rev - rev / (1 + g)) - rev * fee - Number(x.api) - Number(x.wa) - Number(x.ads);
+    return { ...x, revenue: rev, conv: x.hi ? (x.payers / x.hi) * 100 : null, margin: rev ? (left / rev) * 100 : null, stop_rate: x.customers ? (x.stops / x.customers) * 100 : null };
+  };
+  const A = derive(a); const B = derive(b);
+  const pctChange = (n, o) => (o ? Math.round(((n - o) / o) * 100) : null);
+  const line = (icon, label, n, o, fmt = (v) => String(v)) => {
+    const c = pctChange(Number(n || 0), Number(o || 0));
+    return `${icon} ${label}: *${fmt(n)}* ${c == null ? '' : c === 0 ? '(same)' : `(${c > 0 ? '▲' : '▼'} ${Math.abs(c)}%)`}`;
+  };
+  const pts = (v) => (v == null ? '—' : `${Math.round(v * 10) / 10}%`);
+  const movers = [['New customers', A.customers, B.customers], ['Vehicle checks', A.checks, B.checks],
+    ['Full reports', A.reports, B.reports], ['Revenue', A.revenue, B.revenue]]
+    .map(([l, n, o]) => [l, pctChange(n, o)]).filter(([, c]) => c != null).sort((x, y) => Math.abs(y[1]) - Math.abs(x[1]));
+  const text = [
+    line('👋', 'New customers', A.customers, B.customers),
+    line('🔍', 'Vehicle checks', A.checks, B.checks),
+    line('📋', 'Full reports', A.reports, B.reports),
+    line('💰', 'Revenue', A.revenue, B.revenue, (v) => T.rupees(v)),
+    `🎯 Conversion (hi → paid): *${pts(A.conv)}* (was ${pts(B.conv)})`,
+    `📊 Margin after costs and ads: *${pts(A.margin)}* (was ${pts(B.margin)})`,
+    `🛑 STOP rate: *${pts(A.stop_rate)}* (was ${pts(B.stop_rate)})${A.top_reason ? ` · top reason: ${A.top_reason}` : ''}`,
+    '',
+    movers.length ? `Biggest change: *${movers[0][0]}* ${movers[0][1] > 0 ? 'up' : 'down'} ${Math.abs(movers[0][1])}% on the week before.` : 'Not enough data from the week before to compare.',
+  ].join('\n');
+  await require('../util/adminPing').ping({ key: 'weekly_digest', alert: false, severity: 'info', source: 'reports', title: `📈 GaadiPe last week · ${week}`, text });
+  await db.query(`UPDATE event_log SET detail = detail || $2::jsonb WHERE id = $1`, [claim.id, JSON.stringify({ sent: true })]);
+  return 1;
+}
+
 function start(everySeconds = 30) {
   if (!mailer.configured()) {
-    console.log('  admin email: off (MAIL_HOST / NOREPLYMAIL / NOREPLYMAIL_PASSWORD not set)');
+    /*
+     * EMAIL OFF, WHATSAPP STILL ON (2026-10-03). The admin's WhatsApp summary,
+     * the Monday digest and the phone notifications do not need email, and
+     * used to stop with it.
+     */
+    console.log('  admin email: off (MAIL_HOST / NOREPLYMAIL / NOREPLYMAIL_PASSWORD not set) — WhatsApp summaries still on');
+    let busy = false;
+    const lite = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        await whatsappSummary().catch((e) => console.error('[notify] whatsapp summary:', e.message));
+        await weeklyDigest().catch((e) => console.error('[notify] weekly digest:', e.message));
+        await require('../util/push').feed().catch(() => {});
+      } finally { busy = false; }
+    };
+    setInterval(lite, everySeconds * 1000).unref();
+    setTimeout(lite, 8000).unref();
     return;
   }
   let running = false;
   const tick = async () => {
     if (running) return;
     running = true;
-    try { await runOnce(); } catch (e) { console.error('[notify] pass failed:', e.message); } finally { running = false; }
+    try { await runOnce(); await require('../util/push').feed().catch(() => {}); } catch (e) { console.error('[notify] pass failed:', e.message); } finally { running = false; }
   };
   // Heartbeat: System health and the alert checker see when this last ran.
   setInterval(require('../util/heartbeat').wrap('notify', tick, everySeconds), everySeconds * 1000).unref();
@@ -890,4 +975,4 @@ function start(everySeconds = 30) {
 }
 
 module.exports = { start, runOnce, signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
-                   leftAtPayment, security, dailySummary, weeklyMoney, whatsappSummary };
+                   leftAtPayment, security, dailySummary, weeklyMoney, whatsappSummary, weeklyDigest };
