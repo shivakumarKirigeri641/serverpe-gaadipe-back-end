@@ -1059,12 +1059,15 @@ async function reportMenu(mobile, regNo, data, bought) {
     return;
   }
   const price = `₹${Math.round(plan.price_paise / 100)}`;
+  // A discount shows as the old price struck through (2026-10-03).
+  const was = plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : '';
+  const off = plan.discount_paise ? ` (₹${Math.round(plan.discount_paise / 100)} off)` : '';
   const validDays = await settings.num('report_valid_days', 7);
 
   await send.buttons(mobile,
     `🔒 *Full report for ${regNo}*\n\n`
     + lockedLines(data).join('\n')
-    + `\n\n*${price}* — one-time\n`
+    + `\n\n${was}*${price}* — one-time${off}\n`
     + `📄 PDF report on WhatsApp — download again for ${validDays} days\n`
     + `🔔 New challans watched ${plan.duration_days} days, and a warning before insurance, PUC, `
     + 'road tax, fitness or permit about to expire\n\n'
@@ -1088,7 +1091,7 @@ async function start(mobile) {
   // Full report expecting it free called it "worst". Read from the plan.
   const plan = await billing.reportPlan().catch(() => null);
   const price = plan
-    ? `✅ Basic check — *free* · 📋 Full report — *₹${Math.round(plan.price_paise / 100)}* (only if you want it)\n\n`
+    ? `✅ Basic check — *free* · 📋 Full report — ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}* (only if you want it)\n\n`
     : '';
   await send.buttons(mobile, INTRO + price + OWNER_TERMS,
     [{ id: BTN.AGREE_OWNER, title: 'Agree & continue' }],

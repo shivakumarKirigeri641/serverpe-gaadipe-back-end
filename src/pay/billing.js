@@ -23,9 +23,23 @@ const DAY = 24 * 60 * 60 * 1000;
 const watchPlan = () => db.one(
   `SELECT * FROM plans WHERE code = 'WATCH28' AND is_active LIMIT 1`);
 
-/** The Rs.19 full report: a PDF, and 28 days of monitoring. */
-const reportPlan = () => db.one(
-  `SELECT * FROM plans WHERE code = 'REPORT19' AND is_active LIMIT 1`);
+/**
+ * The Rs.19 full report: a PDF, and 28 days of monitoring.
+ *
+ * THE DISCOUNT (user, 2026-10-03): plans.discount_paise comes off the price
+ * here, in the one place every screen, message, checkout and invoice reads it
+ * from — so a ₹4 discount makes it ₹15 everywhere at once. The plan keeps
+ * list_price_paise and discount_paise for showing "₹19 → ₹15". Never below ₹1.
+ */
+const reportPlan = async () => {
+  const p = await db.one(`SELECT * FROM plans WHERE code = 'REPORT19' AND is_active LIMIT 1`);
+  if (!p) return p;
+  const off = Math.max(0, Number(p.discount_paise || 0));
+  if (!off) return { ...p, list_price_paise: Number(p.price_paise), discount_paise: 0 };
+  const cut = (v) => (v == null || Number(v) <= 0 ? v : Math.max(100, Number(v) - off));
+  return { ...p, list_price_paise: Number(p.price_paise), list_renewal_paise: p.renewal_paise, discount_paise: off,
+           price_paise: cut(p.price_paise), renewal_paise: cut(p.renewal_paise) };
+};
 
 /**
  * What a full report costs THIS customer for THIS vehicle (user, 2026-09-23).

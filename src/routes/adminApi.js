@@ -1172,9 +1172,16 @@ router.put('/settings', needs('settings'), safe(async (req, res) => {
 }));
 
 router.put('/plans/:code', needs('settings'), safe(async (req, res) => {
-  const { name, price_paise, renewal_paise, duration_days, is_active } = req.body || {};
+  const { name, price_paise, renewal_paise, duration_days, is_active, discount_paise } = req.body || {};
   const before = await db.one(`SELECT * FROM plans WHERE code = $1`, [req.params.code]);
   if (!before) return res.status(404).json({ error: 'not_found', message: 'No such plan.' });
+  // The discount (2026-10-03): whole paise, and at least ₹1 must remain to pay.
+  if (discount_paise !== undefined && discount_paise !== null) {
+    const off = Number(discount_paise);
+    const price = Number(price_paise ?? before.price_paise);
+    if (!Number.isInteger(off) || off < 0) return res.status(400).json({ error: 'bad_discount', message: 'The discount must be ₹0 or more.' });
+    if (price - off < 100) return res.status(400).json({ error: 'bad_discount', message: 'At least ₹1 must be left to pay.' });
+  }
 
   const { rows } = await db.query(
     `UPDATE plans SET
@@ -1182,11 +1189,13 @@ router.put('/plans/:code', needs('settings'), safe(async (req, res) => {
        price_paise = coalesce($3, price_paise),
        renewal_paise = coalesce($4, renewal_paise),
        duration_days = coalesce($5, duration_days),
-       is_active = coalesce($6, is_active)
+       is_active = coalesce($6, is_active),
+       discount_paise = coalesce($7, discount_paise)
      WHERE code = $1 RETURNING *`,
     [req.params.code, name ?? null,
      price_paise ?? null, renewal_paise ?? null, duration_days ?? null,
-     is_active === undefined ? null : Boolean(is_active)]);
+     is_active === undefined ? null : Boolean(is_active),
+     discount_paise === undefined || discount_paise === null ? null : Number(discount_paise)]);
 
   await auth.audit({ adminId: req.admin.id, action: 'plan_changed', ip: ipOf(req),
                      detail: { code: req.params.code, before, after: rows[0] } });
