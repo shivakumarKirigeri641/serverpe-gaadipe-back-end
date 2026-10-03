@@ -236,6 +236,8 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
             (SELECT count(*) FROM event_log, b WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND created_at >= b.d)::int AS checks_today,
             (SELECT count(DISTINCT detail->>'reg_no') FROM event_log, b
               WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND created_at >= b.d)::int AS checks_today_distinct,
+            -- Repeats are recorded from the day that went live: the first one says when.
+            (SELECT min(created_at) FROM event_log WHERE kind = 'vehicle_check_repeat') AS repeats_since,
             (SELECT count(*) FROM event_log, b WHERE kind IN ('vehicle_check', 'vehicle_check_repeat')
                 AND created_at >= b.d - interval '1 day' AND created_at < b.d)::int AS checks_yesterday_full`);
   const where = await placesFor(rows);
