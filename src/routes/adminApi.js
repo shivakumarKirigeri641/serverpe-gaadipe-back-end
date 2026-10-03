@@ -504,12 +504,18 @@ router.get('/badges', safe(async (_req, res) => res.json({
   ...(await alertCenter.badges()),
   // The status strip (user, 2026-10-01): the outside services, as real calls find them.
   providers: await require('../util/providerStatus').all(),
+  // Hot leads waiting for a reply (2026-10-03) — the menu's badge.
+  hot_leads: (await require('../admin/opsExtras').hotLeads().catch(() => ({ leads: [] }))).leads.length,
 })));
 
 /* ── the admin additions of 2026-10-01 (src/admin/opsExtras.js) ── */
 const extras = () => require('../admin/opsExtras');
 const fail = (res, e) => res.status(e.status || 500).json({ error: 'failed', message: e.message });
 router.get('/waitlist', safe(async (_req, res) => res.json(await extras().waitlist())));
+// Hot leads and what each ad brought (user, 2026-10-03).
+router.get('/hot-leads', needs('dashboard.view'), safe(async (_req, res) => res.json(await extras().hotLeads())));
+router.get('/ad-return', needs('dashboard.view'), safe(async (req, res) => res.json(await extras().adReturn({ days: req.query.days }))));
+router.post('/ad-return/spend', needs('settings'), safe(async (req, res) => res.json(await extras().saveAdReturnSpend(req.body || {}, req.admin.id))));
 router.get('/ad-spend', needs('dashboard.view'), safe(async (req, res) =>
   res.json(await extras().adSpend({ days: req.query.days, product: req.query.product === 'quizpe' ? 'quizpe' : 'gaadipe' }))));
 router.post('/ad-spend', needs('settings'), safe(async (req, res) => {

@@ -134,6 +134,94 @@ async function waLimit() {
     note: 'GaadiPe’s number only. QuizPe shares the same Meta limit and is not counted here — WhatsApp Manager shows the total.' };
 }
 
+/* ─────────────────────────────────────────────────────────── hot leads ── */
+
+/*
+ * HOT LEADS (user, 2026-10-03): people who opened a ₹19 checkout in the last
+ * two days and have not paid since, whose 24-hour WhatsApp window is still
+ * open — so a reply costs nothing. Latest checkout per person, newest first,
+ * without anyone who said STOP or is blocked.
+ */
+async function hotLeads() {
+  const { rows } = await db.query(
+    `SELECT DISTINCT ON (u.id) u.id AS user_id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
+            p.id AS payment_id, p.amount_paise, p.created_at AS checkout_at, v.reg_no,
+            ws.last_inbound_at,
+            (SELECT body FROM whatsapp_messages m WHERE m.mobile = u.mobile AND m.direction = 'in' ORDER BY m.id DESC LIMIT 1) AS last_message,
+            (SELECT count(*)::int FROM payments x WHERE x.user_id = u.id AND x.status = 'paid' AND x.amount_paise > 0) AS paid_before
+       FROM payments p
+       JOIN users u ON u.id = p.user_id
+       JOIN whatsapp_sessions ws ON ws.mobile = u.mobile
+       LEFT JOIN vehicles v ON v.id = (p.raw->>'vehicle_id')::bigint
+      WHERE p.status = 'created' AND p.amount_paise > 0 AND p.created_at > now() - interval '48 hours'
+        AND ws.wa_opt_out_at IS NULL
+        AND ws.last_inbound_at > now() - interval '24 hours'
+        AND NOT EXISTS (SELECT 1 FROM payments q WHERE q.user_id = u.id AND q.status = 'paid' AND q.paid_at > p.created_at)
+        AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.kind = 'mobile' AND b.value = u.mobile AND b.released_at IS NULL)
+      ORDER BY u.id, p.created_at DESC`);
+  return {
+    leads: rows.sort((a, b) => new Date(b.checkout_at) - new Date(a.checkout_at))
+      .map((r) => ({ ...r, user_id: String(r.user_id), payment_id: String(r.payment_id), last_message: String(r.last_message || '').slice(0, 160) })),
+  };
+}
+
+/* ─────────────────────────────────────────────────────── ad return ── */
+
+/*
+ * WHAT EACH AD BROUGHT (user, 2026-10-03). People are credited to the Meta ad
+ * they first wrote from (whatsapp_sessions.attribution: the ad's id, else its
+ * headline). For each ad: people, people who checked a vehicle, people who
+ * paid, paid reports and revenue — against the spend entered for it from Ads
+ * Manager (ad_campaign_spend), giving cost per paying customer and revenue per
+ * rupee spent. People who did not come from an ad make one row of their own.
+ */
+async function adReturn({ days } = {}) {
+  const n = [7, 30, 90, 365].includes(Number(days)) ? Number(days) : 30;
+  const { rows } = await db.query(
+    `WITH p AS (
+       SELECT u.id, u.mobile,
+              CASE WHEN ws.attribution->>'channel' = 'whatsapp_ad'
+                   THEN coalesce(nullif(ws.attribution->>'source_id', ''), nullif(ws.attribution->>'headline', ''), 'unknown ad') END AS ad_key,
+              ws.attribution->>'headline' AS headline
+         FROM users u LEFT JOIN whatsapp_sessions ws ON ws.mobile = u.mobile
+        WHERE u.created_at > now() - ($1 || ' days')::interval AND NOT u.is_internal)
+     SELECT coalesce(p.ad_key, '') AS ad_key, max(p.headline) AS headline, count(*)::int AS people,
+            count(*) FILTER (WHERE EXISTS (SELECT 1 FROM event_log e WHERE e.user_id = p.id AND e.kind IN ('vehicle_check', 'vehicle_check_repeat')))::int AS checked,
+            count(*) FILTER (WHERE EXISTS (SELECT 1 FROM payments x WHERE x.user_id = p.id AND x.status = 'paid' AND x.amount_paise > 0))::int AS payers,
+            coalesce(sum((SELECT count(*) FROM vehicle_reports r JOIN payments x ON x.id = r.payment_id
+                           WHERE x.user_id = p.id AND x.status = 'paid' AND x.amount_paise > 0)), 0)::int AS reports,
+            coalesce(sum((SELECT sum(amount_paise) FROM payments x WHERE x.user_id = p.id AND x.status = 'paid' AND x.amount_paise > 0)), 0)::bigint AS revenue
+       FROM p GROUP BY 1 ORDER BY 3 DESC`, [String(n)]);
+  const spend = Object.fromEntries((await db.query(`SELECT * FROM ad_campaign_spend`)).rows.map((s) => [s.ad_key, s]));
+  const ads = rows.map((r) => {
+    const s = r.ad_key ? spend[r.ad_key] : null;
+    const cost = s ? Number(s.amount_paise) : null;
+    const revenue = Number(r.revenue);
+    return {
+      ad_key: r.ad_key || null, label: r.ad_key ? (s?.label || r.headline || r.ad_key) : 'Not from an ad',
+      headline: r.headline, people: r.people, checked: r.checked, payers: r.payers, reports: r.reports, revenue,
+      spend_paise: cost,
+      cost_per_payer: cost != null && r.payers ? Math.round(cost / r.payers) : null,
+      revenue_per_rupee: cost ? Math.round((revenue / cost) * 100) / 100 : null,
+      conversion: r.people ? Math.round((r.payers / r.people) * 1000) / 10 : null,
+    };
+  });
+  return { days: n, ads, note: 'Spend is what you enter from Ads Manager for each ad (all time). People are those who joined in the period, credited to the ad they first wrote from.' };
+}
+
+async function saveAdReturnSpend({ ad_key, label, rupees, note }, adminId) {
+  const key = String(ad_key || '').trim();
+  if (!key) throw Object.assign(new Error('Which ad?'), { status: 400 });
+  const paise = Math.round(Number(rupees) * 100);
+  if (!Number.isFinite(paise) || paise < 0) throw Object.assign(new Error('Enter the amount in rupees.'), { status: 400 });
+  await db.query(
+    `INSERT INTO ad_campaign_spend (ad_key, label, amount_paise, note, modified_by) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (ad_key) DO UPDATE SET label = coalesce(EXCLUDED.label, ad_campaign_spend.label), amount_paise = EXCLUDED.amount_paise,
+            note = EXCLUDED.note, modified_by = EXCLUDED.modified_by, modified_at = now()`,
+    [key, label ? String(label).slice(0, 120) : null, paise, note ? String(note).slice(0, 300) : null, adminId || null]);
+  return { ok: true };
+}
+
 /* ─────────────────────────────────────────────────────────────── reply ── */
 
 async function reply(mobile, text, adminId) {
@@ -204,4 +292,4 @@ async function waitlist() {
   return { rows: rows.map((r) => ({ ...r, id: String(r.id), masked: `…${String(r.mobile).slice(-4)}` })) };
 }
 
-module.exports = { adSpend, saveAdSpend, removeAdSpend, spendBetween, whyNotPaid, waLimit, reply, broadcastCosts, waitlist };
+module.exports = { adSpend, saveAdSpend, removeAdSpend, spendBetween, whyNotPaid, waLimit, reply, broadcastCosts, waitlist, hotLeads, adReturn, saveAdReturnSpend };
