@@ -195,8 +195,38 @@ async function customers({ days }) {
 }
 
 /** The people behind a source or a STOP reason. */
-async function customersOf({ days, source, reason }) {
+async function customersOf({ days, source, reason, day }) {
   const n = span(days);
+  /*
+   * WHO SAID STOP, AND WHO CAME BACK, on one day (user, 2026-10-03): each with
+   * name, number, when, the reason given, how they came back (START or Undo),
+   * whether they paid before, and whether they are stopped now.
+   */
+  if (isDay(day)) {
+    const { rows } = await db.query(
+      `SELECT e.detail->>'step' AS step, e.detail->>'mobile' AS mobile, e.created_at AS at,
+              (e.detail->>'undo') = 'true' AS undo,
+              coalesce(u.display_name, u.wa_profile_name) AS name,
+              ws.wa_opt_out_at IS NOT NULL AS stopped_now,
+              (SELECT r.detail->>'reason' FROM event_log r WHERE r.kind = 'funnel' AND r.detail->>'step' = 'opt_out_reason'
+                 AND r.detail->>'mobile' = e.detail->>'mobile' AND r.created_at >= e.created_at - interval '1 minute'
+               ORDER BY r.id LIMIT 1) AS reason,
+              (SELECT r.detail->>'said' FROM event_log r WHERE r.kind = 'funnel' AND r.detail->>'step' = 'opt_out_reason'
+                 AND r.detail->>'mobile' = e.detail->>'mobile' AND r.created_at >= e.created_at - interval '1 minute'
+               ORDER BY r.id LIMIT 1) AS said,
+              (SELECT count(*)::int FROM payments p WHERE p.user_id = u.id AND ${PAID}) AS paid
+         FROM event_log e
+         LEFT JOIN users u ON u.mobile = e.detail->>'mobile'
+         LEFT JOIN whatsapp_sessions ws ON ws.mobile = e.detail->>'mobile'
+        WHERE e.kind = 'funnel' AND e.detail->>'step' IN ('opt_out', 'opt_in') AND ${dayOf('e.created_at')} = $1::date
+        ORDER BY e.created_at`, [day]);
+    const person = (r) => ({ ...r, masked: mask(r.mobile) });
+    return {
+      day,
+      stopped: rows.filter((r) => r.step === 'opt_out').map(person),
+      came_back: rows.filter((r) => r.step === 'opt_in').map(person),
+    };
+  }
   if (reason) {
     const { rows } = await db.query(
       `SELECT e.detail->>'mobile' AS mobile, e.detail->>'said' AS said, e.created_at AS at,
