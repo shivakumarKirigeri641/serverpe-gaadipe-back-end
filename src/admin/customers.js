@@ -229,9 +229,14 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id, b
               WHERE p.status = 'paid' AND p.amount_paise > 0
                 AND r.created_at >= b.d - interval '1 day' AND r.created_at < b.d)::int AS reports_yesterday_full,
-            (SELECT count(*) FROM event_log WHERE kind = 'vehicle_check')::int AS checks_total,
-            (SELECT count(*) FROM event_log, b WHERE kind = 'vehicle_check' AND created_at >= b.d)::int AS checks_today,
-            (SELECT count(*) FROM event_log, b WHERE kind = 'vehicle_check'
+            -- Every check, a repeat included (vehicle_check_repeat, 2026-10-03):
+            -- distinct = different vehicles; repeated = the rest.
+            (SELECT count(*) FROM event_log WHERE kind IN ('vehicle_check', 'vehicle_check_repeat'))::int AS checks_total,
+            (SELECT count(DISTINCT detail->>'reg_no') FROM event_log WHERE kind IN ('vehicle_check', 'vehicle_check_repeat'))::int AS checks_distinct,
+            (SELECT count(*) FROM event_log, b WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND created_at >= b.d)::int AS checks_today,
+            (SELECT count(DISTINCT detail->>'reg_no') FROM event_log, b
+              WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND created_at >= b.d)::int AS checks_today_distinct,
+            (SELECT count(*) FROM event_log, b WHERE kind IN ('vehicle_check', 'vehicle_check_repeat')
                 AND created_at >= b.d - interval '1 day' AND created_at < b.d)::int AS checks_yesterday_full`);
   const where = await placesFor(rows);
   // The STOP reasons at a glance, for the "Said STOP" list (user, 2026-10-02):

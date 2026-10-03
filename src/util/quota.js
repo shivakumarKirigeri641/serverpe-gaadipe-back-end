@@ -112,12 +112,16 @@ async function check(userId, regNo) {
   return { allowed: true, tier, used: today.n, limit: dailyLimit, repeat: false, enforced };
 }
 
-/** Record a check that actually happened. Repeats inside the window are not. */
+/**
+ * Record a check that actually happened. A repeat inside the window is kept
+ * under its own kind, vehicle_check_repeat (user, 2026-10-03: "count every
+ * check, distinct or repeated"), so it never counts towards a limit — every
+ * limit above reads vehicle_check only.
+ */
 async function record(userId, regNo, { repeat = false, found = true } = {}) {
-  if (repeat) return;
   await db.query(
-    `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'vehicle_check', $2)`,
-    [userId, JSON.stringify({ reg_no: regNo, found })]);
+    `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, $2, $3)`,
+    [userId, repeat ? 'vehicle_check_repeat' : 'vehicle_check', JSON.stringify({ reg_no: regNo, found })]);
 }
 
 module.exports = { check, record, tierOf };
