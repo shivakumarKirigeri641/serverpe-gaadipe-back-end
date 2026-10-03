@@ -54,7 +54,14 @@ async function overview({ days }) {
             coalesce(r.n, 0)::int AS reports, coalesce(m.paise, 0)::bigint AS revenue_paise
        FROM days LEFT JOIN u USING (d) LEFT JOIN c USING (d) LEFT JOIN r USING (d) LEFT JOIN m USING (d)
       ORDER BY days.d`, [n]);
-  return { days: n, series: rows.map((x) => ({ ...x, d: iso(x.d), revenue_paise: Number(x.revenue_paise) })) };
+  // The check speedometer (2026-10-03): checks in the last hour against the
+  // busiest single hour of the last 90 days.
+  const pace = await db.one(
+    `SELECT (SELECT count(*) FROM event_log WHERE ${CHECKS} AND created_at > now() - interval '1 hour')::int AS last_hour,
+            (SELECT coalesce(max(n), 0) FROM (SELECT count(*) AS n FROM event_log
+               WHERE ${CHECKS} AND created_at > now() - interval '90 days'
+               GROUP BY date_trunc('hour', created_at)) h)::int AS best_hour`);
+  return { days: n, pace, series: rows.map((x) => ({ ...x, d: iso(x.d), revenue_paise: Number(x.revenue_paise) })) };
 }
 
 /** One day, hour by hour — the drill-down under a day on the overview. */
@@ -344,8 +351,10 @@ async function services({ days }) {
       byDay[d].backup_paise += r.backup_paise;
     }
   }
+  // Today's RC backup calls against the daily limit — the "fuel" gauge.
+  const backup = await require('../vehicle/rcBackup').today().catch(() => null);
   return {
-    days: n, providers: totals.rows, series: Object.values(byDay),
+    days: n, providers: totals.rows, series: Object.values(byDay), backup_today: backup,
     note: 'Calls recorded with each answered lookup. A lookup that failed on every source is not recorded here — the Services strip shows those live.',
   };
 }
