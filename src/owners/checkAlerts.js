@@ -39,6 +39,18 @@ const SETTINGS = {
   owner_check_alert_template_language: 'en',
 };
 
+/*
+ * The same three buttons on the free message and on the approved template
+ * (whose quick replies arrive as their text), so one handler serves both:
+ * flow.js → checkAlerts.button().
+ */
+const ALERT_BUTTONS = [
+  { id: 'calert_hide', title: 'Hide my vehicle' },
+  { id: 'calert_ok', title: "That's fine" },
+  { id: 'calert_stop', title: 'Stop these alerts' },
+];
+const BUTTON_BY_TEXT = { 'hide my vehicle': 'calert_hide', "that's fine": 'calert_ok', 'thats fine': 'calert_ok', 'stop these alerts': 'calert_stop' };
+
 const hash = (m) => crypto.createHash('sha256').update(`gp-checker|${String(m).slice(-10)}`).digest('hex').slice(0, 32);
 const when = (d) => new Date(d).toLocaleString('en-IN', {
   timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit',
@@ -50,7 +62,7 @@ async function ownersToTell(regNo, checker) {
   const needReport = await settings.bool('owner_check_alert_need_report', true);
   const { rows } = await db.query(
     `SELECT DISTINCT c.mobile FROM vehicle_owner_claims c
-      WHERE c.reg_no = $1 AND c.status = 'verified' AND c.mobile IS DISTINCT FROM $2
+      WHERE c.reg_no = $1 AND c.status = 'verified' AND c.mobile IS DISTINCT FROM $2 AND c.check_alerts_off_at IS NULL
         AND ($3 = false OR EXISTS (
               SELECT 1 FROM vehicle_reports r JOIN users u ON u.id = r.user_id
                WHERE u.mobile = c.mobile AND r.reg_no = c.reg_no AND r.valid_until > now()))`,
@@ -106,7 +118,7 @@ async function tell(a) {
       + `by a number ending *••••${a.checker_last4}*.\n\n`
       + 'They see the vehicle\'s public details only — never your name, number or address.\n\n'
       + 'Expecting it (a buyer, a mechanic, the insurer)? Nothing to do. If not, you can hide your vehicle from other people\'s checks.',
-      [{ id: 'owner_hide', title: 'Hide from others' }, { id: 'check_another', title: 'That is fine' }]);
+      ALERT_BUTTONS);
     if (out.ok) {
       await db.query(`UPDATE owner_check_alerts SET status = 'sent', sent_at = now() WHERE id = $1`, [a.id]);
       await remember(a.owner_mobile, a.reg_no);
@@ -145,7 +157,7 @@ async function deliverPending(mobile) {
   const out = await send.buttons(mobile,
     `🔔 *While you were away, your vehicle${rows.length === 1 ? ' was' : 's were'} checked on GaadiPe*\n\n${lines.join('\n')}\n\n`
     + 'They see public vehicle details only — never your name, number or address.',
-    [{ id: 'owner_hide', title: 'Hide from others' }, { id: 'check_another', title: 'That is fine' }]);
+    ALERT_BUTTONS);
   if (out.ok) {
     await db.query(`UPDATE owner_check_alerts SET status = 'summarised', sent_at = now() WHERE owner_mobile = $1 AND status = 'pending'`, [mobile]);
     await remember(mobile, rows[0].reg_no);
@@ -196,4 +208,52 @@ async function recent(limit = 50) {
   };
 }
 
-module.exports = { noteCheck, checkerNotice, deliverPending, getSettings, saveSettings, recent, _test: { hash } };
+/** The vehicle the owner's latest alert was about (what "Hide my vehicle" hides). */
+async function latestReg(mobile) {
+  const r = await db.one(
+    `SELECT reg_no FROM owner_check_alerts WHERE owner_mobile = $1 AND status <> 'pending' ORDER BY coalesce(sent_at, created_at) DESC LIMIT 1`, [mobile]);
+  return r?.reg_no || null;
+}
+
+/**
+ * A tap on an alert's button — by id (the free message) or by its text (the
+ * template's quick reply) — or "ALERTS ON". Returns true when it was handled.
+ */
+async function button(mobile, { id, text }) {
+  const t = String(text || '').trim().toLowerCase().replace(/[’']/g, "'");
+  if (/^alerts? on$/.test(t)) {
+    if (!await db.one(`SELECT 1 AS x FROM vehicle_owner_claims WHERE mobile = $1 AND status = 'verified' LIMIT 1`, [mobile])) return false;
+    const { rowCount } = await db.query(
+      `UPDATE vehicle_owner_claims SET check_alerts_off_at = NULL WHERE mobile = $1 AND status = 'verified' AND check_alerts_off_at IS NOT NULL`, [mobile]);
+    const send = require('../whatsapp/send');
+    await send.text(mobile, rowCount
+      ? '🔔 Done — you will be told again when someone checks your vehicle on GaadiPe.'
+      : 'Check alerts are already on for your verified vehicles. 🔔');
+    return true;
+  }
+  const which = ['calert_hide', 'calert_ok', 'calert_stop'].includes(id) ? id : BUTTON_BY_TEXT[t];
+  if (!which) return false;
+  const send = require('../whatsapp/send');
+  const reg = await latestReg(mobile);
+  // Typed words from someone who never had an alert are not a tap.
+  if (!reg && !id?.startsWith('calert_')) return false;
+  if (which === 'calert_ok') {
+    await send.text(mobile, '👍 Noted — nothing to do. We will keep telling you when your vehicle is checked.');
+    return true;
+  }
+  if (which === 'calert_stop') {
+    await db.query(`UPDATE vehicle_owner_claims SET check_alerts_off_at = now() WHERE mobile = $1 AND status = 'verified'`, [mobile]);
+    await send.text(mobile, '🔕 Done — you will not be told about checks of your vehicles any more.\n\nTo turn them on again, send *ALERTS ON*.');
+    return true;
+  }
+  // Hide: the vehicle of their latest alert.
+  const done = reg && await require('./verify').setHidden(mobile, reg, true);
+  await send.buttons(mobile, done
+    ? `🙈 Done — *${reg}* is now *hidden*. People checking it on GaadiPe are told the owner keeps it private. You still see it.`
+    : 'I could not find which vehicle to hide. Tap *More* → *I own a vehicle* to see your vehicles.',
+  done ? [{ id: 'owner_show', title: 'Show it again' }, { id: 'check_another', title: 'Check vehicle' }]
+    : [{ id: 'menu', title: 'More' }]);
+  return true;
+}
+
+module.exports = { button, noteCheck, checkerNotice, deliverPending, getSettings, saveSettings, recent, _test: { hash } };

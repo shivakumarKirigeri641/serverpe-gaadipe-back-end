@@ -1423,9 +1423,24 @@ async function handle(session, message, mobile) {
    * admin decided) is told first, with its reward, whatever they wrote.
    * A photo or PDF sent while a claim waits for one is that claim's RC.
    */
-  await ownerPhoto.deliverPending(mobile).catch((e) => console.error('[wa] owner notice for %s: %s', mobile, e.message));
+  const ownerTold = await ownerPhoto.deliverPending(mobile).catch((e) => { console.error('[wa] owner notice for %s: %s', mobile, e.message); return null; });
   // Checks of their vehicle while their chat was shut, as one summary (owners/checkAlerts.js).
   await require('../owners/checkAlerts').deliverPending(mobile).catch((e) => console.error('[wa] check alerts for %s: %s', mobile, e.message));
+  /*
+   * THE TWO OWNER TEMPLATES' BUTTONS (2026-10-04). A template's quick reply
+   * arrives as its text, so both are matched by words as well as by id:
+   *   owner_verification_update  "See details" — the decision itself was just
+   *                              told above (deliverPending); if there was
+   *                              nothing left to tell, show their vehicles.
+   *   vehicle_check_alert        "Hide my vehicle" / "That's fine" /
+   *                              "Stop these alerts" (and typed ALERTS ON).
+   */
+  if (await require('../owners/checkAlerts').button(mobile, { id: intent.id, text: intent.text })) return;
+  if (!Object.values(BTN).includes(intent.id) && /^see details$/i.test(intent.text || '')
+      && await db.one(`SELECT 1 AS x FROM vehicle_owner_claims WHERE mobile = $1 AND method = 'rc_photo' LIMIT 1`, [mobile])) {
+    if (!ownerTold?.sent) await askOwnedVehicle(mobile);
+    return;
+  }
   if ((message.type === 'image' || message.type === 'document') && await ownerPhoto.openClaim(mobile)) {
     await receiveRcPhoto(mobile, message);
     return;
