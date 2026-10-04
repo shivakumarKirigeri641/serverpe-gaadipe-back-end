@@ -40,9 +40,10 @@ function renderInvoice(inv, business, one) {
 }
 
 /** A vehicle report PDF from its row: the snapshot, the requester and the consent. */
-function renderReport(report, business = {}) {
+function renderReport(report, business = {}, { adminView = false } = {}) {
   return buildVehicleReport({
     report,
+    adminView,
     business,
     data: report.snapshot,
     consent: report.consent || null,

@@ -1149,6 +1149,23 @@ const sendPdf = (table, column) => safe(async (req, res) => {
 });
 
 router.get('/reports/:id/file', sendPdf('vehicle_reports', 'report_number'));
+/* ADMIN VIEW of a report (user, 2026-10-04): every field as stored, without
+   the report's masking, rendered in memory for this request only — never
+   written to disk, never the customer's copy — and audited. */
+router.get('/reports/:id/admin-view', needs('vehicles.view_sensitive'), safe(async (req, res) => {
+  const row = await db.one(`SELECT * FROM vehicle_reports WHERE id = $1`, [req.params.id]);
+  if (!row) return res.status(404).json({ error: 'not_found', message: 'No such document.' });
+  const business = await db.one(
+    `SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
+  const pdf = await require('../pay/rebuild').renderReport(row, business, { adminView: true });
+  await auth.audit({ adminId: req.admin.id, action: 'view_report_admin_copy', ip: ipOf(req),
+                     detail: { number: row.report_number, reg_no: row.reg_no } });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition',
+    `${req.query.download === '1' ? 'attachment' : 'inline'}; filename="${row.report_number}-ADMIN.pdf"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.end(pdf);
+}));
 router.get('/invoices/:id/file', needs('money'), sendPdf('invoices', 'invoice_number'));
 
 /* -------------------------------------------------------------- settings */

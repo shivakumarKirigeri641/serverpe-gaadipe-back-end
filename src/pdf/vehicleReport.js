@@ -71,7 +71,14 @@ const clip = (s, n) => {
 
 const { consentBlock, consentLine } = require('./consent');
 
-const buildVehicleReport = ({ report, business = {}, data, requester = {}, consent = null }) =>
+/*
+ * ADMIN VIEW (user, 2026-10-04): the admin may open any report "all open" —
+ * every field as GaadiPe stored it, without the report's own masking. It is
+ * rendered on demand for the admin panel only, never saved, never sent, and
+ * says ADMIN COPY on every page. What the source itself masked (ULIP stars
+ * owner names and the chassis tail) stays masked: GaadiPe never had it.
+ */
+const buildVehicleReport = ({ report, business = {}, data, requester = {}, consent = null, adminView = false }) =>
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: T.M, bufferPages: true });
     const chunks = [];
@@ -82,6 +89,11 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     T.init(doc);
     const W = doc.page.width - T.M * 2;
     const rc = data.rc || {};
+    const open = (v) => (v === null || v === undefined || v === '' ? null : String(v));
+    const mName = adminView ? open : maskName;
+    const mFirst = adminView ? open : maskFirst;
+    const mNumber = adminView ? open : maskNumber;
+    const masked = adminView ? '' : ' (masked)';
     const generatedAt = T.fmtDateTime(report.created_at || new Date());
 
     let y = T.header(doc, {
@@ -99,6 +111,13 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
      * report with invented contents, passed on without its context, is exactly
      * the thing that must not be mistakable for a real record.
      */
+    if (adminView) {
+      doc.rect(T.M, y, W, 22).fill('#fdecec');
+      doc.fillColor('#a61b1b').font(doc._F.bold).fontSize(9)
+         .text('ADMIN COPY — all details as stored, unmasked by GaadiPe. Not for the customer; '
+               + 'do not send or share.', T.M + 10, y + 6.5, { width: W - 20 });
+      y += 32;
+    }
     if (report.sample) {
       doc.rect(T.M, y, W, 22).fill('#fff6e6');
       doc.fillColor('#8f5600').font(doc._F.bold).fontSize(9)
@@ -129,9 +148,10 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     y = T.sectionTitle(doc, 'Ownership', y, T.BRAND.brand);
     // Personal details masked, as on Parivahan (user, 2026-10-01).
     y = T.kvCard(doc, [
-      ['Owner name (masked)', maskName(rc.owner_name) || '—'],
-      ['Chassis no. (masked)', maskFirst(rc.chassis) || '—'],
-      ['Engine no. (masked)', maskFirst(rc.engine) || '—'],
+      ['Owner name' + masked, mName(rc.owner_name) || '—'],
+      ['Chassis no.' + masked, mFirst(rc.chassis) || '—'],
+      ['Engine no.' + masked, mFirst(rc.engine) || '—'],
+      ...(adminView ? [['Address', open(rc.address) || '—']] : []),
       ['Owner type', titleCase(rc.owner_type) || '—'],
       ['Ownership serial', rc.owner_serial ? `${rc.owner_serial}` : '—'],
       ['Financer', titleCase(rc.financer) || 'Not financed'],
@@ -156,9 +176,9 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
         fmt(d.date),
         d.days < 0 ? `Expired ${human(d.days)}` : `Valid, expires ${human(d.days)}`,
         d.label === 'Insurance'
-          ? [titleCase(rc.insurance_company), maskNumber(rc.insurance_policy)].filter(Boolean).join(' · ')
-          : d.label === 'PUC' ? (maskNumber(rc.pucc_number) || '—')
-          : d.label === 'Permit' ? [maskNumber(rc.permit_number), rc.permit_type].filter(Boolean).join(' · ')
+          ? [titleCase(rc.insurance_company), mNumber(rc.insurance_policy)].filter(Boolean).join(' · ')
+          : d.label === 'PUC' ? (mNumber(rc.pucc_number) || '—')
+          : d.label === 'Permit' ? [mNumber(rc.permit_number), rc.permit_type].filter(Boolean).join(' · ')
           : '—',
       ]), y);
 
@@ -333,7 +353,8 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
        tag in the file's own properties that ties it to the account even if the
        visible lines are cropped. */
     const digits = String(requester.mobile || '').replace(/\D/g, '');
-    const mark = report.sample ? 'SAMPLE · not issued to anyone'
+    const mark = adminView ? `ADMIN COPY · not for the customer  ·  ${report.report_number || ''}`
+      : report.sample ? 'SAMPLE · not issued to anyone'
       : [`Issued to ${requester.name || 'customer'}`, digits ? `••••${digits.slice(-4)}` : null,
          report.report_number, T.fmtDate(report.created_at || new Date())].filter(Boolean).join('  ·  ');
     doc.info.Subject = `GaadiPe vehicle report ${report.report_number || ''}`.trim();
@@ -343,7 +364,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     const range = doc.bufferedPageRange();
     for (let i = 0; i < range.count; i++) {
       doc.switchToPage(range.start + i);
-      T.watermark(doc);
+      T.watermark(doc, adminView ? 'ADMIN COPY' : undefined);
       T.personalMark(doc, mark);
       T.pageFurniture(doc, {
         page: i + 1, total: range.count, docNumber: report.report_number,
