@@ -126,6 +126,34 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       y += 32;
     }
 
+    /*
+     * THE OWNER VERIFIED SEAL (user, 2026-10-04): issued to the vehicle's
+     * verified owner — proved from their RC and checked by GaadiPe
+     * (owners/photo.js). A rosette with a tick, and what it means in words.
+     */
+    if (report.owner_verified_at && !report.sample) {
+      const h = 64;
+      doc.roundedRect(T.M, y, W, h, 10).fillAndStroke('#F1FAF5', '#1A7F37');
+      const cx = T.M + 38, cy = y + h / 2;
+      doc.save();
+      for (let i = 0; i < 16; i += 1) {               // the rosette's points
+        const a = (Math.PI * 2 * i) / 16;
+        doc.circle(cx + Math.cos(a) * 21, cy + Math.sin(a) * 21, 5).fill('#1A7F37');
+      }
+      doc.circle(cx, cy, 22).fill('#1A7F37');
+      doc.circle(cx, cy, 17).lineWidth(1.2).stroke('#FFFFFF');
+      doc.restore();
+      T.iconCheck(doc, cx - 12, cy - 12, 24, '#FFFFFF');
+      const tx = T.M + 78;
+      doc.fillColor('#1A7F37').font(doc._F.bold).fontSize(13)
+         .text('OWNER VERIFIED', tx, y + 12, { width: W - 90, characterSpacing: 1.2 });
+      doc.fillColor(T.BRAND.body).font(doc._F.regular).fontSize(8.6)
+         .text(`This report was issued to the verified owner of ${report.reg_no}. Ownership was proved from the `
+               + `registration certificate and checked by GaadiPe on ${T.fmtDate(report.owner_verified_at)}.`,
+         tx, y + 30, { width: W - 90 });
+      y += h + 12;
+    }
+
     /* ── the vehicle ── */
     y = T.sectionTitle(doc, 'Vehicle', y, T.BRAND.brand);
     y = T.kvCard(doc, [

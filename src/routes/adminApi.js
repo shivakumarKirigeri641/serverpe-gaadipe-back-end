@@ -509,6 +509,7 @@ router.get('/badges', safe(async (_req, res) => res.json({
   hot_leads: (await require('../admin/opsExtras').hotLeads().catch(() => ({ counts: {} }))).counts?.checkout || 0,
   support_emails: (await db.one(`SELECT count(*)::int AS n FROM support_emails WHERE status = 'new'`).catch(() => ({ n: 0 }))).n,
   data_requests: (await db.one(`SELECT count(*)::int AS n FROM data_requests WHERE status = 'pending'`).catch(() => ({ n: 0 }))).n,
+  owner_photos: (await db.one(`SELECT count(*)::int AS n FROM vehicle_owner_claims WHERE status = 'review'`).catch(() => ({ n: 0 }))).n,
 })));
 
 /* ── the admin additions of 2026-10-01 (src/admin/opsExtras.js) ── */
@@ -1079,6 +1080,31 @@ router.post('/owner-claims/:id/:action(approve|reject|revoke|unlock)', needs('bl
   if (!out.ok) return res.status(400).json({ error: 'bad_action', message: out.message });
   res.json(out);
 }));
+
+/* ------------------- owner verification by RC photo (src/owners/photo.js) */
+
+router.get('/owner-photos', safe(async (req, res) => res.json(
+  await require('../owners/photo').list({ view: req.query.view === 'decided' ? 'decided' : 'review' }))));
+// The photo itself: a plain file (app.js fileRoute), never cached, and logged.
+router.get('/owner-photos/:id/photo', needs('block'), safe(async (req, res) => {
+  const out = await require('../owners/photo').readPhoto(req.params.id);
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'The photo is gone — it is deleted once decided.' });
+  await auth.audit({ adminId: req.admin.id, action: 'view_rc_photo', ip: ipOf(req), detail: { claim: String(req.params.id) } });
+  res.setHeader('Content-Type', out.mime);
+  res.setHeader('Content-Disposition', `inline; filename="rc-${req.params.id}.${out.mime === 'application/pdf' ? 'pdf' : 'jpg'}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.end(out.buf);
+}));
+router.post('/owner-photos/:id/:action(approve|reject)', needs('block'), safe(async (req, res) => {
+  const out = await require('../owners/photo').decide({
+    id: req.params.id, action: req.params.action, reason: req.body?.reason, note: req.body?.note,
+    adminId: req.admin.id, ip: ipOf(req),
+  });
+  if (!out.ok) return res.status(400).json({ error: 'bad_action', message: out.message });
+  res.json(out);
+}));
+router.put('/owner-photos/settings', needs('settings'), safe(async (req, res) =>
+  res.json(await require('../owners/photo').saveSettings(req.body?.settings || {}, req.admin.id))));
 
 /* ----------------------------------------------------- reports & invoices */
 

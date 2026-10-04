@@ -51,6 +51,7 @@ const quota = require('../util/quota');
 const razorpay = require('../pay/razorpay');
 const billing = require('../pay/billing');
 const owners = require('../owners/verify');
+const ownerPhoto = require('../owners/photo');
 const reports = require('../pay/report');
 const refer = require('../referrals/gaadipe');
 
@@ -822,6 +823,7 @@ async function askOwnedVehicle(mobile, lead = null) {
     await doors(mobile, 'Owner verification is not open yet. You can still check any vehicle.');
     return;
   }
+  if (await ownerPhoto.usePhotos()) { await askOwnedVehiclePhoto(mobile, lead); return; }
   const mine = await owners.mine(mobile);
   const last = await pendingReg(mobile);
   await setState(mobile, 'owner_verify_reg', 'asked which vehicle');
@@ -838,8 +840,104 @@ async function askOwnedVehicle(mobile, lead = null) {
   }
 }
 
+/**
+ * The invitation, RC-photo version (user, 2026-10-04): what they get, how
+ * little it takes, and what happens to the photo — before anything is asked.
+ * A customer may own several vehicles: each is verified on its own.
+ */
+async function askOwnedVehiclePhoto(mobile, lead = null) {
+  const user = await db.one(`SELECT id FROM users WHERE mobile = $1`, [mobile]).catch(() => null);
+  const { verified, review } = await ownerPhoto.mine(mobile);
+  const offer = await ownerPhoto.offerLine({ userId: user?.id, mobile });
+  const last = await pendingReg(mobile);
+  await setState(mobile, 'owner_verify_reg', 'asked which vehicle (photo)');
+  const body = (lead ? `${lead}\n\n` : '')
+    + '🔐 *Prove you own your vehicle — and get rewarded*\n\n'
+    + (offer ? `${offer}\n` : '')
+    + '🏅 *Owner verified* seal on your vehicle report\n'
+    + '🛡️ *Hide your vehicle* from other people\'s checks\n'
+    + '🤝 *Coming soon:* people can reach you about your vehicle — without ever seeing your number\n\n'
+    + '⏱️ *Takes 1 minute:* send the vehicle number, then a photo of its RC.\n'
+    + '🔒 The photo is seen only by GaadiPe and *deleted as soon as it is checked*.\n\n'
+    + (verified.length ? `✅ Verified: ${verified.map((m) => `*${m.reg_no}*${m.hidden_at ? ' (hidden)' : ''}`).join(', ')}\n` : '')
+    + (review.length ? `⏳ Being checked: ${review.map((m) => `*${m.reg_no}*`).join(', ')}\n` : '')
+    + (verified.length || review.length ? 'Own another vehicle? Verify it too.\n\n' : '')
+    + 'Send the *vehicle number*, like *KA01XX1234*.';
+  const known = new Set([...verified, ...review].map((m) => m.reg_no));
+  if (last && !known.has(last)) {
+    await send.buttons(mobile, body, [{ id: `ownv:${last}`, title: `It is ${last}`.slice(0, 20) }]);
+  } else {
+    await send.text(mobile, body);
+  }
+}
+
+/** The vehicle is chosen: ask for the RC photo, with the promise around it. */
+async function startPhotoClaim(mobile, regNo, message) {
+  const user = await store.upsertUser(mobile, { name: message?.profile?.name, waId: message?.from });
+  const r = await ownerPhoto.begin({ userId: user.id, mobile, regNo });
+  await db.query(
+    `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+    [mobile, JSON.stringify({ ov_reg: regNo, ov_claim: r.claimId || null })]);
+  if (!r.ok) {
+    await setState(mobile, 'owner_menu', `owner verification: ${r.reason}`);
+    if (r.reason === 'already') {
+      const hidden = (await owners.mine(mobile)).find((m) => m.reg_no === regNo)?.hidden_at;
+      await send.buttons(mobile,
+        `✅ *${regNo}* is already *Owner verified* on this number, and it is ${hidden ? '*hidden* from' : '*visible* in'} other people's checks.`,
+        [{ id: hidden ? BTN.OWNER_SHOW : BTN.OWNER_HIDE, title: hidden ? 'Show it again' : 'Hide from others' },
+          { id: BTN.CHECK_ANOTHER, title: 'Check vehicle' }]);
+      return;
+    }
+    await doors(mobile, {
+      off: 'Owner verification is not open yet. You can still check any vehicle.',
+      in_review: `⏳ Your RC photo for *${regNo}* is already being checked. You will get a message here as soon as it is done.`,
+      too_many: 'You have sent several RC photos today. Please try again tomorrow. 🙏',
+    }[r.reason] || 'Sorry, that could not be started. Please try again later.');
+    return;
+  }
+  await setState(mobile, 'owner_verify_photo', 'asked for the RC photo');
+  await funnel(mobile, 'owner_verify_started', { reg_no: regNo, method: 'rc_photo' });
+  const reward = await ownerPhoto.rewardFor({ userId: user.id, mobile, regNo });
+  const days = await settings.num('owner_verify_extend_days', 28);
+  await send.text(mobile,
+    `🔐 *Verify ${regNo}*\n\n`
+    + '📸 Send a clear photo of your *RC* here in this chat — the card, the paper RC, or the *DigiLocker / mParivahan RC* (PDF is fine).\n\n'
+    + '*We only need to see:*\n'
+    + '✔️ Vehicle number\n✔️ Owner name\n✔️ Chassis number\n'
+    + '_You may cover your address, photo and date of birth._\n\n'
+    + '🛡️ *Our promise to you*\n'
+    + '• Only GaadiPe looks at it — it is *never shared or shown* to anyone\n'
+    + '• It is kept *locked (encrypted)* while we check it\n'
+    + '• It is *deleted as soon as we decide* — approved or not. We keep only the result: ✅ or ❌\n'
+    + '• Nothing from your RC is saved\n\n'
+    + '⏱️ We check it within a few hours and message you right here.'
+    + ({ report: '\n\n🎁 Once verified, your *full report comes FREE*.',
+      extend: `\n\n🎁 Once verified, your running report gets *+${days} days, free*.` }[reward] || ''));
+}
+
+/** The RC photo arrived. */
+async function receiveRcPhoto(mobile, message) {
+  const r = await ownerPhoto.receive(mobile, message);
+  if (r.ok) {
+    await setState(mobile, 'owner_menu', 'RC photo received');
+    await funnel(mobile, 'owner_photo_sent', { reg_no: r.regNo });
+    await send.text(mobile,
+      '📸 *Got it — thank you!* 🙏\n\n'
+      + `Your RC for *${r.regNo}* is now *being checked*. You will get a message here as soon as it is done — usually within a few hours.\n\n`
+      + '🔒 It is kept locked, seen only by GaadiPe, and *deleted as soon as it is checked*.\n\n'
+      + 'Meanwhile, you can send any vehicle number to check it.');
+    return;
+  }
+  await send.text(mobile, {
+    not_a_photo: 'Please send a *photo* (or the RC *PDF*) of your RC — other files cannot be checked.',
+    too_big: 'That file is too large. Please send a photo of the RC (under 10 MB).',
+    failed: 'Sorry, that photo did not come through. Please send it again. 🙏',
+  }[r.reason] || 'Please send a photo of your RC.');
+}
+
 async function startOwnerClaim(mobile, regNo, message) {
   if (!await owners.enabled()) { await askOwnedVehicle(mobile); return; }
+  if (await ownerPhoto.usePhotos()) { await startPhotoClaim(mobile, regNo, message); return; }
   const user = await store.upsertUser(mobile, { name: message?.profile?.name, waId: message?.from });
   let r = await owners.begin({ userId: user.id, mobile, regNo });
   if (!r.ok && r.reason === 'no_record') {
@@ -1314,6 +1412,18 @@ async function handle(session, message, mobile) {
       await send.text(mobile, 'Welcome back 👋 — GaadiPe will message you again. Reply *STOP* any time.');
     }
     // …and START is also a greeting, so carry on to the beginning below.
+  }
+
+  /*
+   * OWNER VERIFICATION BY RC PHOTO (user, 2026-10-04, owners/photo.js).
+   * A decision the customer has not heard yet (their window was shut when the
+   * admin decided) is told first, with its reward, whatever they wrote.
+   * A photo or PDF sent while a claim waits for one is that claim's RC.
+   */
+  await ownerPhoto.deliverPending(mobile).catch((e) => console.error('[wa] owner notice for %s: %s', mobile, e.message));
+  if ((message.type === 'image' || message.type === 'document') && await ownerPhoto.openClaim(mobile)) {
+    await receiveRcPhoto(mobile, message);
+    return;
   }
 
   /*
@@ -2032,6 +2142,23 @@ async function handle(session, message, mobile) {
       return;
     }
 
+    // Waiting for the RC photo (photos are taken above, before the states).
+    case 'owner_verify_photo': {
+      if (/^(cancel|no|later|not now)\s*$/i.test(intent.text)) {
+        await db.query(
+          `UPDATE vehicle_owner_claims SET status = 'failed', counted = false, note = 'cancelled', modified_at = now()
+            WHERE mobile = $1 AND status = 'pending'`, [mobile]);
+        await doors(mobile, 'No problem — you can verify any time from *More* → *I own a vehicle*.');
+        return;
+      }
+      const parsed = plate.parse(intent.text || '');
+      if (parsed.ok) { await deliverReport(mobile, parsed.regNo, message); return; }
+      const ctx = await sessionContext(mobile);
+      await send.text(mobile, `📸 Please send a *photo of the RC* for *${ctx.ov_reg || 'your vehicle'}* here — tap 📎 or the camera. `
+        + 'Send *cancel* to stop.\n\n🔒 Deleted as soon as it is checked.');
+      return;
+    }
+
     case 'owner_verify_chassis': {
       const ctx = await sessionContext(mobile);
       const r = ctx.ov_claim ? await owners.answerChassis(ctx.ov_claim, intent.text) : { ok: false };
@@ -2103,4 +2230,4 @@ async function handle(session, message, mobile) {
 /** The free check for a number on the waiting list, now the records are back (jobs/waitlist.js). */
 const checkFromWaitlist = (mobile, regNo) => openVehicle(mobile, regNo, { type: 'system' }, 'waitlist: records service back');
 
-module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN };
+module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN, _sendValidReport: (m, r) => sendValidReport(m, r) };

@@ -33,7 +33,7 @@ const FLAGS = {
   rc_backup: { key: 'flag_rc_backup', default: false, label: 'RC backup (paid)',
     about: 'When ULIP’s VAHAN fails, the RC is fetched from the paid backup provider instead (₹3 a call, up to the daily limit in Settings). ULIP is always tried first. Off: a ULIP failure stands and customers go on the waiting list.' },
   owner_verification: { key: 'flag_owner_verification', default: false, label: 'Owner verification',
-    about: 'Customers can prove a vehicle is theirs on WhatsApp (chassis number plus policy or engine number from the RC), get an “Owner verified” badge and hide the vehicle from other people’s checks. Off: the option is not offered; vehicles already hidden stay hidden.' },
+    about: 'Customers can prove a vehicle is theirs on WhatsApp — by sending a photo of the RC that you approve in Verify owners (or, if chosen there, by typing chassis and policy numbers) — get an “Owner verified” badge, the offer set there, and can hide the vehicle from other people’s checks. Off: the option is not offered; vehicles already hidden stay hidden.' },
   maintenance_mode: { key: 'maintenance_mode', default: false, label: 'Maintenance mode', danger: true, inverted: true,
     about: 'On: customers are told GaadiPe is under maintenance on WhatsApp and the website, and no new checkout opens. The admin panel keeps working.' },
 };

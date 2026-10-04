@@ -85,6 +85,10 @@ async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data
     `SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
 
   const device = describeDevice(requester.userAgent);
+  // Issued to the vehicle's verified owner: the report carries the seal (owners/).
+  const owned = requester.mobile ? await db.one(
+    `SELECT verified_at FROM vehicle_owner_claims WHERE mobile = $1 AND reg_no = $2 AND status = 'verified'
+      ORDER BY verified_at DESC LIMIT 1`, [requester.mobile, regNo]).catch(() => null) : null;
 
   const row = await db.tx(async (c) => {
     const number = await nextNumber(c);
@@ -92,8 +96,8 @@ async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data
       `INSERT INTO vehicle_reports
          (report_number, user_id, vehicle_id, payment_id, subscription_id, reg_no,
           requested_by, requester_name, ip, user_agent, device, channel,
-          snapshot, access_token, valid_until, consent)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+          snapshot, access_token, valid_until, consent, owner_verified_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        RETURNING *`,
       [number, userId || null, vehicleId || null, paymentId || null, subscriptionId || null,
        regNo, requester.mobile || null, requester.name || null,
@@ -101,7 +105,7 @@ async function issue({ userId, vehicleId, paymentId, subscriptionId, regNo, data
        requester.channel || 'whatsapp',
        JSON.stringify(data), crypto.randomBytes(16).toString('hex'),
        validUntil ? new Date(validUntil).toISOString() : null,
-       consent ? JSON.stringify(consent) : null]);
+       consent ? JSON.stringify(consent) : null, owned?.verified_at || null]);
     return rows[0];
   });
 

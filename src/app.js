@@ -77,7 +77,7 @@ const { gate, loopGuard } = require('./security/guard');
 const { tunnel } = require('./security/tunnel');
 // Files come back as files, not through the encrypted tunnel: report and
 // invoice PDFs, the backup, and the CSV exports (command center phase 3).
-const fileRoute = (req) => /^\/((reports|invoices)\/[^/]+\/file|reports\/[^/]+\/admin-view|maintenance\/backup|export\/[a-z_]+(\.csv)?|exports\/\d+\/file|fleets\/\d+\/excel)$/.test(req.path);
+const fileRoute = (req) => /^\/((reports|invoices)\/[^/]+\/file|reports\/[^/]+\/admin-view|owner-photos\/\d+\/photo|maintenance\/backup|export\/[a-z_]+(\.csv)?|exports\/\d+\/file|fleets\/\d+\/excel)$/.test(req.path);
 
 app.use('/admin/api', cors(config.admin.origins), gate('admin'), tunnel('admin', { exempt: fileRoute }),
   loopGuard('admin'), adminRoutes);
@@ -246,6 +246,16 @@ app.listen(config.port, () => {
   require('./jobs/vahanWatch').start(Number(process.env.VAHAN_WATCH_TICK_SECONDS) || 900);
   // Mail to support@gaadipe.in, announced as it arrives (2026-10-04).
   require('./jobs/supportInbox').start(Number(process.env.SUPPORT_INBOX_TICK_SECONDS) || 120);
+  // Owner verification by RC photo (2026-10-04): every 15 minutes, a free
+  // report that could not be issued yet is tried again for anyone whose window
+  // is open, and any photo left on disk after its decision is deleted.
+  setInterval(async () => {
+    const photo = require('./owners/photo');
+    await photo.sweep().catch((e) => console.error('[owner-photo] sweep:', e.message));
+    const { rows } = await require('./db').query(
+      `SELECT DISTINCT mobile FROM vehicle_owner_claims WHERE reward_status = 'pending' AND status = 'verified'`).catch(() => ({ rows: [] }));
+    for (const r of rows) await photo.deliverPending(r.mobile).catch(() => {});
+  }, 15 * 60 * 1000).unref();
 
 
   // Page, click and action history is kept activity_retention_days, then deleted.

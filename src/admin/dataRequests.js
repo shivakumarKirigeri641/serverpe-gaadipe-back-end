@@ -79,6 +79,10 @@ async function erase({ id, adminId, ip }) {
     await run('journal', `UPDATE event_log SET detail = detail - 'said' - 'name' - 'mobile'
                            WHERE detail->>'mobile' = $1 OR ($2::bigint IS NOT NULL AND user_id = $2)`, [m, uid]);
     await run('waiting list', `DELETE FROM lookup_waitlist WHERE mobile = $1`, [m]);
+    // An RC photo still waiting for review goes with them (owners/photo.js).
+    for (const c of (await db.query(`SELECT photo_path FROM vehicle_owner_claims WHERE mobile = $1 AND photo_path IS NOT NULL`, [m]).catch(() => ({ rows: [] }))).rows) {
+      try { require('fs').rmSync(c.photo_path, { force: true }); } catch { /* already gone */ }
+    }
     await run('owner claims', `DELETE FROM vehicle_owner_claims WHERE mobile = $1`, [m]);
     await run('codes', `DELETE FROM otp_challenges WHERE mobile = $1`, [m]);
     await run('codes', `DELETE FROM site_otps WHERE mobile = $1`, [m]);
