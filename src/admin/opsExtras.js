@@ -183,7 +183,9 @@ async function hotLeads() {
       checked_at: r.checked_at, reg_no: r.checkout_reg || r.checked_reg || r.pending_reg || null,
       last_inbound_at: r.last_inbound_at, paid_before: r.paid_before, last_message: String(r.last_message || '').slice(0, 160),
     };
-  }).sort((a, b) => RANK[a.stage] - RANK[b.stage] || new Date(b.last_inbound_at) - new Date(a.last_inbound_at));
+  }).map((l) => ({ ...l, at: l.stage === 'checkout' ? l.checkout_at : l.stage === 'checked' ? l.checked_at : l.last_inbound_at }))
+    // Newest first within each stage, by that stage's own time (user, 2026-10-04).
+    .sort((a, b) => RANK[a.stage] - RANK[b.stage] || new Date(b.at) - new Date(a.at));
   const counts = { checkout: 0, checked: 0, messaged: 0 };
   for (const l of leads) counts[l.stage] += 1;
   return { leads, counts };
