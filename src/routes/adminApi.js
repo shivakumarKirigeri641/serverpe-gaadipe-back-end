@@ -506,6 +506,7 @@ router.get('/badges', safe(async (_req, res) => res.json({
   providers: await require('../util/providerStatus').all(),
   // Hot leads waiting for a reply (2026-10-03) — the menu's badge.
   hot_leads: (await require('../admin/opsExtras').hotLeads().catch(() => ({ leads: [] }))).leads.length,
+  support_emails: (await db.one(`SELECT count(*)::int AS n FROM support_emails WHERE status = 'new'`).catch(() => ({ n: 0 }))).n,
   data_requests: (await db.one(`SELECT count(*)::int AS n FROM data_requests WHERE status = 'pending'`).catch(() => ({ n: 0 }))).n,
 })));
 
@@ -513,6 +514,12 @@ router.get('/badges', safe(async (_req, res) => res.json({
 const extras = () => require('../admin/opsExtras');
 const fail = (res, e) => res.status(e.status || 500).json({ error: 'failed', message: e.message });
 router.get('/waitlist', safe(async (_req, res) => res.json(await extras().waitlist())));
+// The support mailbox (user, 2026-10-04, jobs/supportInbox.js).
+const inbox = () => require('../jobs/supportInbox');
+router.get('/support-inbox', needs('dashboard.view'), safe(async (req, res) => res.json(await inbox().list({ status: req.query.status || null }))));
+router.post('/support-inbox/check', needs('dashboard.view'), safe(async (_req, res) => res.json({ added: await inbox().tick() })));
+router.post('/support-inbox/:id/done', needs('dashboard.view'), safe(async (req, res) => res.json(await inbox().setDone(req.params.id, req.admin.id, req.body?.done !== false))));
+
 // Data deletion requests (user, 2026-10-03; DPDP) — erasing is irreversible, so it needs Settings rights.
 const dataReq = () => require('../admin/dataRequests');
 router.get('/data-requests', needs('dashboard.view'), safe(async (req, res) => res.json(await dataReq().list({ status: req.query.status || null }))));

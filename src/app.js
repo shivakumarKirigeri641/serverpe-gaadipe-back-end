@@ -244,6 +244,8 @@ app.listen(config.port, () => {
   require('./jobs/metaStatus').start(Number(process.env.META_STATUS_TICK_SECONDS) || 3600);
   // ULIP's VAHAN, asked every 15 minutes (free): "VAHAN is back" the moment it is.
   require('./jobs/vahanWatch').start(Number(process.env.VAHAN_WATCH_TICK_SECONDS) || 900);
+  // Mail to support@gaadipe.in, announced as it arrives (2026-10-04).
+  require('./jobs/supportInbox').start(Number(process.env.SUPPORT_INBOX_TICK_SECONDS) || 120);
 
 
   // Page, click and action history is kept activity_retention_days, then deleted.
