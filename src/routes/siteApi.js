@@ -612,9 +612,13 @@ router.post('/check', safe(async (req, res) => {
 
   await store.record(req.user.id, data).catch(e => console.error('[site] store:', e.message));
   await activity.record(req, { action: paid ? 'check_paid' : 'check', regNo: parsed.regNo });
+  // Its verified owner is told of this check, and the checker is told so (owners/checkAlerts.js).
+  const ownerNotice = await require('../owners/checkAlerts').checkerNotice(parsed.regNo, req.user.mobile).catch(() => null);
+  require('../owners/checkAlerts').noteCheck({ regNo: parsed.regNo, checker: req.user.mobile, channel: 'website' });
 
   const plan = await billing.reportPlan();
   res.json({
+    owner_notice: ownerNotice ? 'This vehicle’s owner is verified on GaadiPe and is told when it is checked (with the last 4 digits of your number).' : null,
     vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() }),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     ...(await offerFor(req, plan, paid, parsed.regNo)),

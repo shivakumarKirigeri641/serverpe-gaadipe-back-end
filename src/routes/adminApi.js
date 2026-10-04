@@ -1103,6 +1103,12 @@ router.post('/owner-photos/:id/:action(approve|reject)', needs('block'), safe(as
   if (!out.ok) return res.status(400).json({ error: 'bad_action', message: out.message });
   res.json(out);
 }));
+router.get('/owner-check-alerts', safe(async (_req, res) => {
+  const a = require('../owners/checkAlerts');
+  res.json({ ...(await a.recent()), settings: await a.getSettings() });
+}));
+router.put('/owner-check-alerts/settings', needs('settings'), safe(async (req, res) =>
+  res.json(await require('../owners/checkAlerts').saveSettings(req.body?.settings || {}, req.admin.id))));
 router.put('/owner-photos/settings', needs('settings'), safe(async (req, res) =>
   res.json(await require('../owners/photo').saveSettings(req.body?.settings || {}, req.admin.id))));
 

@@ -1083,7 +1083,9 @@ async function deliverReport(mobile, regNo, message) {
   const plan = bought ? null : await billing.reportPlan();
   // The verified owner's badge (src/owners/verify.js), on their own vehicle.
   const badge = await owners.isOwner(mobile, regNo) ? '✅ *Owner verified* — your vehicle\n\n' : '';
-  await send.text(mobile, badge + (bought
+  // Its verified owner is told of this check (owners/checkAlerts.js) — and so is the checker.
+  const watched = await require('../owners/checkAlerts').checkerNotice(regNo, mobile).catch(() => null);
+  await send.text(mobile, badge + (watched ? `${watched}\n\n` : '') + (bought
     ? await report.buildFor(data, { detailed: true })
     : report.basic(data, {
       ...(plan ? { price: `₹${Math.round(plan.price_paise / 100)}` } : {}),
@@ -1096,6 +1098,7 @@ async function deliverReport(mobile, regNo, message) {
     })));
   await setState(mobile, 'owner_menu', 'basic details sent');
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
+  require('../owners/checkAlerts').noteCheck({ regNo, checker: mobile, channel: 'whatsapp' });
   await reportMenu(mobile, regNo, data, bought);
 }
 
@@ -1421,6 +1424,8 @@ async function handle(session, message, mobile) {
    * A photo or PDF sent while a claim waits for one is that claim's RC.
    */
   await ownerPhoto.deliverPending(mobile).catch((e) => console.error('[wa] owner notice for %s: %s', mobile, e.message));
+  // Checks of their vehicle while their chat was shut, as one summary (owners/checkAlerts.js).
+  await require('../owners/checkAlerts').deliverPending(mobile).catch((e) => console.error('[wa] check alerts for %s: %s', mobile, e.message));
   if ((message.type === 'image' || message.type === 'document') && await ownerPhoto.openClaim(mobile)) {
     await receiveRcPhoto(mobile, message);
     return;
