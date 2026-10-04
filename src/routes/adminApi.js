@@ -517,6 +517,8 @@ router.get('/waitlist', safe(async (_req, res) => res.json(await extras().waitli
 // Gift full reports to paying customers (user, 2026-10-04, admin/gifts.js).
 const gifts = () => require('../admin/gifts');
 router.get('/gifts/customers', needs('dashboard.view'), safe(async (req, res) => res.json({ ...(await gifts().customers({ q: req.query.q || '' })), summary: await gifts().summary() })));
+router.get('/gifts/auto', needs('dashboard.view'), safe(async (_req, res) => { const rule = await gifts().autoRule(); res.json({ rule, ...(await gifts().autoStats(rule)) }); }));
+router.post('/gifts/auto', needs('settings'), safe(async (req, res) => res.json(await gifts().setAuto(req.body || {}, req.admin.id))));
 router.post('/gifts/grant', needs('settings'), safe(async (req, res) => res.json(await gifts().grant(req.body || {}, req.admin.id))));
 router.post('/gifts/:userId/revoke', needs('settings'), safe(async (req, res) => res.json(await gifts().revoke(req.params.userId, req.admin.id))));
 

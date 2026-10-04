@@ -119,6 +119,98 @@ async function revoke(userId, adminId) {
   return { ok: true, revoked: rowCount };
 }
 
+/*
+ * THE AUTOMATIC GIFT (user, 2026-10-04: "enable one option instead of a
+ * template"). A rule set on the panel — e.g. every paying customer gets 2
+ * free reports valid 30 days — and each eligible customer receives it once
+ * per round, the moment they next use GaadiPe on WhatsApp. Nothing is
+ * broadcast; they see it in the offer after their next check.
+ *
+ * Kept as the setting gift_auto (JSON):
+ *   { on, count, days, min_paid, paid_within_days, round, started_at }
+ * Starting a new round (or changing the gift) gives everyone a fresh one.
+ */
+const DEFAULT_AUTO = { on: false, count: 2, days: 30, min_paid: 1, paid_within_days: null, round: null, started_at: null };
+
+async function autoRule() {
+  const raw = await require('../util/settings').get('gift_auto', '');
+  try { return { ...DEFAULT_AUTO, ...(raw ? JSON.parse(raw) : {}) }; } catch { return { ...DEFAULT_AUTO }; }
+}
+
+async function setAuto({ on, count, days, min_paid, paid_within_days, new_round }, adminId) {
+  const cur = await autoRule();
+  const n = Math.round(Number(count ?? cur.count));
+  const d = Math.round(Number(days ?? cur.days));
+  const m = Math.round(Number(min_paid ?? cur.min_paid));
+  const w = paid_within_days === '' || paid_within_days == null ? null : Math.round(Number(paid_within_days));
+  if (!Number.isInteger(n) || n < 1 || n > 10) throw Object.assign(new Error('Give between 1 and 10 reports.'), { status: 400 });
+  if (!Number.isInteger(d) || d < 1 || d > 365) throw Object.assign(new Error('Validity must be 1 to 365 days.'), { status: 400 });
+  if (!Number.isInteger(m) || m < 1 || m > 50) throw Object.assign(new Error('Paid at least must be 1 to 50 times.'), { status: 400 });
+  if (w != null && (!Number.isInteger(w) || w < 1 || w > 3650)) throw Object.assign(new Error('Paid within must be 1 to 3650 days, or empty.'), { status: 400 });
+  const turningOn = Boolean(on) && !cur.on;
+  const changed = n !== cur.count || d !== cur.days || m !== cur.min_paid || w !== cur.paid_within_days;
+  const freshRound = Boolean(on) && (turningOn || new_round || !cur.round || changed);
+  const rule = {
+    on: Boolean(on), count: n, days: d, min_paid: m, paid_within_days: w,
+    round: freshRound ? `r${Date.now().toString(36)}` : cur.round,
+    started_at: freshRound ? new Date().toISOString() : cur.started_at,
+  };
+  await db.query(
+    `INSERT INTO app_settings (key, value) VALUES ('gift_auto', $1)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, modified_at = now()`, [JSON.stringify(rule)]);
+  require('../util/settings').refresh();
+  await require('./auth').audit({ adminId, action: 'gift_auto_set', detail: rule });
+  return { ok: true, rule, ...(await autoStats(rule)) };
+}
+
+/** How many paying customers qualify, and how many have received this round. */
+async function autoStats(rule) {
+  const r = rule || await autoRule();
+  const eligible = await db.one(
+    `SELECT count(*)::int AS n FROM (
+       SELECT u.id FROM users u JOIN payments p ON p.user_id = u.id AND ${PAID}
+         LEFT JOIN whatsapp_sessions ws ON ws.mobile = u.mobile
+        WHERE ws.wa_opt_out_at IS NULL AND u.erased_at IS NULL
+        GROUP BY u.id
+       HAVING count(p.*) >= $1 AND ($2::int IS NULL OR max(p.paid_at) > now() - ($2 || ' days')::interval)) x`,
+    [r.min_paid, r.paid_within_days]);
+  const got = r.round ? await db.one(
+    `SELECT count(DISTINCT user_id)::int AS n FROM report_credits WHERE campaign = $1`, [r.round]) : { n: 0 };
+  return { eligible: eligible.n, received: got.n };
+}
+
+/**
+ * Give this customer the current round's gift if they qualify and have not
+ * had it. Called whenever they use GaadiPe on WhatsApp. Returns how many were
+ * just given (0 when nothing new).
+ */
+async function ensureAuto(userId) {
+  const r = await autoRule();
+  if (!r.on || !r.round || !userId) return 0;
+  const ok = await db.one(
+    `SELECT 1 AS x FROM users u
+       LEFT JOIN whatsapp_sessions ws ON ws.mobile = u.mobile
+      WHERE u.id = $1 AND ws.wa_opt_out_at IS NULL AND u.erased_at IS NULL
+        AND (SELECT count(*) FROM payments p WHERE p.user_id = u.id AND ${PAID}) >= $2
+        AND ($3::int IS NULL OR (SELECT max(p.paid_at) FROM payments p WHERE p.user_id = u.id AND ${PAID}) > now() - ($3 || ' days')::interval)
+        AND NOT EXISTS (SELECT 1 FROM report_credits c WHERE c.user_id = u.id AND c.campaign = $4)`,
+    [userId, r.min_paid, r.paid_within_days, r.round]);
+  if (!ok) return 0;
+  const expires = new Date(Date.now() + r.days * 864e5);
+  await db.tx(async (c) => {
+    // Locked on the user, so two messages at once cannot both give the round.
+    await c.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+    const again = await c.query(`SELECT 1 FROM report_credits WHERE user_id = $1 AND campaign = $2 LIMIT 1`, [userId, r.round]);
+    if (again.rowCount) return;
+    for (let i = 0; i < r.count; i += 1) {
+      await c.query(
+        `INSERT INTO report_credits (user_id, source, reward, expires_at, campaign) VALUES ($1, 'gift', 'free_report', $2, $3)`,
+        [userId, expires, r.round]);
+    }
+  });
+  return r.count;
+}
+
 /** What was given and used, for the page's summary. */
 async function summary() {
   return db.one(
@@ -129,4 +221,4 @@ async function summary() {
        FROM report_credits WHERE source = 'gift'`);
 }
 
-module.exports = { customers, grant, available, use, revoke, summary };
+module.exports = { customers, grant, available, use, revoke, summary, autoRule, setAuto, autoStats, ensureAuto };

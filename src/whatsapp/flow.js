@@ -1066,12 +1066,14 @@ async function reportMenu(mobile, regNo, data, bought) {
 
   // Free reports the admin gave this customer (admin/gifts.js): offered first.
   const user = await store.upsertUser(mobile).catch(() => null);
+  // The automatic gift round, if on, reaches a paying customer here (admin/gifts.js).
+  const fresh = user ? await require('../admin/gifts').ensureAuto(user.id).catch(() => 0) : 0;
   const giftsLeft = user ? (await require('../admin/gifts').available(user.id).catch(() => [])).length : 0;
   if (giftsLeft) {
     await send.buttons(mobile,
       `🔒 *Full report for ${regNo}*\n\n`
       + lockedLines(data).join('\n')
-      + `\n\n🎁 You have *${giftsLeft} free full report${giftsLeft === 1 ? '' : 's'}* from GaadiPe — tap below to use one for ${regNo}. Nothing to pay.\n`
+      + `\n\n${fresh ? '🎉 *A thank-you from GaadiPe for being a paying customer!*\n' : ''}🎁 You have *${giftsLeft} free full report${giftsLeft === 1 ? '' : 's'}* from GaadiPe — tap below to use one for ${regNo}. Nothing to pay.\n`
       + `📄 PDF report on WhatsApp — download again for ${validDays} days\n`
       + `🔔 New challans watched ${plan.duration_days} days, with expiry warnings`,
       [{ id: BTN.BUY_REPORT,    title: `🎁 Free report (${giftsLeft})` },
@@ -1739,6 +1741,7 @@ async function handle(session, message, mobile) {
          * the same report, sent the same way.
          */
         const gifts = require('../admin/gifts');
+        await gifts.ensureAuto(user.id).catch(() => 0);
         if ((await gifts.available(user.id)).length) {
           await send.text(mobile, `🎁 Using one of your free full reports for *${vehicle.reg_no}* … ⏳`);
           const g = await gifts.use(user.id, vehicle.reg_no);
