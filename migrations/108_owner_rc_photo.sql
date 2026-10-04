@@ -53,6 +53,6 @@ INSERT INTO app_settings (key, value) VALUES
   -- The approved WhatsApp template for telling a customer the decision when
   -- their 24-hour window has shut. Off until the template is approved.
   ('owner_verify_template_on', 'false'),
-  ('owner_verify_template_name', 'owner_verification_update'),
+  ('owner_verify_template_name', 'gp_owner_verification_update_v1'),
   ('owner_verify_template_language', 'en')
 ON CONFLICT (key) DO NOTHING;

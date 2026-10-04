@@ -71,7 +71,7 @@ const SETTINGS = {
   owner_verify_extend_days: '28',
   owner_verify_photos_per_day: '5',
   owner_verify_template_on: 'false',
-  owner_verify_template_name: 'owner_verification_update',
+  owner_verify_template_name: 'gp_owner_verification_update_v1',
   owner_verify_template_language: 'en',
 };
 
@@ -439,7 +439,7 @@ async function deliverPending(mobile) {
     // Shut window: only the approved template can reach them, and only once.
     const pending = rows.filter((r) => r.notice === 'pending');
     if (pending.length && await settings.bool('owner_verify_template_on', false)) {
-      const name = String(await settings.get('owner_verify_template_name', 'owner_verification_update'));
+      const name = String(await settings.get('owner_verify_template_name', 'gp_owner_verification_update_v1'));
       const language = String(await settings.get('owner_verify_template_language', 'en'));
       for (const c of pending) {
         const u = await db.one(`SELECT name FROM users WHERE id = $1`, [c.user_id]).catch(() => null);

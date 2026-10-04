@@ -37,6 +37,6 @@ INSERT INTO app_settings (key, value) VALUES
   -- Tell the person checking that the verified owner is informed
   ('owner_check_alert_tell_checker', 'true'),
   ('owner_check_alert_template_on', 'false'),
-  ('owner_check_alert_template_name', 'vehicle_check_alert'),
+  ('owner_check_alert_template_name', 'gp_vehicle_check_alert_v1'),
   ('owner_check_alert_template_language', 'en')
 ON CONFLICT (key) DO NOTHING;

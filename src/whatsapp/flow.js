@@ -1429,10 +1429,10 @@ async function handle(session, message, mobile) {
   /*
    * THE TWO OWNER TEMPLATES' BUTTONS (2026-10-04). A template's quick reply
    * arrives as its text, so both are matched by words as well as by id:
-   *   owner_verification_update  "See details" — the decision itself was just
+   *   gp_owner_verification_update_v1  "See details" — the decision itself was just
    *                              told above (deliverPending); if there was
    *                              nothing left to tell, show their vehicles.
-   *   vehicle_check_alert        "Hide my vehicle" / "That's fine" /
+   *   gp_vehicle_check_alert_v1        "Hide my vehicle" / "That's fine" /
    *                              "Stop these alerts" (and typed ALERTS ON).
    */
   if (await require('../owners/checkAlerts').button(mobile, { id: intent.id, text: intent.text })) return;

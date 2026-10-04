@@ -35,7 +35,7 @@ const SETTINGS = {
   owner_check_alert_per_day: '10',
   owner_check_alert_tell_checker: 'true',
   owner_check_alert_template_on: 'false',
-  owner_check_alert_template_name: 'vehicle_check_alert',
+  owner_check_alert_template_name: 'gp_vehicle_check_alert_v1',
   owner_check_alert_template_language: 'en',
   // Other numbers whose checks never alert anyone (test phones, family)
   owner_check_alert_ignore_numbers: '',
@@ -151,7 +151,7 @@ async function tell(a) {
   }
   if (await settings.bool('owner_check_alert_template_on', false)) {
     const out = await send.template(a.owner_mobile,
-      String(await settings.get('owner_check_alert_template_name', 'vehicle_check_alert')),
+      String(await settings.get('owner_check_alert_template_name', 'gp_vehicle_check_alert_v1')),
       [a.reg_no, when(a.created_at), a.checker_last4],
       { language: String(await settings.get('owner_check_alert_template_language', 'en')) }).catch((e) => ({ ok: false, error: e.message }));
     if (out.ok) {
