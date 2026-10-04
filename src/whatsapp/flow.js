@@ -1064,6 +1064,22 @@ async function reportMenu(mobile, regNo, data, bought) {
   const off = plan.discount_paise ? ` (₹${Math.round(plan.discount_paise / 100)} off)` : '';
   const validDays = await settings.num('report_valid_days', 7);
 
+  // Free reports the admin gave this customer (admin/gifts.js): offered first.
+  const user = await store.upsertUser(mobile).catch(() => null);
+  const giftsLeft = user ? (await require('../admin/gifts').available(user.id).catch(() => [])).length : 0;
+  if (giftsLeft) {
+    await send.buttons(mobile,
+      `🔒 *Full report for ${regNo}*\n\n`
+      + lockedLines(data).join('\n')
+      + `\n\n🎁 You have *${giftsLeft} free full report${giftsLeft === 1 ? '' : 's'}* from GaadiPe — tap below to use one for ${regNo}. Nothing to pay.\n`
+      + `📄 PDF report on WhatsApp — download again for ${validDays} days\n`
+      + `🔔 New challans watched ${plan.duration_days} days, with expiry warnings`,
+      [{ id: BTN.BUY_REPORT,    title: `🎁 Free report (${giftsLeft})` },
+       { id: BTN.FEEDBACK,      title: 'Feedback' },
+       { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
+    return;
+  }
+
   await send.buttons(mobile,
     `🔒 *Full report for ${regNo}*\n\n`
     + lockedLines(data).join('\n')
@@ -1715,6 +1731,25 @@ async function handle(session, message, mobile) {
         if (existing) {
           await sendValidReport(mobile, existing);
           return;
+        }
+
+        /*
+         * A GIFT FIRST (user, 2026-10-04, admin/gifts.js): a paying customer
+         * the admin gave free reports to uses one here instead of paying —
+         * the same report, sent the same way.
+         */
+        const gifts = require('../admin/gifts');
+        if ((await gifts.available(user.id)).length) {
+          await send.text(mobile, `🎁 Using one of your free full reports for *${vehicle.reg_no}* … ⏳`);
+          const g = await gifts.use(user.id, vehicle.reg_no);
+          if (g.ok) {
+            await funnel(mobile, 'gift_used', { reg_no: vehicle.reg_no, left: g.left });
+            await send.text(mobile, g.left
+              ? `🎁 That was a free report from GaadiPe — you have *${g.left}* more to use. Send any vehicle number to use the next one.`
+              : '🎁 That was your last free report from GaadiPe. Thank you for being with us! 🙏');
+            return;
+          }
+          console.error('[wa] gift report for %s failed: %s — offering the paid one', vehicle.reg_no, g.error);
         }
 
         // Every precondition is checked BEFORE an order exists, so a missing

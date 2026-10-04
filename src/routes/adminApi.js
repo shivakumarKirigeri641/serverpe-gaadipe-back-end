@@ -514,6 +514,12 @@ router.get('/badges', safe(async (_req, res) => res.json({
 const extras = () => require('../admin/opsExtras');
 const fail = (res, e) => res.status(e.status || 500).json({ error: 'failed', message: e.message });
 router.get('/waitlist', safe(async (_req, res) => res.json(await extras().waitlist())));
+// Gift full reports to paying customers (user, 2026-10-04, admin/gifts.js).
+const gifts = () => require('../admin/gifts');
+router.get('/gifts/customers', needs('dashboard.view'), safe(async (req, res) => res.json({ ...(await gifts().customers({ q: req.query.q || '' })), summary: await gifts().summary() })));
+router.post('/gifts/grant', needs('settings'), safe(async (req, res) => res.json(await gifts().grant(req.body || {}, req.admin.id))));
+router.post('/gifts/:userId/revoke', needs('settings'), safe(async (req, res) => res.json(await gifts().revoke(req.params.userId, req.admin.id))));
+
 // The support mailbox (user, 2026-10-04, jobs/supportInbox.js).
 const inbox = () => require('../jobs/supportInbox');
 router.get('/support-inbox', needs('dashboard.view'), safe(async (req, res) => res.json(await inbox().list({ status: req.query.status || null }))));
