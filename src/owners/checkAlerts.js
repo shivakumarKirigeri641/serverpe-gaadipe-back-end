@@ -37,7 +37,27 @@ const SETTINGS = {
   owner_check_alert_template_on: 'false',
   owner_check_alert_template_name: 'vehicle_check_alert',
   owner_check_alert_template_language: 'en',
+  // Other numbers whose checks never alert anyone (test phones, family)
+  owner_check_alert_ignore_numbers: '',
 };
+
+const ten = (m) => String(m || '').replace(/\D/g, '').slice(-10);
+
+/**
+ * Checks by these numbers never alert an owner: every admin login's mobile
+ * (admin_users — active or not), the admin WhatsApp numbers (Settings →
+ * admin_whatsapp_numbers), and owner_check_alert_ignore_numbers. A number
+ * that cannot be read counts as exempt: when in doubt, say nothing.
+ */
+async function exempt(checker) {
+  const m = ten(checker);
+  if (m.length !== 10) return true;
+  const listed = `${await settings.get('admin_whatsapp_numbers', '')},${await settings.get('owner_check_alert_ignore_numbers', '')}`
+    .split(/[,\s;]+/).map(ten).filter((x) => x.length === 10);
+  if (listed.includes(m)) return true;
+  const admin = await db.one(`SELECT 1 AS x FROM admin_users WHERE mobile = $1 LIMIT 1`, [m]).catch(() => ({ x: 1 }));
+  return Boolean(admin);
+}
 
 /*
  * The same three buttons on the free message and on the approved template
@@ -59,6 +79,10 @@ const when = (d) => new Date(d).toLocaleString('en-IN', {
 /** The verified owners of this vehicle who would be told of a check by `checker`. */
 async function ownersToTell(regNo, checker) {
   if (!await settings.bool('owner_check_alert_on', false)) return [];
+  // THE ADMIN NEVER TRIGGERS AN ALERT (user, 2026-10-04): checks for testing
+  // or convenience must not reach an owner. Asked here, the one door every
+  // alert passes through, so no check path can forget it.
+  if (await exempt(checker)) return [];
   const needReport = await settings.bool('owner_check_alert_need_report', true);
   const { rows } = await db.query(
     `SELECT DISTINCT c.mobile FROM vehicle_owner_claims c
@@ -179,7 +203,9 @@ async function saveSettings(changes = {}, adminId) {
     if (/_on$|_need_report$|_tell_checker$/.test(k)) v = v === 'true' ? 'true' : 'false';
     else if (/_name$/.test(k)) v = v.replace(/[^a-z0-9_]/gi, '').toLowerCase().slice(0, 100);
     else if (/_language$/.test(k)) v = v.replace(/[^a-z_]/gi, '').slice(0, 10) || 'en';
-    else {
+    else if (/_numbers$/.test(k)) {
+      v = v.split(/[,\s;]+/).map(ten).filter((x) => x.length === 10).join(', ');
+    } else {
       const n = Math.round(Number(v));
       if (!Number.isFinite(n) || n < 1 || n > 1000) throw Object.assign(new Error(`${k} must be a number from 1 to 1000.`), { status: 400 });
       v = String(n);
@@ -256,4 +282,4 @@ async function button(mobile, { id, text }) {
   return true;
 }
 
-module.exports = { button, noteCheck, checkerNotice, deliverPending, getSettings, saveSettings, recent, _test: { hash } };
+module.exports = { button, exempt, noteCheck, checkerNotice, deliverPending, getSettings, saveSettings, recent, _test: { hash } };
