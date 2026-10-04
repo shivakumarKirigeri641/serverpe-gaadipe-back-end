@@ -143,26 +143,50 @@ async function waLimit() {
  * without anyone who said STOP or is blocked.
  */
 async function hotLeads() {
+  /*
+   * WIDER (user, 2026-10-04: "people who messaged don't show"). Everyone whose
+   * 24-hour window is open and who has not paid in the last two days, at the
+   * stage they reached:
+   *   checkout  opened the ₹19 checkout and did not pay      — warmest
+   *   checked   saw a free check, did not open the checkout
+   *   messaged  wrote to GaadiPe, no check yet
+   */
   const { rows } = await db.query(
-    `SELECT DISTINCT ON (u.id) u.id AS user_id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
-            p.id AS payment_id, p.amount_paise, p.created_at AS checkout_at, v.reg_no,
-            ws.last_inbound_at,
-            (SELECT body FROM whatsapp_messages m WHERE m.mobile = u.mobile AND m.direction = 'in' ORDER BY m.id DESC LIMIT 1) AS last_message,
-            (SELECT count(*)::int FROM payments x WHERE x.user_id = u.id AND x.status = 'paid' AND x.amount_paise > 0) AS paid_before
-       FROM payments p
-       JOIN users u ON u.id = p.user_id
-       JOIN whatsapp_sessions ws ON ws.mobile = u.mobile
-       LEFT JOIN vehicles v ON v.id = (p.raw->>'vehicle_id')::bigint
-      WHERE p.status = 'created' AND p.amount_paise > 0 AND p.created_at > now() - interval '48 hours'
-        AND ws.wa_opt_out_at IS NULL
-        AND ws.last_inbound_at > now() - interval '24 hours'
-        AND NOT EXISTS (SELECT 1 FROM payments q WHERE q.user_id = u.id AND q.status = 'paid' AND q.paid_at > p.created_at)
-        AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.kind = 'mobile' AND b.value = u.mobile AND b.released_at IS NULL)
-      ORDER BY u.id, p.created_at DESC`);
-  return {
-    leads: rows.sort((a, b) => new Date(b.checkout_at) - new Date(a.checkout_at))
-      .map((r) => ({ ...r, user_id: String(r.user_id), payment_id: String(r.payment_id), last_message: String(r.last_message || '').slice(0, 160) })),
-  };
+    `WITH open AS (
+       SELECT ws.mobile, ws.last_inbound_at, ws.context->>'pending_reg' AS pending_reg, u.id AS user_id,
+              coalesce(u.display_name, u.wa_profile_name, ws.profile_name) AS name
+         FROM whatsapp_sessions ws
+         LEFT JOIN users u ON u.mobile = ws.mobile
+        WHERE ws.last_inbound_at > now() - interval '24 hours' AND ws.wa_opt_out_at IS NULL
+          AND NOT coalesce(u.is_internal, false)
+          AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.kind = 'mobile' AND b.value = ws.mobile AND b.released_at IS NULL)
+          AND NOT EXISTS (SELECT 1 FROM payments q WHERE q.user_id = u.id AND q.status = 'paid' AND q.amount_paise > 0
+                            AND q.paid_at > now() - interval '48 hours'))
+     SELECT o.*,
+            co.id AS payment_id, co.amount_paise, co.created_at AS checkout_at, cv.reg_no AS checkout_reg,
+            ck.at AS checked_at, ck.reg_no AS checked_reg,
+            (SELECT body FROM whatsapp_messages m WHERE m.mobile = o.mobile AND m.direction = 'in' ORDER BY m.id DESC LIMIT 1) AS last_message,
+            (SELECT count(*)::int FROM payments x WHERE x.user_id = o.user_id AND x.status = 'paid' AND x.amount_paise > 0) AS paid_before
+       FROM open o
+       LEFT JOIN LATERAL (SELECT p.* FROM payments p WHERE p.user_id = o.user_id AND p.status = 'created' AND p.amount_paise > 0
+                            AND p.created_at > now() - interval '48 hours' ORDER BY p.created_at DESC LIMIT 1) co ON true
+       LEFT JOIN vehicles cv ON cv.id = (co.raw->>'vehicle_id')::bigint
+       LEFT JOIN LATERAL (SELECT e.created_at AS at, e.detail->>'reg_no' AS reg_no FROM event_log e
+                           WHERE e.kind = 'funnel' AND e.detail->>'step' = 'basic_shown' AND e.detail->>'mobile' = o.mobile
+                             AND e.created_at > now() - interval '48 hours' ORDER BY e.id DESC LIMIT 1) ck ON true`);
+  const RANK = { checkout: 0, checked: 1, messaged: 2 };
+  const leads = rows.map((r) => {
+    const stage = r.payment_id ? 'checkout' : r.checked_at ? 'checked' : 'messaged';
+    return {
+      stage, user_id: r.user_id ? String(r.user_id) : null, mobile: r.mobile, name: r.name,
+      payment_id: r.payment_id ? String(r.payment_id) : null, amount_paise: r.amount_paise, checkout_at: r.checkout_at,
+      checked_at: r.checked_at, reg_no: r.checkout_reg || r.checked_reg || r.pending_reg || null,
+      last_inbound_at: r.last_inbound_at, paid_before: r.paid_before, last_message: String(r.last_message || '').slice(0, 160),
+    };
+  }).sort((a, b) => RANK[a.stage] - RANK[b.stage] || new Date(b.last_inbound_at) - new Date(a.last_inbound_at));
+  const counts = { checkout: 0, checked: 0, messaged: 0 };
+  for (const l of leads) counts[l.stage] += 1;
+  return { leads, counts };
 }
 
 /* ─────────────────────────────────────────────────────── ad return ── */

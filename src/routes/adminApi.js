@@ -505,7 +505,8 @@ router.get('/badges', safe(async (_req, res) => res.json({
   // The status strip (user, 2026-10-01): the outside services, as real calls find them.
   providers: await require('../util/providerStatus').all(),
   // Hot leads waiting for a reply (2026-10-03) — the menu's badge.
-  hot_leads: (await require('../admin/opsExtras').hotLeads().catch(() => ({ leads: [] }))).leads.length,
+  // The red badge counts the warmest only: opened the checkout, not paid.
+  hot_leads: (await require('../admin/opsExtras').hotLeads().catch(() => ({ counts: {} }))).counts?.checkout || 0,
   support_emails: (await db.one(`SELECT count(*)::int AS n FROM support_emails WHERE status = 'new'`).catch(() => ({ n: 0 }))).n,
   data_requests: (await db.one(`SELECT count(*)::int AS n FROM data_requests WHERE status = 'pending'`).catch(() => ({ n: 0 }))).n,
 })));
