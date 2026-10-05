@@ -83,8 +83,11 @@ function maskName(name) {
   // and looks like a bug. If the source has already done it, pass it through.
   if ((clean.match(/\*/g) || []).length >= 2) return clean;
 
+  // A full name (the RC backup's, kept whole in the cache since 2026-10-05) is
+  // masked the way ULIP and Parivahan mask it — first and last letter of each
+  // word, stars between: "RAMESH KUMAR" -> "R****H K***R".
   return clean.split(/\s+/)
-    .map(w => (w.length <= 2 ? w : w.slice(0, 2) + '•'.repeat(Math.min(w.length - 2, 8))))
+    .map(w => (w.length <= 1 ? w : w.length === 2 ? `${w[0]}*` : `${w[0]}${'*'.repeat(w.length - 2)}${w[w.length - 1]}`))
     .join(' ');
 }
 

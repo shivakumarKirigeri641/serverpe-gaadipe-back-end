@@ -111,7 +111,7 @@ const int = (v) => { const n = number(v); return n == null ? null : Math.round(n
 const NOT_FOUND = /not\s*found|no\s*record|invalid\s*(vehicle|reg|registration)|does\s*not\s*exist|no\s*data/i;
 
 /** IDSPay's answer, as { outcome, data, code, message }. */
-function read(http, json, regNo) {
+function read(http, json, regNo, { storeFull = false } = {}) {
   const code = Number(json?.status?.code ?? json?.status_code ?? http);
   const message = String(json?.status?.message || json?.message || '').slice(0, 200);
   const d = json?.data;
@@ -119,7 +119,19 @@ function read(http, json, regNo) {
     if (NOT_FOUND.test(message)) return { outcome: 'NOT_FOUND', code: String(code), message };
     return { outcome: 'RETRY', code: String(code || http), message: message || `HTTP ${http}` };
   }
+  /*
+   * KEPT WHOLE IN THE CACHE (user, 2026-10-05: "store full in my cache and
+   * show masked ones as per the rule we defined"). With rc_backup_store_full
+   * on (the default), owner name, chassis, engine and address are stored as
+   * IDSPay sends them, marked pii_full so store.guardRc leaves them be. Every
+   * customer-facing view masks them as it shows them (whatsapp/report.js,
+   * pdf/vehicleReport.js, site/vehicleView.js), and send.js refuses any
+   * WhatsApp message carrying a full chassis number. Off: masked here, as before.
+   */
+  const full = storeFull;
+  const keep = (v, mask) => (full ? v : mask(v));
   const data = {
+    ...(full ? { pii_full: true } : {}),
     reg_no: val(d.reg_no) || regNo,
     status: val(d.status),
     status_as_on: date(d.status_as_on),
@@ -145,14 +157,16 @@ function read(http, json, regNo) {
     unladen_weight: int(d.unladen_weight),
     gross_weight: int(d.gross_vehicle_weight),
     sale_amount: null,
-    // Masked here, to ULIP's level — IDSPay sends these in full.
-    owner_name: maskName(val(d.owner_name)),
+    // IDSPay sends these in full: kept whole (store-full) or masked to ULIP's level.
+    owner_name: keep(val(d.owner_name), maskName),
     owner_serial: int(d.owner_count),
     owner_type: null,
     owner_category: null,
-    address: maskAddress([d.split_present_address?.pincode, d.present_address].filter(Boolean).join(' ')),
-    chassis: maskTail(val(d.chassis)),
-    engine: maskTail(val(d.engine)),
+    address: full
+      ? ([val(d.present_address), d.split_present_address?.pincode].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim() || null)
+      : maskAddress([d.split_present_address?.pincode, d.present_address].filter(Boolean).join(' ')),
+    chassis: keep(val(d.chassis), maskTail),
+    engine: keep(val(d.engine), maskTail),
     financer: val(d.rc_financer),
     blacklist_status: val(d.blacklist_status),
     noc_details: val(d.noc_details),
@@ -218,6 +232,54 @@ async function noteResult(regNo, failed) {
   });
 }
 
+/*
+ * THE IDSPAY BALANCE AND THE GUARD COMING BACK (user, 2026-10-05: "once the
+ * balance gets low, <50, come back with this guard"). The admin enters the
+ * balance in Settings (rc_backup_balance_paise); each call takes off its price
+ * with GST (rc_backup_cost_paise × 1.18), and if IDSPay's own answer carries a
+ * balance, that figure wins. At or below rc_backup_low_balance_paise (₹50) the
+ * backup is kept for paying customers again (rc_backup_paid_only = true) and
+ * the admin is told — once. Blank balance = not tracked, nothing switches.
+ */
+const BALANCE_KEYS = /^(balance|wallet_balance|available_balance|current_balance|wallet|remaining_balance)$/i;
+function balanceIn(json) {
+  for (const obj of [json, json?.data, json?.status, json?.wallet]) {
+    if (!obj || typeof obj !== 'object') continue;
+    for (const [k, v] of Object.entries(obj)) {
+      if (BALANCE_KEYS.test(k) && v !== null && v !== '' && Number.isFinite(Number(v))) return Number(v);
+    }
+  }
+  return null;
+}
+
+async function setSetting(key, value) {
+  await db.query(
+    `INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, modified_at = now()`,
+    [key, String(value)]);
+  await settings.refresh?.();
+}
+
+async function noteBalance(json) {
+  const raw = String(await settings.get('rc_backup_balance_paise', '') ?? '').trim();
+  const reported = balanceIn(json);
+  if (raw === '' && reported === null) return;               // not tracked
+  const cost = Math.round((await settings.num('rc_backup_cost_paise', 300)) * 1.18);
+  const balance = reported !== null ? Math.round(reported * 100) : Math.max(0, Number(raw) - cost);
+  await setSetting('rc_backup_balance_paise', balance);
+  const low = await settings.num('rc_backup_low_balance_paise', 5000);
+  if (balance <= low && !(await paidOnly())) {
+    await setSetting('rc_backup_paid_only', 'true');
+    console.warn('[rc-backup] balance ₹%s at or below ₹%s — backup kept for paying customers again', (balance / 100).toFixed(2), (low / 100).toFixed(0));
+    require('../util/adminPing').ping({
+      key: 'rc_backup_low_balance', severity: 'warning', source: 'vehicle_api',
+      title: '💰 IDSPay balance low — free checks stopped using it',
+      text: `The IDSPay balance is about ₹${(balance / 100).toFixed(2)} (₹${(low / 100).toFixed(0)} or less), so the paid backup is `
+        + 'now used ONLY for paying customers again. Free checks wait for ULIP. Recharge IDSPay, enter the new balance in '
+        + 'Prices & settings → RC backup, and switch rc_backup_paid_only off if you want free checks to use it again.',
+    }).catch(() => {});
+  }
+}
+
 async function lookup(regNo) {
   if (!await enabled()) return null;
   if (await pausedUntil()) return null;
@@ -231,7 +293,8 @@ async function lookup(regNo) {
   let out;
   try {
     const { http, json } = await request(regNo);
-    out = read(http, json, regNo);
+    out = read(http, json, regNo, { storeFull: await settings.bool('rc_backup_store_full', true) });
+    await noteBalance(json).catch((e) => console.error('[rc-backup] balance:', e.message));
   } catch (e) {
     out = { outcome: 'RETRY', code: e.name === 'TimeoutError' ? 'TIMEOUT' : 'NETWORK', message: e.message + (e.cause ? ` (${e.cause.code || e.cause.message})` : '') };
   }
@@ -257,4 +320,4 @@ async function freeOpts(extra = {}) {
   return (await paidOnly()) ? { ...extra, backup: 0 } : extra;
 }
 
-module.exports = { lookup, enabled, configured, today, pausedUntil, paidOnly, freeOpts, PATH, _test: { maskName, maskTail, maskAddress, read } };
+module.exports = { lookup, enabled, configured, today, pausedUntil, paidOnly, freeOpts, PATH, _test: { maskName, maskTail, maskAddress, read, noteBalance, balanceIn } };

@@ -266,6 +266,9 @@ function apiEvent(id, { userId, regNo, ok, dataset, cacheHit, cost, ms, code }) 
  */
 function guardRc(rc, regNo) {
   if (!rc || typeof rc !== 'object') return rc;
+  // The RC backup's answer, kept whole on purpose (vehicle/rcBackup.js,
+  // rc_backup_store_full, user 2026-10-05). Customers only ever see it masked.
+  if (rc.pii_full === true) return rc;
   const { maskName, maskTail } = require('./rcBackup')._test;
   const fixed = [];
   const out = { ...rc };
