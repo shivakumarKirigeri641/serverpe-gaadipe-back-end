@@ -942,7 +942,7 @@ async function startOwnerClaim(mobile, regNo, message) {
   let r = await owners.begin({ userId: user.id, mobile, regNo });
   if (!r.ok && r.reason === 'no_record') {
     // Never checked here before: the RC is what the answers are compared with.
-    const data = await gateway.full(regNo).catch(() => null);
+    const data = await gateway.full(regNo, await require('../vehicle/rcBackup').freeOpts()).catch(() => null);
     if (data?.success === true) {
       await store.record(user.id, data).catch(() => {});
       r = await owners.begin({ userId: user.id, mobile, regNo });
@@ -1018,9 +1018,13 @@ async function deliverReport(mobile, regNo, message) {
     console.warn('[quota] %s at %d/%d (%s)', mobile, q.used + 1, q.limit, q.tier);
   }
 
+  // The paid RC backup only for a vehicle they have paid for (rc_backup_paid_only):
+  // a free check asks ULIP alone (vehicle/rcBackup.js freeOpts).
+  const rcBackup = require('../vehicle/rcBackup');
+  const ownsReport = await rcBackup.paidOnly() ? await reports.validFor(user.id, regNo).catch(() => null) : null;
   let data;
   try {
-    data = await gateway.full(regNo);
+    data = await gateway.full(regNo, ownsReport ? {} : await rcBackup.freeOpts());
   } catch (e) {
     console.error('[wa] lookup failed for %s: %s', regNo, e.message);
     data = null;
@@ -1060,12 +1064,33 @@ async function deliverReport(mobile, regNo, message) {
     // Both ULIP and the paid backup failed (user, 2026-10-02): the vehicle
     // records server is down. Kept on the waiting list; a short line covers the
     // mistyped number, which looks the same from here.
-    await send.text(mobile, listed
+    const downText = listed
       ? `⚠️ The Government vehicle records server is down right now, and the concerned authority is working on it. 🙏\n\n`
         + `I have saved *${regNo}* and will send its details *here, automatically*, as soon as it is back — no need to send it again.\n\n`
         + '_If the number was typed wrongly, just send the correct one._'
       : `⚠️ The Government vehicle records server is down right now, and the concerned authority is working on it. 🙏\n\n`
-        + 'Please send the number again in a little while.');
+        + 'Please send the number again in a little while.';
+    /*
+     * CAN'T WAIT? BUY NOW (user, 2026-10-05). With the backup kept for paying
+     * customers (rc_backup_paid_only), the free check waits for ULIP — but the
+     * full report can be bought at once, and its lookup uses the backup. Only
+     * while the backup is switched on and payments are open.
+     */
+    const plan = rcBackup && !ownsReport && await rcBackup.paidOnly() && await rcBackup.enabled().catch(() => false)
+      && await require('../util/flags').on('payments') ? await billing.reportPlan().catch(() => null) : null;
+    if (plan) {
+      await db.query(`INSERT INTO vehicles (reg_no) VALUES ($1) ON CONFLICT (reg_no) DO NOTHING`, [regNo]);
+      await db.query(
+        `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+        [mobile, JSON.stringify({ pending_reg: regNo })]);
+      await funnel(mobile, 'buy_now_offered', { reg_no: regNo });
+      await send.buttons(mobile, `${downText}\n\n`
+        + `⚡ *Need it right now?* Get the *full report* for *${regNo}* immediately for *₹${Math.round(plan.price_paise / 100)}* — `
+        + 'we fetch it from our backup source, with insurance, PUC, tax, fitness and challans.',
+      [{ id: BTN.BUY_REPORT, title: `Full report ₹${Math.round(plan.price_paise / 100)}` }]);
+      return;
+    }
+    await send.text(mobile, downText);
     return;
   }
 

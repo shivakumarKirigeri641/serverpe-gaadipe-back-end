@@ -241,4 +241,20 @@ async function lookup(regNo) {
   return out;
 }
 
-module.exports = { lookup, enabled, configured, today, pausedUntil, PATH, _test: { maskName, maskTail, maskAddress, read } };
+/**
+ * THE BACKUP ONLY FOR PAYING CUSTOMERS (user, 2026-10-05; setting
+ * rc_backup_paid_only, default on). A free check never uses the paid backup:
+ * at ~7 payers in 100, the ₹3 a free check cost while ULIP was down lost money
+ * on every sale. The callers that serve free checks ask this and pass
+ * backup=0; a paid report's lookup does not, so it still uses the backup.
+ */
+async function paidOnly() {
+  return settings.bool('rc_backup_paid_only', true);
+}
+
+/** gateway options for a FREE lookup: ULIP only when the backup is for paying customers. */
+async function freeOpts(extra = {}) {
+  return (await paidOnly()) ? { ...extra, backup: 0 } : extra;
+}
+
+module.exports = { lookup, enabled, configured, today, pausedUntil, paidOnly, freeOpts, PATH, _test: { maskName, maskTail, maskAddress, read } };

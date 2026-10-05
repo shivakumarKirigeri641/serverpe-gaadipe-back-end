@@ -47,7 +47,8 @@ async function tick() {
         `UPDATE lookup_waitlist SET attempts = attempts + 1 WHERE id = $1 AND status = 'waiting' AND attempts < 3 RETURNING id`, [w.id]);
       if (!mine) continue;
       // The lookup itself, before telling them anything: if this one fails, they stay waiting.
-      const data = w.id === waiting[0].id ? probe : await gateway.full(w.reg_no).catch(() => null);
+      // A waiting free check: ULIP only when the backup is for paying customers.
+      const data = w.id === waiting[0].id ? probe : await gateway.full(w.reg_no, await require('../vehicle/rcBackup').freeOpts()).catch(() => null);
       if (!usable(data)) {
         if (data?.error === 'vehicle_not_found') {
           await db.query(`UPDATE lookup_waitlist SET status = 'failed', done_at = now(), note = 'not found' WHERE id = $1`, [w.id]);
