@@ -176,6 +176,10 @@ const FILTERS = {
   lapsed:   'Paid before, nothing active now',
   active:   'Paying now (report or watch active)',
   paying:   'Has paid at least once',
+  // (user, 2026-10-05) Nobody has sent them a broadcast yet — a message that
+  // actually went out; a failed or skipped one does not count. Ticked with
+  // other audiences it NARROWS them ("Said Hi only" AND never got one).
+  never_broadcast: 'Never got a broadcast',
 };
 // Older links and saved screens asked for this one; it still means what it meant.
 const LEGACY = { not_paying: 'NOT paid' };
@@ -187,14 +191,18 @@ const PREDICATE = {
   lapsed:  'paid AND NOT active',
   active:  'active',
   paying:  'paid',
+  never_broadcast: 'NOT got_broadcast',
   ...LEGACY,
 };
 
 /** The chosen audiences as one SQL condition over the flags below. */
 function filterWhere(filter) {
   const keys = String(filter || 'all').split(',').map((k) => k.trim()).filter((k) => PREDICATE[k]);
-  if (!keys.length || keys.includes('all')) return 'true';
-  return keys.map((k) => `(${PREDICATE[k]})`).join(' OR ');
+  // "Never got a broadcast" narrows the rest instead of adding to them.
+  const never = keys.includes('never_broadcast');
+  const rest = keys.filter((k) => k !== 'never_broadcast');
+  const any = !rest.length || rest.includes('all') ? 'true' : rest.map((k) => `(${PREDICATE[k]})`).join(' OR ');
+  return never ? `(${PREDICATE.never_broadcast}) AND (${any})` : any;
 }
 
 /*
@@ -226,6 +234,10 @@ const PEOPLE = `
            (EXISTS (SELECT 1 FROM vehicle_reports r WHERE r.user_id = p.user_id AND r.valid_until > now())
             OR EXISTS (SELECT 1 FROM subscriptions sb WHERE sb.user_id = p.user_id
                          AND sb.is_active AND sb.ends_on >= CURRENT_DATE)) AS active,
+           EXISTS (SELECT 1 FROM whatsapp_broadcast_targets t
+                    WHERE t.mobile = p.mobile AND t.status = 'sent') AS got_broadcast,
+           (SELECT max(t.sent_at) FROM whatsapp_broadcast_targets t
+             WHERE t.mobile = p.mobile AND t.status = 'sent') AS last_broadcast_at,
            EXISTS (SELECT 1 FROM blocks b
                     WHERE b.kind = 'mobile' AND b.value = p.mobile AND b.released_at IS NULL) AS blocked
       FROM pool p
@@ -244,6 +256,7 @@ const segmentsOf = (r) => Object.keys(FILTERS)
     checked: r.checked && !r.paid,
     lapsed: r.paid && !r.active,
     active: r.active,
+    never_broadcast: !r.got_broadcast,
   })[k]);
 
 /**
