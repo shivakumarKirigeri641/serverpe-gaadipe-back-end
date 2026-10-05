@@ -62,8 +62,7 @@ async function terms(mins) {
       + 'You will see its insurance, PUC, tax and challan status in seconds.\n\n'
       // What the button agrees to, in the same message as the button (user,
       // 2026-09-28) — not only in the terms screen further up the chat.
-      + `By agreeing you accept our Terms (${SITE}/terms), Privacy (${SITE}/privacy) and Refund (${SITE}/refund) policies.\n`
-      + '_Reply STOP if you would rather not hear from us._',
+      + `By agreeing you accept our Terms (${SITE}/terms), Privacy (${SITE}/privacy) and Refund (${SITE}/refund) policies.`,
       [{ id: 'agree_owner', title: 'Agree & continue' }],
       { footer: 'ServerPe App Solutions' });
     if (out?.ok) { sent += 1; mark(`nudge_terms:${s.id}`, 'whatsapp_reminder_sent', s.mobile, s.user_id, { kind: 'terms' }); }
@@ -104,8 +103,7 @@ async function number(mins) {
     const out = await send.text(s.mobile,
       'Ready when you are 🙂\n\n'
       + 'Just send your vehicle number here — like *KA01XX1234* — and I will show its '
-      + 'insurance, PUC, tax and challan status in seconds.\n\n'
-      + '_Reply STOP if you would rather not hear from us._');
+      + 'insurance, PUC, tax and challan status in seconds.');
     if (out?.ok) { sent += 1; mark(`nudge_number:${s.id}`, 'whatsapp_reminder_sent', s.mobile, s.user_id, { kind: 'number' }); }
   }
   return sent;
@@ -139,8 +137,7 @@ async function payments(mins) {
       `${p.reg_no ? `*${p.reg_no}* — your` : 'Your'} full report is waiting.\n\n`
       + `Pay ₹${Math.round(p.amount_paise / 100)} here (UPI, card, netbanking):\n${base}/pay/${p.checkout_token}\n\n`
       + 'The report arrives in this chat the moment the payment goes through.\n'
-      + '🚫 RTO queue · 🚫 Fuel · 🚫 Follow-ups ✨\n\n'
-      + '_Reply STOP if you would rather not hear from us._');
+      + '🚫 RTO queue · 🚫 Fuel · 🚫 Follow-ups ✨');
     if (out?.ok) { sent += 1; mark(`nudge_pay:${p.id}`, 'whatsapp_reminder_sent', p.mobile, p.user_id, { kind: 'payment', payment_row: p.id }); }
   }
   return sent;

@@ -330,10 +330,10 @@ const WELCOME =
   + 'What brings you here?';
 
 const OWNER_TERMS =
-  `Please agree to our Terms (${SITE}/terms), Privacy (${SITE}/privacy) and Refund (${SITE}/refund) policies to continue. `
-  // The same promise as the Terms clause (migration 062) — the line people
-  // actually read before they tap.
-  + 'You\'ll get GaadiPe messages here; reply *STOP* anytime.';
+  // "Reply STOP anytime" is no longer repeated here (user, 2026-10-05): the
+  // Terms they agree to already say it (migration 062), and the line was
+  // prompting people to reply STOP straight away.
+  `Please agree to our Terms (${SITE}/terms), Privacy (${SITE}/privacy) and Refund (${SITE}/refund) policies to continue.`;
 
 const PARTNER_TERMS =
   'Good to have you! 🤝 Please read the partner terms first:\n\n'
@@ -1338,7 +1338,7 @@ async function handle(session, message, mobile) {
       await db.query(`UPDATE whatsapp_sessions SET wa_opt_out_at = NULL, modified_at = now() WHERE mobile = $1`, [mobile]);
       await funnel(mobile, 'opt_in', { undo: true });
       console.log('[wa] %s undid STOP', mobile);
-      await doors(mobile, 'Welcome back 👋 — GaadiPe will message you again. Reply *STOP* any time.');
+      await doors(mobile, 'Welcome back 👋 — GaadiPe will message you again.');
       return;
     }
     if (intent.id === 'stopwhy:other') {
@@ -1412,7 +1412,7 @@ async function handle(session, message, mobile) {
     if (rowCount) {
       await funnel(mobile, 'opt_in');
       console.log('[wa] %s replied START — messages on again', mobile);
-      await send.text(mobile, 'Welcome back 👋 — GaadiPe will message you again. Reply *STOP* any time.');
+      await send.text(mobile, 'Welcome back 👋 — GaadiPe will message you again.');
     }
     // …and START is also a greeting, so carry on to the beginning below.
   }
