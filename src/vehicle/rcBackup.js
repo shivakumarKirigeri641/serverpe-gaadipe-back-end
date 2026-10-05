@@ -120,6 +120,19 @@ function read(http, json, regNo, { storeFull = false } = {}) {
     return { outcome: 'RETRY', code: String(code || http), message: message || `HTTP ${http}` };
   }
   /*
+   * IDSPAY'S "OK" WITH THEIR SUPPLIER'S ERROR INSIDE (seen 2026-10-04/05):
+   * status 200, but data = { http_response_code, request_id, client_ref_num,
+   * result_code, message } and no vehicle. Read the message: "no record" is
+   * NOT_FOUND (final, not counted towards the pause); anything else is RETRY
+   * with their code and words — never "answer not understood" again.
+   */
+  if (d.result_code !== undefined && !d.reg_no && !d.owner_name && !d.chassis && !d.model && !d.vehicle_manufacturer_name) {
+    const why = String(d.message || message || '').slice(0, 200);
+    const rc = String(d.result_code);
+    if (NOT_FOUND.test(why) || rc === '102') return { outcome: 'NOT_FOUND', code: `R${rc}`, message: why || 'no record' };
+    return { outcome: 'RETRY', code: `R${rc}`, message: why || `result_code ${rc}` };
+  }
+  /*
    * KEPT WHOLE IN THE CACHE (user, 2026-10-05: "store full in my cache and
    * show masked ones as per the rule we defined"). With rc_backup_store_full
    * on (the default), owner name, chassis, engine and address are stored as
@@ -299,6 +312,20 @@ async function lookup(regNo) {
     out = { outcome: 'RETRY', code: e.name === 'TimeoutError' ? 'TIMEOUT' : 'NETWORK', message: e.message + (e.cause ? ` (${e.cause.code || e.cause.message})` : '') };
   }
   out.ms = Date.now() - t0;
+  // Every call that brought no vehicle is logged with IDSPay's own code and
+  // words (never personal data), so "why did the backup not answer?" has an
+  // answer in the log.
+  if (out.outcome !== 'FOUND') {
+    console.warn('[rc-backup] %s: %s %s — %s (%d ms)', regNo, out.outcome, out.code || '', out.message || '', out.ms);
+    // Problems only the admin can fix — money or keys — are pinged at once.
+    if (/balance|insufficient|recharge|credit|wallet|unauthori[sz]ed|invalid\s*(api|token|key)|expired|suspend/i.test(out.message || '')) {
+      require('../util/adminPing').ping({
+        key: 'rc_backup_account', severity: 'critical', source: 'vehicle_api',
+        title: '💳 IDSPay refused the call',
+        text: `IDSPay said: "${String(out.message).slice(0, 160)}" (code ${out.code}). Check the IDSPay account — balance, API keys — before more customers miss the backup.`,
+      }).catch(() => {});
+    }
+  }
   status.record('rc_backup', { ok: out.outcome !== 'RETRY', ms: out.ms, error: out.outcome === 'RETRY' ? `${out.code}: ${out.message}` : null });
   await noteResult(regNo, out.outcome === 'RETRY').catch(() => {});
   return out;
