@@ -442,7 +442,9 @@ async function deliverPending(mobile) {
       const name = String(await settings.get('owner_verify_template_name', 'gp_owner_verification_update_v1'));
       const language = String(await settings.get('owner_verify_template_language', 'en'));
       for (const c of pending) {
-        const u = await db.one(`SELECT name FROM users WHERE id = $1`, [c.user_id]).catch(() => null);
+        const u = await db.one(
+          `SELECT split_part(coalesce(nullif(trim(name), ''), nullif(trim(display_name), ''), nullif(trim(wa_profile_name), ''), 'there'), ' ', 1) AS name
+             FROM users WHERE id = $1`, [c.user_id]).catch(() => null);
         const out = await send.template(mobile, name, [
           u?.name || 'there', c.reg_no, c.status === 'verified' ? 'approved ✅' : 'not approved',
         ], { language }).catch((e) => ({ ok: false, error: e.message }));

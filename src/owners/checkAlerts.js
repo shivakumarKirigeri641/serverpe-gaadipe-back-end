@@ -152,13 +152,23 @@ async function tell(a) {
   if (await settings.bool('owner_check_alert_template_on', false)) {
     const out = await send.template(a.owner_mobile,
       String(await settings.get('owner_check_alert_template_name', 'gp_vehicle_check_alert_v1')),
-      [a.reg_no, when(a.created_at), a.checker_last4],
+      // gp_vehicle_check_alert_v1 as approved (2026-10-05): "Hi {{1}}, your vehicle {{2}}
+      // was checked on GaadiPe on {{3}} by a mobile number ending {{4}}".
+      [await firstName(a.owner_mobile), a.reg_no, when(a.created_at), a.checker_last4],
       { language: String(await settings.get('owner_check_alert_template_language', 'en')) }).catch((e) => ({ ok: false, error: e.message }));
     if (out.ok) {
       await db.query(`UPDATE owner_check_alerts SET status = 'template', sent_at = now() WHERE id = $1`, [a.id]);
       await remember(a.owner_mobile, a.reg_no);
     } else console.error('[check-alert] template to ••••%s: %s', String(a.owner_mobile).slice(-4), out.error);
   }
+}
+
+/** The owner's first name for a template's greeting, or "there". */
+async function firstName(mobile) {
+  const u = await db.one(
+    `SELECT coalesce(nullif(trim(name), ''), nullif(trim(display_name), ''), nullif(trim(wa_profile_name), '')) AS n
+       FROM users WHERE mobile = $1`, [mobile]).catch(() => null);
+  return String(u?.n || 'there').split(/\s+/)[0].slice(0, 30) || 'there';
 }
 
 /** "Hide from others" acts on this vehicle. */
