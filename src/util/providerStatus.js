@@ -17,7 +17,7 @@
 const db = require('../db');
 
 const LABEL = {
-  vahan: 'VAHAN (RC)', rc_backup: 'RC backup', echallan: 'eChallan', fastag: 'FASTag', whatsapp: 'WhatsApp', razorpay: 'Razorpay', email: 'Email',
+  vahan: 'VAHAN (RC)', rc_backup: 'RC backup', echallan_app: 'eChallan.app', echallan: 'eChallan', fastag: 'FASTag', whatsapp: 'WhatsApp', razorpay: 'Razorpay', email: 'Email',
 };
 
 function record(provider, { ok, ms = null, error = null } = {}) {
@@ -47,13 +47,16 @@ async function all() {
   const now = Date.now();
   // The RC backup shows only once it is set up on this server.
   const backup = require('../vehicle/rcBackup');
-  const keys = Object.keys(LABEL).filter((k) => k !== 'rc_backup' || by.rc_backup || backup.configured());
+  // eChallan.app (the free second source) likewise, once its key is set.
+  const ea = require('../vehicle/echallanApp');
+  const keys = Object.keys(LABEL).filter((k) => (k !== 'rc_backup' || by.rc_backup || backup.configured())
+    && (k !== 'echallan_app' || by.echallan_app || ea.configured()));
   // The paid backup's day so far: calls, limit, spend, and whether it is switched on.
   const backupDay = keys.includes('rc_backup')
     ? { ...(await backup.today().catch(() => ({}))), on: await backup.enabled().catch(() => false),
         cost_paise: await require('./settings').num('rc_backup_cost_paise', 300) }
     : null;
-  return keys.map((key) => {
+  return Promise.all(keys.map(async (key) => {
     const r = by[key];
     const lastAt = r ? Math.max(r.last_ok_at ? new Date(r.last_ok_at).getTime() : 0, r.last_fail_at ? new Date(r.last_fail_at).getTime() : 0) : 0;
     const recent = Array.isArray(r?.recent) ? r.recent : [];
@@ -74,8 +77,9 @@ async function all() {
       recent_ok: recent.slice(0, 10).filter((x) => x === true).length, recent_total: recent.slice(0, 10).length,
       ...(key === 'whatsapp' ? { last_inbound_at: lastIn?.at || null } : {}),
       ...(key === 'rc_backup' ? { backup: backupDay } : {}),
+      ...(key === 'echallan_app' ? { credits_left: Number(await require('./settings').get('echallan_app_credits', '')) || null } : {}),
     };
-  });
+  }));
 }
 
 module.exports = { record, all, LABEL };

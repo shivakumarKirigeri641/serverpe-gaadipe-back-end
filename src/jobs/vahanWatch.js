@@ -44,7 +44,7 @@ async function tick() {
     const reg = await probeReg();
     if (!reg) return null;
     const t0 = Date.now();
-    const r = await require('../ulip/vahan').fetchRc(reg, { noBackup: true });
+    const r = await require('../ulip/vahan').fetchRc(reg, { noBackup: true, ulipOnly: true });
     const up = Boolean(r.ok || r.notFound);
     status.record('vahan', { ok: up, ms: Date.now() - t0, error: up ? null : `${(r.calls || []).map((c) => c.code).join(' / ')} (watchdog)` });
 

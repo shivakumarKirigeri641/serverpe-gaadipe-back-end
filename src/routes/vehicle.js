@@ -49,7 +49,7 @@ const notFound = (res, regNo, message) =>
  * One dataset, cache-first.
  * Returns { data, source, cached, age_minutes, calls } or an error shape.
  */
-async function load(kind, regNo, refresh, debug = false, noBackup = false) {
+async function load(kind, regNo, refresh, debug = false, noBackup = false, ulipOnly = false) {
   const key = `${kind}:${regNo}`;
 
   if (!refresh && !debug) {
@@ -62,15 +62,25 @@ async function load(kind, regNo, refresh, debug = false, noBackup = false) {
   }
 
   const fn = kind === 'rc' ? vahan.fetchRc : kind === 'challan' ? echallan.fetchChallans : fastag.fetchFastag;
-  const r = await fn(regNo, { includeRaw: debug, noBackup });
+  let r = await fn(regNo, { includeRaw: debug, noBackup, ulipOnly });
+  // Challans, second source (user, 2026-10-05): ULIP's e-Challan failed, so
+  // eChallan.app (free) — unless only ULIP was asked for.
+  if (kind === 'challan' && !r.ok && !ulipOnly) {
+    const alt = await require('../vehicle/echallanApp').challans(regNo).catch(() => null);
+    if (alt?.ok) {
+      console.warn('[challan] %s served by eChallan.app after ULIP failed (%s)', regNo, r.code || '');
+      r = { ok: true, data: alt.data, source: 'ECHALLANAPP', ulipFailed: true,
+            calls: [...(r.calls || []), { path: 'ECHALLANAPP', outcome: 'FOUND', ms: alt.ms }] };
+    }
+  }
   // The status strip (user, 2026-10-01): a live call's outcome — "not found" is an answer.
   // The VAHAN light is ULIP's own: an answer from the paid RC backup does not
   // turn it green (the backup has its own light).
   require('../util/providerStatus').record({ rc: 'vahan', challan: 'echallan', fastag: 'fastag' }[kind], {
-    ok: Boolean((r.ok || r.notFound) && !r.ulipFailed && r.source !== 'RCBACKUP'),
+    ok: Boolean((r.ok || r.notFound) && !r.ulipFailed && !['RCBACKUP', 'ECHALLANAPP'].includes(r.source)),
     ms: (r.calls || []).reduce((a, c) => a + (Number(c.ms) || 0), 0) || null,
-    error: (r.ok || r.notFound) && !r.ulipFailed && r.source !== 'RCBACKUP' ? null
-      : `${(r.calls || []).filter((c) => c.path !== 'RCBACKUP').map((c) => c.code).filter(Boolean).join(' / ') || r.code || ''} ${r.ulipFailed || r.source === 'RCBACKUP' ? '(answered by the RC backup)' : r.error || ''}`.trim(),
+    error: (r.ok || r.notFound) && !r.ulipFailed && !['RCBACKUP', 'ECHALLANAPP'].includes(r.source) ? null
+      : `${(r.calls || []).filter((c) => !['RCBACKUP', 'ECHALLANAPP'].includes(c.path)).map((c) => c.code).filter(Boolean).join(' / ') || r.code || ''} ${r.ulipFailed ? `(answered by ${r.source === 'ECHALLANAPP' ? 'eChallan.app' : 'the RC backup'})` : r.error || ''}`.trim(),
   });
 
   if (r.ok) {
@@ -116,6 +126,8 @@ function check(req, res) {
            debug: String(req.query.debug || '') === '1',
            // backup=0: ULIP only, never the paid RC backup (jobs/waitlist.js asks whether ULIP is back).
            noBackup: String(req.query.backup || '') === '0',
+           // ulip_only=1: ULIP alone — not even the free eChallan.app (the VAHAN watchdog, the admin's Check vehicle).
+           ulipOnly: String(req.query.ulip_only || '') === '1',
            // rc_saved=1: if the live RC fails, carry on with the RC we last saved
            // (jobs/watch.js — challans and FASTag are still checked live).
            rcSaved: String(req.query.rc_saved || '') === '1',
@@ -125,13 +137,13 @@ function check(req, res) {
 /* ------------------------------------------------------------------ full */
 router.get('/vehicle/:regNo', async (req, res) => {
   const ctx = check(req, res); if (!ctx) return;
-  const { regNo, refresh, debug, allChallans, noBackup, rcSaved } = ctx;
+  const { regNo, refresh, debug, allChallans, noBackup, rcSaved, ulipOnly } = ctx;
   const started = Date.now();
 
   try {
     // RC first and alone: if the vehicle does not exist there is no point
     // spending calls on challans and FASTag for it.
-    let rc = await load('rc', regNo, refresh, debug, noBackup);
+    let rc = await load('rc', regNo, refresh, debug, noBackup, ulipOnly);
     if (rc.notFound) return notFound(res, regNo, rc.error);
     // Monitoring (user, 2026-10-02): VAHAN down is no reason to stop checking
     // challans — the RC saved at the last lookup stands in, marked rc_saved.
@@ -149,7 +161,7 @@ router.get('/vehicle/:regNo', async (req, res) => {
     }
 
     const [challan, tag] = await Promise.all([
-      load('challan', regNo, refresh, debug),
+      load('challan', regNo, refresh, debug, noBackup, ulipOnly),
       load('fastag', regNo, refresh, debug),
     ]);
 

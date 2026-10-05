@@ -276,8 +276,26 @@ async function fetchRc(regNo, opts = {}) {
  * backup is off, over its daily limit, or fails too, ULIP's failure stands.
  */
 async function backup(regNo, calls, opts, failure) {
-  // The waiting list asks only "is ULIP back?" — never the paid backup (noBackup).
-  if (opts.noBackup) return failure;
+  /*
+   * THE ORDER (user, 2026-10-05): ULIP (free) -> eChallan.app (free) -> IDSPay (₹3).
+   *   ulipOnly   ULIP and nothing else — the VAHAN watchdog and the admin's
+   *              Check vehicle ask "is ULIP itself answering?"
+   *   noBackup   no PAID backup — the free eChallan.app is still tried
+   */
+  if (opts.ulipOnly) return failure;
+  const free = await require('../vehicle/echallanApp').rc(regNo).catch((e) => {
+    console.error('[vahan] eChallan.app threw:', e.message);
+    return null;
+  });
+  if (free) {
+    calls.push({ path: 'ECHALLANAPP', outcome: free.outcome, code: free.code, ms: free.ms });
+    if (free.outcome === 'FOUND') {
+      console.warn(`[vahan] ${regNo} served by eChallan.app after ULIP failed (${failure.code})`);
+      return { ok: true, data: free.data, source: 'ECHALLANAPP', fallback: true, ulipFailed: true, calls };
+    }
+    // Their "not found" is not final: IDSPay reads a different source.
+  }
+  if (opts.noBackup) return { ...failure, calls };
   const b = await require('../vehicle/rcBackup').lookup(regNo).catch((e) => {
     console.error('[vahan] backup threw:', e.message);
     return null;

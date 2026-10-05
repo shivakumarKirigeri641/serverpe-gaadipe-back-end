@@ -1035,8 +1035,10 @@ router.get('/check/:regNo', needs('lookup'), safe(async (req, res) => {
   const data = await gateway.full(parsed.regNo, {
     refresh: req.query.refresh === '1' ? 1 : undefined,
     challans: req.query.challans === 'all' ? 'all' : undefined,
-    // ULIP only — the admin's own checks never use the paid RC backup (user, 2026-10-02).
+    // ULIP only — the admin's own checks never use the paid RC backup (user,
+    // 2026-10-02), nor the free eChallan.app: this is how you see ULIP itself.
     backup: 0,
+    ulip_only: 1,
   });
   await auth.audit({ adminId: req.admin.id, action: 'admin_check', ip: ipOf(req),
                      detail: { reg_no: parsed.regNo, refresh: req.query.refresh === '1' } });
