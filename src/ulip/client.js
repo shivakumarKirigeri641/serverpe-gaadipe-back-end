@@ -26,7 +26,12 @@
 
 const { config } = require('../config');
 
-const state = { token: null, obtainedAt: 0, inflight: null, lockedUntil: 0, lockedWhy: null };
+const state = {
+  token: null, obtainedAt: 0, inflight: null, lockedUntil: 0, lockedWhy: null,
+  refusals: 0,          // refused logins in a row; each one doubles the pause
+  attempts: [],         // when each login was tried (the hourly budget)
+  restored: false,      // the saved pause has been read back after a restart
+};
 
 /*
  * A LOCKED ACCOUNT IS LEFT ALONE (2026-10-05). ULIP answered the login with
@@ -37,20 +42,61 @@ const state = { token: null, obtainedAt: 0, inflight: null, lockedUntil: 0, lock
  * ULIP_LOGIN_PAUSE_MINUTES (30): lookups fail at once with "ULIP login failed",
  * so they go straight to eChallan.app and the RC backup, and the admin is told
  * once. The first login after the pause tries again.
+ *
+ * NEVER LOCK AGAIN (user, 2026-10-05: "please do not lock again"):
+ *   - each refusal in a row doubles the pause: 30 → 60 → 120 … up to 6 hours
+ *   - at most ULIP_LOGIN_MAX_PER_HOUR (6) login tries in any hour, whatever the
+ *     reason; past that, lookups skip ULIP without asking it
+ *   - the pause is saved (app_settings ulip_login_paused_until), so a restart
+ *     or a deploy does not try again before it ends
+ *   - ULIP_LOGIN_OFF=1 in .env stops every ULIP login outright
  */
-const PAUSE_MS = () => (Number(process.env.ULIP_LOGIN_PAUSE_MINUTES) || 30) * 60000;
+const BASE_PAUSE_MIN = () => Number(process.env.ULIP_LOGIN_PAUSE_MINUTES) || 30;
+const MAX_PAUSE_MIN = 360;
+const MAX_PER_HOUR = () => Number(process.env.ULIP_LOGIN_MAX_PER_HOUR) || 6;
+const loginsOff = () => /^(1|true|yes|on)$/i.test(String(process.env.ULIP_LOGIN_OFF || ''));
+
+function savePause() {
+  try {
+    require('../db').query(
+      `INSERT INTO app_settings (key, value) VALUES ('ulip_login_paused_until', $1)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, modified_at = now()`,
+      [JSON.stringify({ until: state.lockedUntil, why: state.lockedWhy, refusals: state.refusals })]).catch(() => {});
+  } catch { /* saving is a nicety; the pause in memory still holds */ }
+}
+
+/** After a restart, the pause that was running before it (read once). */
+async function restorePause() {
+  if (state.restored) return;
+  state.restored = true;
+  try {
+    const row = await require('../db').one(`SELECT value FROM app_settings WHERE key = 'ulip_login_paused_until'`);
+    const saved = row?.value ? JSON.parse(row.value) : null;
+    // The count of refusals carries over even after the pause ended, so the next refusal pauses longer.
+    if (saved) state.refusals = Math.max(state.refusals, Number(saved.refusals) || 0);
+    if (saved && Number(saved.until) > Date.now() && Number(saved.until) > state.lockedUntil) {
+      state.lockedUntil = Number(saved.until);
+      state.lockedWhy = saved.why || 'refused before the restart';
+      console.warn('[ulip] login pause carried over the restart: %d more min', Math.ceil((state.lockedUntil - Date.now()) / 60000));
+    }
+  } catch { /* no saved pause — carry on */ }
+}
+
 function pauseLogins(why) {
   const first = Date.now() >= state.lockedUntil;
-  state.lockedUntil = Date.now() + PAUSE_MS();
+  state.refusals += 1;
+  const mins = Math.min(BASE_PAUSE_MIN() * 2 ** (state.refusals - 1), MAX_PAUSE_MIN);
+  state.lockedUntil = Date.now() + mins * 60000;
   state.lockedWhy = why;
   state.token = null;
+  savePause();
   if (!first) return;
-  console.error('[ulip] login refused (%s) — no ULIP logins for %d min', why, PAUSE_MS() / 60000);
+  console.error('[ulip] login refused (%s, %d in a row) — no ULIP logins for %d min', why, state.refusals, mins);
   try {
     require('../util/adminPing').ping({
       key: 'ulip_login_refused', severity: 'critical', source: 'vehicle_api',
       title: /lock/i.test(why) ? '🔒 ULIP account is LOCKED' : '🔒 ULIP refused the login',
-      text: `ULIP said: "${why}". GaadiPe has stopped logging in to ULIP for ${PAUSE_MS() / 60000} minutes `
+      text: `ULIP said: "${why}". GaadiPe has stopped logging in to ULIP for ${mins} minutes `
         + '(repeated failed logins keep an account locked) and is using eChallan.app and the RC backup meanwhile. '
         + 'Ask ULIP support to unlock the account; it retries by itself after the pause.',
     }).catch(() => {});
@@ -95,6 +141,7 @@ async function login() {
   }
   state.token = token;
   state.obtainedAt = Date.now();
+  if (state.refusals) { state.refusals = 0; savePause(); }
   console.log('[ulip] logged in, token cached');
   return token;
 }
@@ -103,12 +150,22 @@ async function login() {
 async function getToken({ force = false } = {}) {
   const fresh = state.token && (Date.now() - state.obtainedAt) < config.ulip.tokenTtlMs;
   if (fresh && !force) return state.token;
-  // Logins paused after a refusal (see pauseLogins): fail at once, without asking ULIP.
+  if (state.inflight) return state.inflight;
+  // Every guard below fails at once, without asking ULIP (see pauseLogins).
+  if (loginsOff()) throw new Error('ULIP login failed: switched off (ULIP_LOGIN_OFF)');
+  await restorePause();
   if (Date.now() < state.lockedUntil) {
     const mins = Math.ceil((state.lockedUntil - Date.now()) / 60000);
     throw new Error(`ULIP login failed: paused for ${mins} more min after "${state.lockedWhy}" (not retried, to let the account unlock)`);
   }
-  if (!state.inflight) state.inflight = login().finally(() => { state.inflight = null; });
+  const hourAgo = Date.now() - 3600e3;
+  state.attempts = state.attempts.filter((t) => t > hourAgo);
+  if (state.attempts.length >= MAX_PER_HOUR()) {
+    throw new Error(`ULIP login failed: ${state.attempts.length} login tries in the last hour (limit ${MAX_PER_HOUR()}), skipped to protect the account`);
+  }
+  if (state.inflight) return state.inflight;      // another caller started one while we waited
+  state.attempts.push(Date.now());
+  state.inflight = login().finally(() => { state.inflight = null; });
   return state.inflight;
 }
 
