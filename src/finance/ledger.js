@@ -220,13 +220,25 @@ function total(rows) {
 async function periodMoney(from, to, prefetched) {
   const { rows, rates: R } = prefetched || await entries({ from, to });
   const t = total(rows);
-  const [api, wa, sms] = await Promise.all([
-    db.one(`SELECT coalesce(sum(cost_paise), 0)::int AS c, count(*)::int AS n FROM api_calls WHERE created_at >= $1 AND created_at < $2`, [from, to]),
+  /*
+   * THE RC BACKUP, EVERY CALL (user, 2026-10-05). api_calls holds a backup
+   * call only when its lookup was saved (a success on WhatsApp or the site);
+   * one that failed, or was made for a paid report, was missing. Every call is
+   * journalled as event_log 'rc_backup_call' before it is made, so the
+   * backup's cost is counted from there — each call at rc_backup_cost_paise —
+   * and its api_calls rows are left out so nothing is counted twice.
+   */
+  const [api, wa, sms, backup] = await Promise.all([
+    db.one(`SELECT coalesce(sum(cost_paise), 0)::int AS c, count(*)::int AS n FROM api_calls
+             WHERE created_at >= $1 AND created_at < $2 AND provider_path IS DISTINCT FROM 'RCBACKUP'`, [from, to]),
     db.one(`SELECT count(*)::int AS n, ${waCostSql('m', R)}::int AS cost FROM whatsapp_messages m WHERE m.direction = 'out' AND m.message_type = 'template'
              AND m.created_at >= $1 AND m.created_at < $2`, [from, to]),
     db.one(`SELECT count(*)::int AS n FROM site_otps WHERE created_at >= $1 AND created_at < $2`, [from, to]).catch(() => ({ n: 0 })),
+    db.one(`SELECT count(*)::int AS n FROM event_log WHERE kind = 'rc_backup_call' AND created_at >= $1 AND created_at < $2`, [from, to]).catch(() => ({ n: 0 })),
   ]);
-  const apiAll = api.c;
+  const backupRate = await settings.num('rc_backup_cost_paise', 300);
+  const backupCost = backup.n * backupRate;
+  const apiAll = api.c + backupCost;
   const waAll = Number(wa.cost || 0);
   const smsAll = sms.n * R.sms_rate_paise;
   const unattributed = Math.max(0, apiAll - t.api_cost_paise) + Math.max(0, waAll - t.whatsapp_cost_paise) + smsAll;
@@ -235,7 +247,8 @@ async function periodMoney(from, to, prefetched) {
   return {
     ...t,
     revenue_paise: t.gross_paise,
-    api_cost_total_paise: Math.max(apiAll, t.api_cost_paise), api_calls: api.n,
+    api_cost_total_paise: Math.max(apiAll, t.api_cost_paise), api_calls: api.n + backup.n,
+    ulip_cost_paise: api.c, rc_backup_calls: backup.n, rc_backup_cost_paise: backupCost, rc_backup_rate_paise: backupRate,
     whatsapp_cost_total_paise: Math.max(waAll, t.whatsapp_cost_paise), whatsapp_templates: wa.n,
     sms_cost_paise: smsAll, messaging_paise: Math.max(waAll, t.whatsapp_cost_paise) + smsAll,
     transactions_net_paise: t.net_paise, unattributed_cost_paise: unattributed,

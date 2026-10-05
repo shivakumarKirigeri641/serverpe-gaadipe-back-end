@@ -49,12 +49,63 @@ function group(rows, keyOf) {
   });
 }
 
+/*
+ * PROFIT & LOSS (user, 2026-10-05): the business as a whole for the period —
+ * what the reports left after GST, Razorpay, ULIP, the RC backup and
+ * messaging, then GaadiPe's ad spend and the fixed costs. Ads come from the
+ * Ad spend page; a day with no entry counts pnl_ads_daily_paise. Fixed costs
+ * are pnl_fixed_monthly_paise spread over the period's days.
+ */
+async function profitAndLoss(r, money) {
+  const settings = require('../util/settings');
+  const days = Math.max(1, Math.ceil((r.to - r.from) / 86400000 - 0.01));
+  const ist = (d) => new Date(new Date(d).getTime() + 330 * 60000).toISOString().slice(0, 10);
+  const entered = await db.one(
+    `SELECT coalesce(sum(amount_paise), 0)::bigint AS paise, count(DISTINCT day)::int AS days
+       FROM ad_spend WHERE product = 'gaadipe' AND day >= $1::date AND day < $2::date`, [ist(r.from), ist(r.to)])
+    .catch(() => ({ paise: 0, days: 0 }));
+  const dailyAds = await settings.num('pnl_ads_daily_paise', 15000);
+  const assumedDays = Math.max(0, days - Number(entered.days || 0));
+  const ads = Number(entered.paise || 0) + assumedDays * dailyAds;
+  const monthlyFixed = await settings.num('pnl_fixed_monthly_paise', 0);
+  const fixed = Math.round((monthlyFixed * days) / 30);
+  const operating = money.net_paise;
+  const profit = operating - ads - fixed;
+  const paid = Number(money.payments || 0);
+  return {
+    days,
+    revenue_paise: money.gross_paise,
+    gst_paise: money.gst_paise,
+    refund_paise: money.refund_paise,
+    net_revenue_paise: money.net_revenue_paise,
+    gateway_paise: money.gateway_paise,
+    ulip_cost_paise: money.ulip_cost_paise,
+    rc_backup_calls: money.rc_backup_calls,
+    rc_backup_cost_paise: money.rc_backup_cost_paise,
+    rc_backup_rate_paise: money.rc_backup_rate_paise,
+    messaging_paise: money.messaging_paise,
+    operating_paise: operating,
+    ads_paise: ads, ads_entered_paise: Number(entered.paise || 0), ads_entered_days: Number(entered.days || 0),
+    ads_assumed_days: assumedDays, ads_daily_paise: dailyAds,
+    fixed_paise: fixed, fixed_monthly_paise: monthlyFixed,
+    profit_paise: profit,
+    paid_reports: paid,
+    per_report_operating_paise: paid ? Math.round(operating / paid) : null,
+    per_report_profit_paise: paid ? Math.round(profit / paid) : null,
+    // Reports a period like this would need to cover ads and fixed costs, at
+    // the take-home of a report with ULIP working (net revenue − gateway − messaging).
+    take_home_per_report_paise: paid
+      ? Math.round((money.net_revenue_paise - money.gateway_paise - money.messaging_paise) / paid) : null,
+  };
+}
+
 async function overview(q = {}) {
   const r = period(q);
   const data = await ledger.entries({ from: r.from, to: r.to });
   const money = await ledger.periodMoney(r.from, r.to, data);
   const rows = data.rows;
   const grain = ['day', 'week', 'month'].includes(q.grain) ? q.grain : (r.to - r.from > 62 * 86400000 ? 'month' : 'day');
+  const pnl = await profitAndLoss(r, money);
   const series = group(rows, (x) => bucket(x.paid_at || x.created_at, grain)).sort((a, b) => a.key.localeCompare(b.key));
   return {
     range: { label: r.label, from: r.from, to: r.to },
@@ -67,6 +118,7 @@ async function overview(q = {}) {
       transactions_net_paise: money.transactions_net_paise, unattributed_cost_paise: money.unattributed_cost_paise,
       payments: money.payments, free_reports: money.free_reports, fees_estimated: money.fees_estimated,
     },
+    pnl,
     grain, series,
     by_source: group(rows, (x) => x.source).sort((a, b) => b.revenue_paise - a.revenue_paise),
     by_campaign: group(rows, (x) => x.campaign || '(no campaign)').sort((a, b) => b.revenue_paise - a.revenue_paise),
