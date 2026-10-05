@@ -216,7 +216,16 @@ function read(http, json, regNo, { storeFull = false } = {}) {
  * "not found" is an answer, not a failure. The pause survives a restart.
  */
 let failRun = [];
+/*
+ * NO AUTOMATIC PAUSE (user, 2026-10-05: "remove that pause, customer will
+ * scold me"). Five failed calls used to pause the backup for 30 minutes —
+ * for everyone — even when the failures were about single vehicles ("RC
+ * validation failed"). Now the backup is always tried when ULIP fails. Money
+ * stays protected by rc_backup_daily_limit and the low-balance guard.
+ * rc_backup_auto_pause = true brings the old behaviour back.
+ */
 async function pausedUntil() {
+  if (!await settings.bool('rc_backup_auto_pause', false)) return null;
   const v = await settings.get('rc_backup_paused_until', '');
   const t = v ? new Date(v) : null;
   return t && t > new Date() ? t : null;
@@ -226,6 +235,7 @@ async function noteResult(regNo, failed) {
     if (failRun.length >= 1) failRun = [];
     return;
   }
+  if (!await settings.bool('rc_backup_auto_pause', false)) return;   // never pause (see pausedUntil)
   failRun.push(regNo);
   const after = await settings.num('rc_backup_pause_after', 5);
   if (failRun.length < after || new Set(failRun).size < 3) return;
