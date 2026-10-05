@@ -178,7 +178,7 @@ async function owed(row, list) {
 async function confirmAll(regNo) {
   const out = {};
   let data;
-  try { data = await gateway.rc(regNo); } catch (e) { return out; }
+  try { data = await gateway.rc(regNo, { backup: 0 }); } catch (e) { return out; }
   if (!data?.success) return out;
   const rc = data.rc || data;
   for (const doc of DOCUMENTS) {
@@ -192,7 +192,7 @@ async function confirmAll(regNo) {
 
 async function confirm(regNo, doc) {
   let data;
-  try { data = await gateway.rc(regNo); } catch (e) { return null; }
+  try { data = await gateway.rc(regNo, { backup: 0 }); } catch (e) { return null; }
   if (!data?.success) return null;
 
   const rc = data.rc || data;

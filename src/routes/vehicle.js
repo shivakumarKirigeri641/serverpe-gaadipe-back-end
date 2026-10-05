@@ -201,10 +201,12 @@ router.get('/vehicle/:regNo', async (req, res) => {
 /* ------------------------------------------------------- single datasets */
 const single = (kind, field) => async (req, res) => {
   const ctx = check(req, res); if (!ctx) return;
-  const { regNo, refresh, debug } = ctx;
+  // backup=0 / ulip_only=1 are honoured here too (2026-10-05): this route
+  // ignored them, so an "RC only, no backup" call still paid IDSPay.
+  const { regNo, refresh, debug, noBackup, ulipOnly } = ctx;
   const started = Date.now();
   try {
-    const r = await load(kind, regNo, refresh, debug);
+    const r = await load(kind, regNo, refresh, debug, noBackup, ulipOnly);
     if (r.notFound) return notFound(res, regNo, r.error);
     if (r.failed) {
       return res.status(503).json({ success: false, error: 'upstream_unavailable',
@@ -229,10 +231,10 @@ router.get('/vehicle/:regNo/rc', single('rc', 'rc'));
  */
 router.get('/vehicle/:regNo/challans', async (req, res) => {
   const ctx = check(req, res); if (!ctx) return;
-  const { regNo, refresh, debug } = ctx;
+  const { regNo, refresh, debug, noBackup, ulipOnly } = ctx;
   const started = Date.now();
   try {
-    const r = await load('challan', regNo, refresh, debug);
+    const r = await load('challan', regNo, refresh, debug, noBackup, ulipOnly);
     if (r.notFound) return notFound(res, regNo, r.error);
     if (r.failed) {
       return res.status(503).json({ success: false, error: 'upstream_unavailable',
