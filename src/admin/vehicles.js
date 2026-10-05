@@ -63,8 +63,8 @@ const ymd = (d) => {
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   }
   const t = String(d).trim();
-  if (/^d{4}-d{2}-d{2}/.test(t)) return t.slice(0, 10);
-  const m = t.match(/^(d{1,2})[-/](d{1,2})[-/](d{4})/);   // 31-03-2025
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10);
+  const m = t.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);   // 31-03-2025
   return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : null;
 };
 const soonDays = () => settings.num('vehicle_expiring_days', 30);

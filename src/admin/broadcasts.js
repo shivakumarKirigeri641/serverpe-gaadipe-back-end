@@ -403,7 +403,7 @@ async function preview({ template_name, language = 'en', variables = [], mobiles
  */
 async function peopleByMobile(mobiles) {
   const clean = [...new Set((mobiles || [])
-    .map((m) => String(m).replace(/D/g, '').slice(-10)).filter((m) => m.length === 10))];
+    .map((m) => String(m).replace(/\D/g, '').slice(-10)).filter((m) => m.length === 10))];
   if (!clean.length) return [];
   const { rows } = await db.query(
     `${PEOPLE}

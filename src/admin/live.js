@@ -193,7 +193,7 @@ async function trail(sessionId, { limit = 200 } = {}) {
   const { rows } = await db.query(
     `SELECT id, kind, page, action, reg_no, detail, ip, created_at
        FROM site_activity WHERE session_id = $1
-      ORDER BY id DESC LIMIT $2`, [String(sessionId).replace(/D/g, '') || '0', Math.min(1000, limit)]);
+      ORDER BY id DESC LIMIT $2`, [String(sessionId).replace(/\D/g, '') || '0', Math.min(1000, limit)]);
   return rows.map((r) => ({ ...r, id: String(r.id) }));
 }
 
