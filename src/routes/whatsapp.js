@@ -74,12 +74,67 @@ router.post('/whatsapp/webhook', (req, res) => {
   handle(req.body).catch(e => console.error('[wa] handling failed:', e.message));
 });
 
+const ACCOUNT_FIELDS = {
+  account_update: 'Account update',
+  business_capability_update: 'Business capability update',
+  phone_number_quality_update: 'Phone number quality / limit',
+  phone_number_name_update: 'Display name review',
+  message_template_status_update: 'Template review',
+  message_template_quality_update: 'Template quality',
+  account_review_update: 'Account review',
+  account_alerts: 'Account alert',
+};
+
+/** Record one account-level webhook and tell the admin in plain words. */
+async function accountNews(wabaId, field, value) {
+  await db.query(`INSERT INTO event_log (kind, detail) VALUES ('meta_account_news', $1)`,
+    [JSON.stringify({ waba: wabaId, field, value })]);
+  console.log('[wa] meta %s: %s', field, JSON.stringify(value).slice(0, 300));
+  const event = value.event || value.decision || value.current_limit || value.alert_type || '';
+  const bits = [
+    event && `Event: ${event}`,
+    value.max_daily_conversation_per_phone || value.max_daily_conversations_per_business
+      ? `Limit: ${value.max_daily_conversations_per_business || value.max_daily_conversation_per_phone}` : null,
+    value.current_limit && `Current limit: ${value.current_limit}`,
+    value.max_phone_numbers_per_business && `Phone number cap: ${value.max_phone_numbers_per_business}`,
+    value.display_phone_number && `Number: ${value.display_phone_number}`,
+    value.requested_verified_name && `Name: ${value.requested_verified_name}`,
+    value.message_template_name && `Template: ${value.message_template_name}`,
+    value.reason && `Reason: ${value.reason}`,
+    value.rejection_reason && value.rejection_reason !== 'NONE' && `Reason: ${value.rejection_reason}`,
+    value.alert_description && `${value.alert_description}`,
+  ].filter(Boolean);
+  // Template approvals are routine; everything else is worth a ping.
+  const routine = field === 'message_template_status_update' && value.event === 'APPROVED';
+  const bad = /FAILED|REJECT|DEFERRED|NEED_MORE_INFO|FLAGGED|DISABLED|RESTRICT|DOWNGRADE|RED|BANNED/i.test(JSON.stringify(value));
+  await require('../util/adminPing').ping({
+    key: `meta_news:${field}:${event || Date.now()}`,
+    severity: bad ? 'warning' : 'info', source: 'meta', alert: !routine,
+    title: `📣 Meta: ${ACCOUNT_FIELDS[field]}`,
+    text: bits.length ? bits.join('\n') : JSON.stringify(value).slice(0, 400),
+  }).catch(() => {});
+}
+
 async function handle(body) {
   if (body?.object !== 'whatsapp_business_account') return;
 
   for (const entry of body.entry || []) {
     for (const change of entry.changes || []) {
       const value = change.value || {};
+
+      /*
+       * META'S ACCOUNT NEWS (user, 2026-10-05): the messaging limit decision
+       * (INCREASED_CAPABILITIES_ELIGIBILITY_DEFERRED / FAILED / NEED_MORE_INFO),
+       * a new limit or number cap, quality changes, display name reviews,
+       * template reviews. Kept in event_log and pinged to the admin — Meta
+       * says the upgrade's reason only here. Needs these fields ticked in
+       * App Dashboard → WhatsApp → Configuration → Webhook fields.
+       */
+      if (ACCOUNT_FIELDS[change.field]) {
+        await accountNews(entry.id, change.field, value).catch((e) => console.error('[wa] account news:', e.message));
+        continue;
+      }
+
       const to = value.metadata?.phone_number_id;
 
       // The QuizPe filter. See the header comment.
@@ -171,3 +226,4 @@ async function handle(body) {
 const pausedNotice = new Map();
 
 module.exports = router;
+module.exports._handle = handle;   // tests only
