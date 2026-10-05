@@ -179,6 +179,19 @@ async function list({ status = 'active', severity = null, limit = 100 } = {}) {
   return rows.map((r) => ({ ...r, id: String(r.id) }));
 }
 
+/**
+ * META'S NEWS NOT YET SEEN (user, 2026-10-05): every open alert from Meta's
+ * account webhooks (routes/whatsapp.js accountNews), oldest first. The panel
+ * shows each as a dialog that stays until it is clicked; the click
+ * acknowledges it (ack), so it shows once, on any device.
+ */
+async function metaNews() {
+  const { rows } = await db.query(
+    `SELECT id, created_at, severity, title, description FROM admin_alerts
+      WHERE source = 'meta' AND status = 'open' ORDER BY created_at LIMIT 10`);
+  return rows.map((r) => ({ ...r, id: String(r.id) }));
+}
+
 async function ack(id, adminId) {
   const { rowCount } = await db.query(
     `UPDATE admin_alerts SET status = 'acknowledged', acknowledged_at = now(), acknowledged_by = $2
@@ -206,8 +219,10 @@ async function feed(since, adminId = null) {
                        'whatsapp_direct') AS source
          FROM events e LEFT JOIN users u ON u.id = e.user_id
         WHERE e.name = 'payment_success' AND e.occurred_at > $1 ORDER BY e.occurred_at LIMIT 20`, [from]),
+    // Meta's account news is not a passing pop-up: the panel shows it as a
+    // dialog that waits for a click (metaNews below, user 2026-10-05).
     db.query(`SELECT id, created_at AS at, severity, source, title, description FROM admin_alerts
-               WHERE created_at > $1 ORDER BY created_at LIMIT 20`, [from]),
+               WHERE created_at > $1 AND source IS DISTINCT FROM 'meta' ORDER BY created_at LIMIT 20`, [from]),
     db.query(`SELECT id, resolved_at AS at, severity, source, title FROM admin_alerts
                WHERE resolved_at > $1 AND resolved_by IS NULL AND resolution = 'Cleared by itself'
                ORDER BY resolved_at LIMIT 20`, [from]),
@@ -334,4 +349,4 @@ async function badges() {
             (SELECT count(*) FROM lookup_waitlist WHERE status = 'waiting')::int AS waitlist`);
 }
 
-module.exports = { seenMilestone, check, list, ack, resolve, feed, badges, raise, clear };
+module.exports = { seenMilestone, check, list, ack, resolve, feed, badges, raise, clear, metaNews };

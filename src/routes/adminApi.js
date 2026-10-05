@@ -427,6 +427,7 @@ router.get('/alerts', safe(async (req, res) => res.json({ rows: await alertCente
   status: ['active', 'resolved', 'all'].includes(req.query.status) ? req.query.status : 'active',
   severity: req.query.severity || null,
 }) })));
+router.get('/meta-news', safe(async (_req, res) => res.json({ rows: await alertCenter.metaNews() })));
 router.post('/alerts/:id/ack', safe(async (req, res) => {
   const ok = await alertCenter.ack(req.params.id, req.admin.id);
   if (ok) await auth.audit({ adminId: req.admin.id, action: 'alert_acknowledged', ip: ipOf(req), detail: { alert_id: req.params.id } });
