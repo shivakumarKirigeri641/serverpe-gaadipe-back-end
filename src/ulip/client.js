@@ -26,7 +26,36 @@
 
 const { config } = require('../config');
 
-const state = { token: null, obtainedAt: 0, inflight: null };
+const state = { token: null, obtainedAt: 0, inflight: null, lockedUntil: 0, lockedWhy: null };
+
+/*
+ * A LOCKED ACCOUNT IS LEFT ALONE (2026-10-05). ULIP answered the login with
+ * 403 "Account is Locked". Every lookup used to log in again — about three
+ * failed logins per customer check, plus the watchdog and the waiting list —
+ * and repeated failed logins are what keeps an account locked. Now a refused
+ * login (locked / forbidden / precondition failed) stops all logins for
+ * ULIP_LOGIN_PAUSE_MINUTES (30): lookups fail at once with "ULIP login failed",
+ * so they go straight to eChallan.app and the RC backup, and the admin is told
+ * once. The first login after the pause tries again.
+ */
+const PAUSE_MS = () => (Number(process.env.ULIP_LOGIN_PAUSE_MINUTES) || 30) * 60000;
+function pauseLogins(why) {
+  const first = Date.now() >= state.lockedUntil;
+  state.lockedUntil = Date.now() + PAUSE_MS();
+  state.lockedWhy = why;
+  state.token = null;
+  if (!first) return;
+  console.error('[ulip] login refused (%s) — no ULIP logins for %d min', why, PAUSE_MS() / 60000);
+  try {
+    require('../util/adminPing').ping({
+      key: 'ulip_login_refused', severity: 'critical', source: 'vehicle_api',
+      title: /lock/i.test(why) ? '🔒 ULIP account is LOCKED' : '🔒 ULIP refused the login',
+      text: `ULIP said: "${why}". GaadiPe has stopped logging in to ULIP for ${PAUSE_MS() / 60000} minutes `
+        + '(repeated failed logins keep an account locked) and is using eChallan.app and the RC backup meanwhile. '
+        + 'Ask ULIP support to unlock the account; it retries by itself after the pause.',
+    }).catch(() => {});
+  } catch { /* the ping is never worth a failure here */ }
+}
 
 /* ULIP's documented per-dataset "no record" codes. These END a lookup — no
    fallback, no retry, because no other dataset will find the vehicle either. */
@@ -54,9 +83,14 @@ async function login() {
   if (!token) {
     // 412/403 with "Access denied" is ULIP's IP-whitelist rejection — the usual
     // cause when this works on the server and not on a laptop.
-    const hint = (res.status === 412 || res.status === 403)
-      ? ' — ULIP is IP-whitelisted; this host is probably not on their allow-list'
-      : '';
+    const locked = /locked/i.test(String(body?.message || text));
+    const hint = locked ? ' — the ULIP account is locked'
+      : (res.status === 412 || res.status === 403)
+        ? ' — ULIP is IP-whitelisted; this host is probably not on their allow-list'
+        : '';
+    if (locked || res.status === 403 || res.status === 412 || res.status === 401) {
+      pauseLogins(String(body?.message || `HTTP ${res.status}`).slice(0, 120));
+    }
     throw new Error(`ULIP login failed: HTTP ${res.status}${hint}. ${text.slice(0, 200)}`);
   }
   state.token = token;
@@ -69,6 +103,11 @@ async function login() {
 async function getToken({ force = false } = {}) {
   const fresh = state.token && (Date.now() - state.obtainedAt) < config.ulip.tokenTtlMs;
   if (fresh && !force) return state.token;
+  // Logins paused after a refusal (see pauseLogins): fail at once, without asking ULIP.
+  if (Date.now() < state.lockedUntil) {
+    const mins = Math.ceil((state.lockedUntil - Date.now()) / 60000);
+    throw new Error(`ULIP login failed: paused for ${mins} more min after "${state.lockedWhy}" (not retried, to let the account unlock)`);
+  }
   if (!state.inflight) state.inflight = login().finally(() => { state.inflight = null; });
   return state.inflight;
 }
