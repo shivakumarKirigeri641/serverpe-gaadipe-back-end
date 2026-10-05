@@ -246,6 +246,9 @@ app.listen(config.port, () => {
   require('./jobs/vahanWatch').start(Number(process.env.VAHAN_WATCH_TICK_SECONDS) || 900);
   // Mail to support@gaadipe.in, announced as it arrives (2026-10-04).
   require('./jobs/supportInbox').start(Number(process.env.SUPPORT_INBOX_TICK_SECONDS) || 120);
+  // Broadcast in batches (2026-10-05): the next batch of each plan, when due.
+  setInterval(() => require('./admin/broadcastPlans').tick()
+    .catch((e) => console.error('[plans] tick:', e.message)), 5 * 60 * 1000).unref();
   // Owner verification by RC photo (2026-10-04): every 15 minutes, a free
   // report that could not be issued yet is tried again for anyone whose window
   // is open, and any photo left on disk after its decision is deleted.

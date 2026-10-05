@@ -1830,6 +1830,20 @@ router.post('/broadcasts/send', needs('settings'), safe(async (req, res) => {
   res.json(out);
 }));
 
+/* Broadcast in batches (2026-10-05, src/admin/broadcastPlans.js). */
+router.get('/broadcast-plans', safe(async (_req, res) => res.json(await require('../admin/broadcastPlans').list())));
+router.post('/broadcast-plans', needs('settings'), safe(async (req, res) => {
+  if (req.body?.confirm !== 'SEND') return res.status(400).json({ error: 'confirm', message: 'Type SEND to confirm.' });
+  const out = await require('../admin/broadcastPlans').create(req.body || {}, req.admin.id);
+  if (!out.ok) return res.status(400).json({ error: 'bad_plan', ...out });
+  res.json(out);
+}));
+router.post('/broadcast-plans/:id/:action(pause|resume|cancel)', needs('settings'), safe(async (req, res) => {
+  const out = await require('../admin/broadcastPlans').act(String(req.params.id).replace(/\D/g, '') || '0', req.params.action, req.admin.id);
+  if (!out.ok) return res.status(400).json({ error: 'bad_action', ...out });
+  res.json(out);
+}));
+
 router.post('/broadcasts/:id/cancel', needs('settings'), safe(async (req, res) => {
   const out = await broadcasts.cancel(String(req.params.id).replace(/\D/g, '') || '0');
   await auth.audit({ adminId: req.admin.id, action: 'broadcast_cancelled', ip: ipOf(req),
