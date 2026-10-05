@@ -31,7 +31,9 @@ async function room() {
     `SELECT count(DISTINCT mobile)::int AS used FROM whatsapp_messages
       WHERE direction = 'out' AND message_type = 'template' AND created_at > now() - interval '24 hours'
         AND coalesce(error_message, '') = ''`);
-  return { limit, used: r.used };
+  // QuizPe shares the same Meta limit — counted when linked (util/peer.js, read-only).
+  const quizpe = await require('../util/peer').quizpeUsed().catch(() => null);
+  return { limit, used: r.used + (quizpe || 0), gaadipe: r.used, quizpe };
 }
 
 /** Where each person of a plan stands: reached, waiting in a batch, or tries used. */

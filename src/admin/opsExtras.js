@@ -130,8 +130,13 @@ async function waLimit() {
         AND coalesce(error_message, '') = ''`);
   // Live from Meta (jobs/metaStatus.js): the tier, quality and account checks.
   const meta = await require('../jobs/metaStatus').current().catch(() => null);
-  return { limit, used: r.used, remaining: Math.max(0, limit - r.used), meta,
-    note: 'GaadiPe’s number only. QuizPe shares the same Meta limit and is not counted here — WhatsApp Manager shows the total.' };
+  // QuizPe shares the limit (user, 2026-10-05): its count, read-only, when linked.
+  const quizpe = await require('../util/peer').quizpeUsed().catch(() => null);
+  const used = r.used + (quizpe || 0);
+  return { limit, used, gaadipe: r.used, quizpe, linked: quizpe !== null, remaining: Math.max(0, limit - used), meta,
+    note: quizpe !== null
+      ? `GaadiPe ${r.used} + QuizPe ${quizpe} — they share one Meta limit.`
+      : 'GaadiPe’s number only. QuizPe shares the same Meta limit and is not linked (set PEER_PGDATABASE to count it).' };
 }
 
 /* ─────────────────────────────────────────────────────────── hot leads ── */
