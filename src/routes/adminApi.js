@@ -754,6 +754,11 @@ router.get('/finance', needs('money'), safe(async (req, res) => res.json(
 
 /* ------------------------------------------------------------- customers */
 
+// How many vehicles each customer checked, and how often, per day (2026-10-05).
+router.get('/checks-by-customer', safe(async (req, res) => res.json(await require('../admin/checksByCustomer').list({
+  days: req.query.days, day: req.query.day, min: req.query.min,
+}))));
+
 router.get('/customers', safe(async (req, res) => {
   const bool = (v) => (v === undefined || v === '' ? null : /^(1|true|yes)$/i.test(String(v)));
   res.json(await customers.list({
