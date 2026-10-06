@@ -223,17 +223,27 @@ async function tier() {
     unique_7d: d7.map.size, unique_30d: d30.map.size,
   };
   if (limit < 2000) {
-    // 250 -> 2,000: verify the business, or 2,000 different numbers in 30 days.
+    /*
+     * 250 -> 2,000, AS META SUPPORT TOLD THE USER (2026-10-06) for this verified
+     * account — all three together, then the limit rises by itself:
+     *   125 different customers (half the limit) in a rolling 7 days
+     *   display name APPROVED ("available without review" is not enough; Meta
+     *     starts that review as volume grows)
+     *   quality GREEN
+     */
+    const need = Math.ceil(limit / 2);
+    const nameOk = /^APPROVED$/i.test(String(meta?.name_status || ''));
     out.next = 2000;
     out.paths = [
-      { key: 'verify', label: 'Verify the business', done: verified, status: meta?.business_verification || 'unknown',
-        note: verified ? 'Verified — Meta should raise the limit after reviewing message quality.'
-          : 'Meta Business Suite → Security Centre → Start verification. The quickest way to 2,000.' },
-      { key: 'volume', label: '2,000 different customers in 30 days', have: d30.map.size, need: 2000,
-        note: reachable.n != null && reachable.n < 2000
-          ? `You have ${reachable.n} customers you can message in all, so this way needs more customers first — verification is the way for now.`
-          : 'Templates delivered outside open chats, with high quality.' },
+      { key: 'half', label: `${need} different customers in 7 days`, have: d7.map.size, need, done: d7.map.size >= need,
+        per_day: Math.max(0, Math.ceil((need - d7.map.size) / 7)),
+        note: 'Rolling 7 days — keep it steady every week, GaadiPe and QuizPe together.' },
+      { key: 'name', label: 'Display name approved', done: nameOk, status: meta?.name_status || 'unknown',
+        note: nameOk ? 'Approved.' : 'Meta starts this review by itself as your volume grows — nothing to submit.' },
+      { key: 'quality', label: 'Quality stays green', done: meta?.quality === 'GREEN', status: meta?.quality || 'unknown',
+        note: 'Blocks and reports lower it — steady batches to people who know GaadiPe.' },
     ];
+    out.verified_note = verified ? 'Business verified ✓' : null;
   } else {
     // 2,000 and up: half the limit in 7 days, with good quality.
     const need = Math.ceil(limit / 2);
