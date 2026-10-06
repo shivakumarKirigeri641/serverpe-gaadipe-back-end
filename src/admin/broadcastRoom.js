@@ -133,15 +133,17 @@ async function room() {
  * Order: never had a broadcast first, then the most recently active, then the
  * longest since their last broadcast.
  */
-async function suggest({ size = null } = {}) {
+async function suggest({ size = null, filter = null } = {}) {
   const r = await room();
+  // Within an audience chosen on Broadcast ("Auto-select", user 2026-10-06); everyone when none.
+  const audience = filter ? broadcasts.filterWhere(filter) : 'true';
   const want = Math.max(0, Math.min(size == null ? r.suggest_now : Number(size) || 0, r.suggest_now));
   const gapDays = Math.max(0, await settings.num('broadcast_room_gap_days', 7));
   const skip = new Set([...(await sentWithin(24)).map.keys(), ...await queuedNumbers(), ...await adminNumbers()]);
   const { rows } = await db.query(
     `${broadcasts.PEOPLE}
      SELECT p.*, right(regexp_replace(p.mobile, '\\D', '', 'g'), 10) AS m
-       FROM people p
+       FROM (SELECT * FROM people WHERE ${audience}) p
        LEFT JOIN users u ON u.id = p.user_id
       WHERE NOT p.blocked
         AND NOT coalesce(u.is_internal, false)

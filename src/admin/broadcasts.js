@@ -519,4 +519,4 @@ async function setStatus(name, language, status) {
   return { ok: true, template: row };
 }
 
-module.exports = { FIELDS, FILTERS, KNOWN, PEOPLE, defaults, templates, stored, setStatus, recipients, preview, queue, cancel, list, targets, paramsFor };
+module.exports = { FIELDS, FILTERS, KNOWN, PEOPLE, filterWhere, defaults, templates, stored, setStatus, recipients, preview, queue, cancel, list, targets, paramsFor };
