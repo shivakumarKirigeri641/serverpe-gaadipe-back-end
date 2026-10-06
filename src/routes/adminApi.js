@@ -1846,6 +1846,18 @@ router.post('/broadcast-plans/:id/:action(pause|resume|cancel)', needs('settings
   res.json(out);
 }));
 
+/* Broadcast room (2026-10-06, src/admin/broadcastRoom.js): room now, when more frees, today's batch, the next tier. */
+router.get('/broadcast-room', safe(async (_req, res) => res.json(await require('../admin/broadcastRoom').room())));
+router.get('/broadcast-room/tier', safe(async (_req, res) => res.json(await require('../admin/broadcastRoom').tier())));
+router.get('/broadcast-room/suggest', safe(async (req, res) =>
+  res.json(await require('../admin/broadcastRoom').suggest({ size: req.query.size ?? null }))));
+router.post('/broadcast-room/send', needs('settings'), safe(async (req, res) => {
+  if (req.body?.confirm !== 'SEND') return res.status(400).json({ error: 'confirm', message: 'Type SEND to confirm.' });
+  const out = await require('../admin/broadcastRoom').send(req.body || {}, req.admin.id);
+  if (!out.ok) return res.status(400).json({ error: 'bad_batch', ...out });
+  res.json(out);
+}));
+
 router.post('/broadcasts/:id/cancel', needs('settings'), safe(async (req, res) => {
   const out = await broadcasts.cancel(String(req.params.id).replace(/\D/g, '') || '0');
   await auth.audit({ adminId: req.admin.id, action: 'broadcast_cancelled', ip: ipOf(req),

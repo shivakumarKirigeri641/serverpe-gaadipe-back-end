@@ -47,4 +47,18 @@ async function quizpeUsed() {
   return r ? r[0].n : null;
 }
 
-module.exports = { configured, read, quizpeUsed };
+/**
+ * Each number QuizPe messaged first in the last `hours`, with its latest send:
+ * [{ m: last 10 digits, at }], or null when not linked. The broadcast room
+ * (admin/broadcastRoom.js) needs the times, to say when each slot frees up.
+ */
+async function quizpeRecipients(hours = 24) {
+  return read(
+    `SELECT right(regexp_replace(mobile_number, '\\D', '', 'g'), 10) AS m, max(created_at) AS at
+       FROM whatsapp_messages
+      WHERE direction = 'outbound' AND message_type = 'template' AND created_at > now() - make_interval(hours => $1::int)
+        AND coalesce(status, '') <> 'failed' AND coalesce(error_message, '') = ''
+      GROUP BY 1`, [Math.round(hours)]);
+}
+
+module.exports = { configured, read, quizpeUsed, quizpeRecipients };
