@@ -164,10 +164,11 @@ async function hotLeads() {
          LEFT JOIN users u ON u.mobile = ws.mobile
         WHERE ws.last_inbound_at > now() - interval '24 hours' AND ws.wa_opt_out_at IS NULL
           AND NOT coalesce(u.is_internal, false)
-          AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.kind = 'mobile' AND b.value = ws.mobile AND b.released_at IS NULL)
-          AND NOT EXISTS (SELECT 1 FROM payments q WHERE q.user_id = u.id AND q.status = 'paid' AND q.amount_paise > 0
-                            AND q.paid_at > now() - interval '48 hours'))
+          AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.kind = 'mobile' AND b.value = ws.mobile AND b.released_at IS NULL))
      SELECT o.*,
+            -- Paid in the last two days: not a lead, but in "Everyone" (user, 2026-10-06).
+            (SELECT max(q.paid_at) FROM payments q WHERE q.user_id = o.user_id AND q.status = 'paid' AND q.amount_paise > 0
+               AND q.paid_at > now() - interval '48 hours') AS paid_at,
             co.id AS payment_id, co.amount_paise, co.created_at AS checkout_at, cv.reg_no AS checkout_reg,
             ck.at AS checked_at, ck.reg_no AS checked_reg,
             (SELECT body FROM whatsapp_messages m WHERE m.mobile = o.mobile AND m.direction = 'in' ORDER BY m.id DESC LIMIT 1) AS last_message,
@@ -179,19 +180,24 @@ async function hotLeads() {
        LEFT JOIN LATERAL (SELECT e.created_at AS at, e.detail->>'reg_no' AS reg_no FROM event_log e
                            WHERE e.kind = 'funnel' AND e.detail->>'step' = 'basic_shown' AND e.detail->>'mobile' = o.mobile
                              AND e.created_at > now() - interval '48 hours' ORDER BY e.id DESC LIMIT 1) ck ON true`);
-  const RANK = { checkout: 0, checked: 1, messaged: 2 };
+  /*
+   * EVERYONE (user, 2026-10-06: "one more set — those who checked a vehicle,
+   * sent hi, etc."): every open chat in one list, the three lead stages plus
+   * people who paid in the last two days (stage 'paid', not a lead).
+   */
+  const RANK = { checkout: 0, checked: 1, messaged: 2, paid: 3 };
   const leads = rows.map((r) => {
-    const stage = r.payment_id ? 'checkout' : r.checked_at ? 'checked' : 'messaged';
+    const stage = r.paid_at ? 'paid' : r.payment_id ? 'checkout' : r.checked_at ? 'checked' : 'messaged';
     return {
       stage, user_id: r.user_id ? String(r.user_id) : null, mobile: r.mobile, name: r.name,
       payment_id: r.payment_id ? String(r.payment_id) : null, amount_paise: r.amount_paise, checkout_at: r.checkout_at,
-      checked_at: r.checked_at, reg_no: r.checkout_reg || r.checked_reg || r.pending_reg || null,
+      checked_at: r.checked_at, paid_at: r.paid_at, reg_no: r.checkout_reg || r.checked_reg || r.pending_reg || null,
       last_inbound_at: r.last_inbound_at, paid_before: r.paid_before, last_message: String(r.last_message || '').slice(0, 160),
     };
-  }).map((l) => ({ ...l, at: l.stage === 'checkout' ? l.checkout_at : l.stage === 'checked' ? l.checked_at : l.last_inbound_at }))
+  }).map((l) => ({ ...l, at: l.stage === 'paid' ? l.paid_at : l.stage === 'checkout' ? l.checkout_at : l.stage === 'checked' ? l.checked_at : l.last_inbound_at }))
     // Newest first within each stage, by that stage's own time (user, 2026-10-04).
     .sort((a, b) => RANK[a.stage] - RANK[b.stage] || new Date(b.at) - new Date(a.at));
-  const counts = { checkout: 0, checked: 0, messaged: 0 };
+  const counts = { checkout: 0, checked: 0, messaged: 0, paid: 0, everyone: leads.length };
   for (const l of leads) counts[l.stage] += 1;
   return { leads, counts };
 }

@@ -469,10 +469,24 @@ async function waChecks() {
         const outcome = failed
           ? (d.reason === 'not_found' ? 'Not found in Government records' : 'Lookup failed — records service error')
           : (d.bought ? 'Full report (already bought)' : 'Basic details shown');
+        /*
+         * NEW OR REPEAT (user, 2026-10-06: "append new / existing basic /
+         * existing full"): has this customer checked this vehicle before?
+         *   New vehicle                 first time for them
+         *   Repeat check · basic        seen before, no full report
+         *   Repeat check · full report  they already bought its full report
+         */
+        const before = d.reg_no ? await db.one(
+          `SELECT count(*)::int AS n FROM event_log
+            WHERE kind = 'funnel' AND detail->>'step' = 'basic_shown' AND detail->>'mobile' = $1
+              AND upper(detail->>'reg_no') = upper($2) AND id <> $3 AND created_at <= $4`,
+          [d.mobile, d.reg_no, e.id, e.created_at]) : null;
+        const kindOf = d.bought ? 'Repeat check · full report'
+          : before?.n ? 'Repeat check · basic' : 'New vehicle';
         return {
-          subject: `${failed ? '⚠️' : '🔎'} ${d.reg_no || 'Vehicle'} checked · ${nameOf(w, d.mobile)}`,
+          subject: `${failed ? '⚠️' : '🔎'} ${d.reg_no || 'Vehicle'} checked · ${nameOf(w, d.mobile)} · ${kindOf}`,
           ...T.layout({
-            badge: { text: failed ? 'Check failed' : 'Vehicle checked', tone: failed ? 'watch' : 'info' },
+            badge: { text: failed ? `Check failed · ${kindOf}` : kindOf, tone: failed ? 'watch' : d.bought ? 'good' : 'info' },
             title: `${nameOf(w, d.mobile)} checked ${d.reg_no || 'a vehicle'}`,
             lead: `${T.ist(e.created_at)} · ${outcome}.`,
             sections: [
@@ -482,6 +496,7 @@ async function waChecks() {
                 ['Make · model', v ? [v.maker, v.model].filter(Boolean).join(' · ') : '—'],
                 ['Fuel · type', v ? [v.fuel, v.vehicle_class].filter(Boolean).join(' · ') : '—'],
                 ['Result', outcome],
+                ['Check', before?.n ? `${kindOf} — checked ${before.n} time${before.n === 1 ? '' : 's'} before` : kindOf],
               ] },
               { heading: 'Who', rows: [
                 ['WhatsApp name', w?.profile_name || 'Not shown'],
