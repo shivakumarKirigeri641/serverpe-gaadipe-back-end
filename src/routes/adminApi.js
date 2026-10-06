@@ -1850,7 +1850,7 @@ router.post('/broadcast-plans/:id/:action(pause|resume|cancel)', needs('settings
 router.get('/broadcast-room', safe(async (_req, res) => res.json(await require('../admin/broadcastRoom').room())));
 router.get('/broadcast-room/tier', safe(async (_req, res) => res.json(await require('../admin/broadcastRoom').tier())));
 router.get('/broadcast-room/suggest', safe(async (req, res) =>
-  res.json(await require('../admin/broadcastRoom').suggest({ size: req.query.size ?? null, filter: req.query.filter || null }))));
+  res.json(await require('../admin/broadcastRoom').suggest({ size: req.query.size ?? null, filter: req.query.filter || null, gapDays: req.query.gap_days ?? null }))));
 router.post('/broadcast-room/send', needs('settings'), safe(async (req, res) => {
   if (req.body?.confirm !== 'SEND') return res.status(400).json({ error: 'confirm', message: 'Type SEND to confirm.' });
   const out = await require('../admin/broadcastRoom').send(req.body || {}, req.admin.id);

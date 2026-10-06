@@ -133,35 +133,51 @@ async function room() {
  * Order: never had a broadcast first, then the most recently active, then the
  * longest since their last broadcast.
  */
-async function suggest({ size = null, filter = null } = {}) {
+async function suggest({ size = null, filter = null, gapDays: gapAsked = null } = {}) {
   const r = await room();
   // Within an audience chosen on Broadcast ("Auto-select", user 2026-10-06); everyone when none.
   const audience = filter ? broadcasts.filterWhere(filter) : 'true';
   const want = Math.max(0, Math.min(size == null ? r.suggest_now : Number(size) || 0, r.suggest_now));
-  const gapDays = Math.max(0, await settings.num('broadcast_room_gap_days', 7));
-  const skip = new Set([...(await sentWithin(24)).map.keys(), ...await queuedNumbers(), ...await adminNumbers()]);
-  const { rows } = await db.query(
+  // Rest days: the setting, or what was chosen beside Auto-select (0-30).
+  const asked = gapAsked === null || gapAsked === '' ? NaN : Number(gapAsked);
+  const gapDays = Number.isFinite(asked) ? Math.max(0, Math.min(30, Math.round(asked)))
+    : Math.max(0, await settings.num('broadcast_room_gap_days', 7));
+  const recent = new Set([...(await sentWithin(24)).map.keys(), ...await queuedNumbers()]);
+  const admins = await adminNumbers();
+  // Everyone in the audience, with the facts that leave someone out — so the
+  // panel can say WHY a batch is small (user, 2026-10-06: "0 ticked, why?").
+  const { rows: all } = await db.query(
     `${broadcasts.PEOPLE}
-     SELECT p.*, right(regexp_replace(p.mobile, '\\D', '', 'g'), 10) AS m
+     SELECT p.*, right(regexp_replace(p.mobile, '\\D', '', 'g'), 10) AS m,
+            coalesce(u.is_internal, false) AS internal,
+            coalesce(p.last_message > now() - interval '24 hours', false) AS open_chat,
+            coalesce(p.last_broadcast_at > now() - make_interval(days => $1::int), false) AS rested,
+            (SELECT count(*) FROM whatsapp_broadcast_targets t
+              WHERE t.mobile = p.mobile AND t.status = 'failed' AND t.created_at > now() - interval '30 days') >= 2 AS failing
        FROM (SELECT * FROM people WHERE ${audience}) p
        LEFT JOIN users u ON u.id = p.user_id
-      WHERE NOT p.blocked
-        AND NOT coalesce(u.is_internal, false)
-        AND right(regexp_replace(p.mobile, '\\D', '', 'g'), 10) <> ALL($1::text[])
-        AND (p.last_message IS NULL OR p.last_message < now() - interval '24 hours')
-        AND (p.last_broadcast_at IS NULL OR p.last_broadcast_at < now() - make_interval(days => $2::int))
-        AND (SELECT count(*) FROM whatsapp_broadcast_targets t
-              WHERE t.mobile = p.mobile AND t.status = 'failed' AND t.created_at > now() - interval '30 days') < 2
       ORDER BY p.got_broadcast ASC, greatest(p.last_checked, p.last_message) DESC NULLS LAST,
-               p.last_broadcast_at ASC NULLS FIRST, p.created_at DESC`,
-    [[...skip], gapDays]);
+               p.last_broadcast_at ASC NULLS FIRST, p.created_at DESC`, [gapDays]);
+  const reasonOf = (p) => (p.blocked ? 'blocked'
+    : p.internal || admins.has(p.m) ? 'admin'
+      : recent.has(p.m) ? 'recent'
+        : p.open_chat ? 'open_chat'
+          : p.rested ? 'rested'
+            : p.failing ? 'failed' : null);
+  const left_out = { blocked: 0, admin: 0, recent: 0, open_chat: 0, rested: 0, failed: 0 };
+  const rows = [];
+  for (const p of all) {
+    const why = reasonOf(p);
+    if (why) left_out[why] += 1; else rows.push(p);
+  }
   const pick = rows.slice(0, want).map((p) => ({
     mobile: p.mobile, name: p.display_name || p.wa_profile_name || null, last_vehicle: p.last_vehicle,
     last_active: [p.last_checked, p.last_message].filter(Boolean).sort((a, b) => new Date(a) - new Date(b)).pop() || null,
     last_broadcast_at: p.last_broadcast_at,
     why: !p.got_broadcast ? 'Never had a broadcast' : `Last broadcast ${Math.round((Date.now() - new Date(p.last_broadcast_at)) / 864e5)} days ago`,
   }));
-  return { room: r, eligible: rows.length, size: pick.length, gap_days: gapDays, rows: pick, templates: await announcementTemplates() };
+  return { room: r, audience: all.length, eligible: rows.length, size: pick.length, gap_days: gapDays, left_out,
+           rows: pick, templates: await announcementTemplates() };
 }
 
 /** The announcement templates Meta approved — the only ones this batch may use. */
