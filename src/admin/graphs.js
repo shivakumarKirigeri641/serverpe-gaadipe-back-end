@@ -402,6 +402,109 @@ async function servicesOf({ days, provider }) {
   return { provider, errors: rows };
 }
 
+/* ───────────────────────────── today, live ───────────────────────────── */
+
+/*
+ * TODAY, LIVE (user, 2026-10-06: "today's timeline about customer, vehicle
+ * check, failed or success, full report and more in one graph, every minute").
+ * What happened today, in time buckets from midnight IST (or the last hour /
+ * three hours), each bucket counting:
+ *
+ *   hi          different people who said hi
+ *   checked     free checks shown (a vehicle found)
+ *   not_found   lookups where the vehicle does not exist
+ *   failed      lookups that failed (the services were down)
+ *   tapped      taps on the ₹19 full report
+ *   paid        full reports paid, and the money
+ *   stops       people who said STOP
+ *
+ * From the same funnel events and payments as the other graphs, so the numbers
+ * agree with them. The panel asks again every minute.
+ */
+const WINDOWS = {
+  hour: { minutes: 60, bucket: 1, label: 'Last 60 minutes' },
+  three: { minutes: 180, bucket: 5, label: 'Last 3 hours' },
+  today: { minutes: null, bucket: 15, label: 'Today' },
+};
+const LIVE_STEPS = ['hi', 'basic_shown', 'lookup_failed', 'buy_tapped', 'opt_out'];
+
+async function today({ window: w = 'today' } = {}) {
+  const win = WINDOWS[w] || WINDOWS.today;
+  const step = win.bucket * 60;
+  // The start: IST midnight today, or now minus the window — on a bucket boundary.
+  const mid = await db.one(`SELECT extract(epoch FROM date_trunc('day', now() ${IST}) AT TIME ZONE 'Asia/Kolkata')::bigint AS t`);
+  const startEpoch = win.minutes ? Math.floor((Date.now() / 1000 - win.minutes * 60) / step) * step + step : Number(mid.t);
+  const start = new Date(startEpoch * 1000).toISOString();
+  const B = (col) => `(floor(extract(epoch FROM ${col}) / $2) * $2)::bigint`;
+  const [ev, pay, totals, feed] = await Promise.all([
+    db.query(
+      `SELECT ${B('created_at')} AS t, detail->>'step' AS step,
+              CASE WHEN detail->>'reason' = 'not_found' THEN 'not_found' ELSE 'other' END AS reason,
+              count(*)::int AS n, count(DISTINCT detail->>'mobile')::int AS people
+         FROM event_log WHERE kind = 'funnel' AND created_at >= $1::timestamptz AND detail->>'step' = ANY($3::text[])
+        GROUP BY 1, 2, 3`, [start, step, LIVE_STEPS]),
+    db.query(
+      `SELECT ${B('paid_at')} AS t, count(*)::int AS n, sum(amount_paise)::bigint AS paise
+         FROM payments p WHERE ${PAID} AND paid_at >= $1::timestamptz GROUP BY 1`, [start, step]),
+    // Today's totals, whatever the window.
+    db.one(
+      `WITH f AS (SELECT * FROM event_log WHERE kind = 'funnel' AND created_at >= to_timestamp($1))
+       SELECT (SELECT count(DISTINCT detail->>'mobile') FROM f WHERE detail->>'step' = 'hi')::int AS hi,
+              (SELECT count(*) FROM f WHERE detail->>'step' = 'basic_shown')::int AS checked,
+              (SELECT count(*) FROM f WHERE detail->>'step' = 'lookup_failed' AND detail->>'reason' = 'not_found')::int AS not_found,
+              (SELECT count(*) FROM f WHERE detail->>'step' = 'lookup_failed' AND coalesce(detail->>'reason', '') <> 'not_found')::int AS failed,
+              (SELECT count(*) FROM f WHERE detail->>'step' = 'buy_tapped')::int AS tapped,
+              (SELECT count(*) FROM f WHERE detail->>'step' = 'opt_out')::int AS stops,
+              (SELECT count(*) FROM payments p WHERE ${PAID} AND paid_at >= to_timestamp($1))::int AS paid,
+              (SELECT coalesce(sum(amount_paise), 0) FROM payments p WHERE ${PAID} AND paid_at >= to_timestamp($1))::bigint AS revenue_paise`,
+      [Number(mid.t)]),
+    // The latest moments, newest first.
+    db.query(
+      `(SELECT e.created_at AS at, e.detail->>'step' AS step, e.detail->>'reason' AS reason, e.detail->>'reg_no' AS reg_no,
+               e.detail->>'mobile' AS mobile, NULL::bigint AS paise
+          FROM event_log e WHERE e.kind = 'funnel' AND e.created_at >= $1::timestamptz AND e.detail->>'step' = ANY($2::text[])
+         ORDER BY e.created_at DESC LIMIT 30)
+       UNION ALL
+       (SELECT p.paid_at, 'paid', NULL, NULL, u.mobile, p.amount_paise
+          FROM payments p LEFT JOIN users u ON u.id = p.user_id
+         WHERE ${PAID} AND p.paid_at >= $1::timestamptz ORDER BY p.paid_at DESC LIMIT 10)
+       ORDER BY at DESC LIMIT 30`, [start, LIVE_STEPS]),
+  ]);
+
+  // Every bucket from the start to now, zeros included, so the line moves on.
+  const now = Math.floor(Date.now() / 1000 / step) * step;
+  const by = new Map();
+  for (let t = Math.floor(startEpoch / step) * step; t <= now; t += step) {
+    by.set(t, { t: new Date(t * 1000).toISOString(), hi: 0, checked: 0, not_found: 0, failed: 0, tapped: 0, paid: 0, revenue_paise: 0, stops: 0 });
+  }
+  for (const r of ev.rows) {
+    const b = by.get(Number(r.t)); if (!b) continue;
+    if (r.step === 'hi') b.hi += r.people;
+    else if (r.step === 'basic_shown') b.checked += r.n;
+    else if (r.step === 'lookup_failed') b[r.reason === 'not_found' ? 'not_found' : 'failed'] += r.n;
+    else if (r.step === 'buy_tapped') b.tapped += r.n;
+    else if (r.step === 'opt_out') b.stops += r.n;
+  }
+  for (const r of pay.rows) {
+    const b = by.get(Number(r.t)); if (!b) continue;
+    b.paid += r.n; b.revenue_paise += Number(r.paise || 0);
+  }
+  const names = feed.rows.length ? await db.query(
+    `SELECT mobile, coalesce(display_name, wa_profile_name) AS name FROM users WHERE mobile = ANY($1::text[])`,
+    [[...new Set(feed.rows.map((r) => r.mobile).filter(Boolean))]]) : { rows: [] };
+  const nameOf = new Map(names.rows.map((r) => [r.mobile, r.name]));
+  return {
+    window: w in WINDOWS ? w : 'today', label: win.label, bucket_minutes: win.bucket,
+    series: [...by.values()],
+    totals: { ...totals, revenue_paise: Number(totals.revenue_paise) },
+    feed: feed.rows.map((r) => ({
+      at: r.at, step: r.step, reason: r.reason, reg_no: r.reg_no, paise: r.paise == null ? null : Number(r.paise),
+      mobile: r.mobile, masked: mask(r.mobile), name: nameOf.get(r.mobile) || null,
+    })),
+    checked_at: new Date().toISOString(),
+  };
+}
+
 /* ─────────────────────────────── helpers ──────────────────────────────── */
 
 function iso(d) {
@@ -411,7 +514,7 @@ function iso(d) {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
 }
 
-const PAGES = { overview, funnel, money, customers, vehicles, whatsapp, services };
+const PAGES = { overview, funnel, money, customers, vehicles, whatsapp, services, today };
 const DRILLS = {
   overview: overviewDay, funnel: funnelStep, money: moneyDay, customers: customersOf,
   vehicles: vehiclesOf, whatsapp: whatsappDay, services: servicesOf,
