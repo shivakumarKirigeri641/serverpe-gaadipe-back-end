@@ -365,9 +365,9 @@ async function signOut(token, ctx = {}) {
  * ARCHIVED, NOT REACTIVATED (user, 2026-10-07: "if they sign in again it is a full
  * fresh start, no older data given — but the admin panel has it"). The account and
  * every row it owns stay exactly where they are; only its mobile is set aside as
- * "a<id>-<mobile>" (archived_mobile keeps the number), so the next sign-in with that
- * number creates a new, empty account. Admin searches by the last ten digits still
- * find the archived one.
+ * "archived-<id>" (archived_mobile keeps the number; migration 131), so the next
+ * sign-in with that number creates a new, empty account, and nothing that matches
+ * the last ten digits finds the old and the new account together.
  */
 async function deactivate(userId, { reason } = {}) {
   await db.tx(async (c) => {
@@ -375,7 +375,7 @@ async function deactivate(userId, { reason } = {}) {
       `UPDATE users SET deactivated_at = now(), deactivated_reason = $2,
               is_paused = true, modified_at = now(),
               archived_at = now(), archived_mobile = mobile,
-              mobile = 'a' || id || '-' || mobile
+              mobile = 'archived-' || id
         WHERE id = $1 AND archived_at IS NULL`, [userId, reason || null]);
     await c.query(`UPDATE watches SET is_active = false, modified_at = now() WHERE user_id = $1`, [userId]);
     await c.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'deactivated'
