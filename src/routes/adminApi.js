@@ -924,6 +924,19 @@ router.get('/web/insights', needs('dashboard.view'), safe(async (req, res) => re
 router.get('/web/breakdown', needs('dashboard.view'), safe(async (req, res) => res.json(await insightsMod.breakdown({ range: req.query.range }))));
 router.get('/web/vehicles/:reg', needs('vehicles.view'), safe(async (req, res) => res.json(await insightsMod.vehicle(req.params.reg))));
 
+/* The server's own log, live (util/consoleTap.js): technical roles and owners. */
+router.get('/web/server-log', (req, res, next) => (auth.can(req.admin.role, 'system.view') || auth.can(req.admin.role, 'admins') ? next() : needs('system.view')(req, res, next)),
+  safe(async (req, res) => res.json(require('../util/consoleTap').read({ since: req.query.since, level: req.query.level, q: req.query.q, limit: req.query.limit }))));
+
+/* A customer's new mobile number: transfer requests to approve or reject (src/admin/transfers.js). */
+const transfers = require('../admin/transfers');
+router.get('/web/transfers', needs('customers.view'), safe(async (req, res) => res.json(await transfers.list({ status: req.query.status }))));
+router.post('/web/transfers/:id/:action(approve|reject)', needs('block'), safe(async (req, res) => {
+  const out = await transfers.decide(req.params.id, { approve: req.params.action === 'approve', note: req.body?.note, adminId: req.admin.id });
+  if (out.ok) await auth.audit({ adminId: req.admin.id, action: `transfer_${out.status}`, ip: ipOf(req), detail: { transfer_id: req.params.id, moved: out.moved, emailed: out.mail?.emailed } });
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+
 /* Minute-by-minute analytics and the live funnel (src/admin/analytics.js). */
 const analytics = require('../admin/analytics');
 router.get('/web/analytics/series', needs('dashboard.view'), safe(async (req, res) => res.json(await analytics.series({ range: req.query.range }))));
@@ -1869,7 +1882,16 @@ router.get('/customer-emails', safe(async (req, res) => {
       q: req.query.q || '' })),
     campaigns: await customerEmails.campaigns(),
     audiences: customerEmails.AUDIENCES,
+    categories: customerEmails.CATEGORIES,
+    reach: await customerEmails.reach(),
+    rcs: { enabled: String(await require('../util/settings').get('rcs_enabled', 'false')) === 'true', ready: require('../channels/rcs').configured() },
   });
+}));
+router.post('/customer-emails/ask-to-confirm', needs('settings'), safe(async (req, res) => {
+  const out = await customerEmails.askToConfirm();
+  await auth.audit({ adminId: req.admin.id, action: 'customer_emails_confirm_asked', ip: ipOf(req), detail: out });
+  console.log('[broadcast] confirmation emails queued for %d unconfirmed address(es)', out.queued);
+  res.json(out);
 }));
 
 router.post('/customer-emails/preview', needs('settings'), safe(async (req, res) => res.json(

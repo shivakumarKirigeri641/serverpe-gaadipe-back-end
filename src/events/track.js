@@ -45,6 +45,14 @@ async function emit(e) {
        Number.isFinite(e.durationMs) ? Math.round(e.durationMs) : null,
        Number.isFinite(e.amountPaise) ? Math.round(e.amountPaise) : null,
        JSON.stringify(e.meta || {})]);
+    /* EVERY EVENT, ONE READABLE LINE IN THE SERVER'S LOG (user, 2026-10-07) — and so in
+       the web admin's Server log. Never a raw mobile: the last four digits only. */
+    if (rowCount > 0) {
+      const m = local10(e.mobile);
+      console.log(`[event] ${e.channel || 'system'} ${e.name}${e.regNo ? ` ${e.regNo}` : ''}${m ? ` ••${m.slice(-4)}` : ''}`
+        + `${e.page ? ` ${String(e.page).slice(0, 60)}` : ''}${e.meta?.label ? ` “${String(e.meta.label).slice(0, 60)}”` : ''}`
+        + `${e.status ? ` [${e.status}]` : ''}${Number.isFinite(e.amountPaise) ? ` ₹${Math.round(e.amountPaise / 100)}` : ''}${e.sessionId ? ` ${String(e.sessionId).slice(0, 10)}` : ''}`);
+    }
     return rowCount > 0;
   } catch (err) {
     console.error('[events] %s not recorded: %s', e.name, err.message);

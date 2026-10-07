@@ -154,7 +154,9 @@ async function history(user, { before = null, limit = 50 } = {}) {
        FROM whatsapp_messages
       WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $1
         AND ($2::bigint IS NULL OR id < $2)
-      ORDER BY id DESC LIMIT $3`, [String(user.mobile).slice(-10), before, n + 1]);
+        -- Only this account's own time: a fresh account on an archived number never sees the old chat.
+        AND created_at >= $4::timestamptz - interval '5 minutes'
+      ORDER BY id DESC LIMIT $3`, [String(user.mobile).slice(-10), before, n + 1, user.created_at || '1970-01-01']);
   const more = rows.length > n;
   const page = rows.slice(0, n).reverse();
   const bodies = await templateBodies();
@@ -171,11 +173,13 @@ async function summary(user) {
     `SELECT (SELECT count(*) FROM user_vehicles WHERE user_id = $1)::int AS vehicles,
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
               WHERE r.user_id = $1 AND p.status = 'paid')::int AS reports,
-            (SELECT count(*) FROM whatsapp_messages WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $2)::int AS wa_messages,
+            (SELECT count(*) FROM whatsapp_messages WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $2
+                AND created_at >= $3::timestamptz - interval '5 minutes')::int AS wa_messages,
             (SELECT v.reg_no FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
               WHERE uv.user_id = $1 ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 1) AS last_vehicle,
-            (SELECT min(created_at) FROM whatsapp_messages WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $2) AS wa_since`,
-    [user.id, String(user.mobile).slice(-10)]);
+            (SELECT min(created_at) FROM whatsapp_messages WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $2
+                AND created_at >= $3::timestamptz - interval '5 minutes') AS wa_since`,
+    [user.id, String(user.mobile).slice(-10), user.created_at || '1970-01-01']);
   return {
     name: user.display_name || user.wa_profile_name || null,
     vehicles: row.vehicles, reports: row.reports, last_vehicle: row.last_vehicle,

@@ -53,7 +53,7 @@ const duration = (sec) => {
  *            (intro: raw HTML blocks placed before them)
  */
 function layout({ preheader = '', badge, title, lead, stats = [], sections = [], note, cta, footer,
-                  tagline = 'Admin alert', footerHtml = '', blocks = [], intro = [], repliesWelcome = false }) {
+                  tagline = 'Admin alert', footerHtml = '', blocks = [], intro = [], textBlocks = [], repliesWelcome = false }) {
   const tone = TONES[badge?.tone] || TONES.info;
   const statCells = stats.map(([k, v]) => `
       <td style="padding:0 6px 12px 6px;" width="${Math.floor(100 / stats.length)}%" valign="top">
@@ -126,6 +126,7 @@ function layout({ preheader = '', badge, title, lead, stats = [], sections = [],
     lead || '',
     stats.map(([k, v]) => `${k}: ${v}`).join('\n'),
     note ? `\n${note}\n` : '',
+    ...textBlocks,
     ...sections.filter(Boolean).map((s) => `\n${s.heading.toUpperCase()}\n${s.rows
       .filter(([, v]) => v !== null && v !== undefined && v !== '')
       .map(([k, v]) => `  ${k}: ${typeof v === 'object' && v && v.text ? v.text : v}`).join('\n')}`),
@@ -135,4 +136,54 @@ function layout({ preheader = '', badge, title, lead, stats = [], sections = [],
   return { html, text };
 }
 
-module.exports = { layout, esc, ist, rupees, mobile, duration, PANEL };
+/*
+ * A VEHICLE AS A CARD (user, 2026-10-07: "vehicle alerts must be attractive and
+ * professional"). An Indian number plate on top, what the vehicle is under it,
+ * then one line per finding with a coloured pill — red for expired or a problem,
+ * amber for coming up, green for fine — and the days left in large type.
+ *   items: [{ label, text, tone: 'bad' | 'warn' | 'good' | 'info', days }]
+ * Returns { html, text } — the html goes in layout's `intro`, the text in `textBlocks`.
+ */
+const PILL = {
+  bad: { bg: '#fdecea', fg: '#b42318', word: 'Action needed' },
+  warn: { bg: '#fff4e0', fg: '#a15c00', word: 'Coming up' },
+  good: { bg: '#e7f7ee', fg: '#0a6c34', word: 'OK' },
+  info: { bg: '#e8f2fd', fg: '#1d5fa8', word: 'Update' },
+};
+function daysWords(days) {
+  if (days === null || days === undefined || Number.isNaN(Number(days))) return '';
+  const d = Number(days);
+  if (d === 0) return 'today';
+  return d < 0 ? `${-d} day${d === -1 ? '' : 's'} ago` : `${d} day${d === 1 ? '' : 's'} left`;
+}
+function vehicleCard({ reg, sub = '', items = [] }) {
+  const plate = String(reg || '').toUpperCase();
+  const rows = items.map((i) => {
+    const p = PILL[i.tone] || PILL.info;
+    const dw = daysWords(i.days);
+    return `
+      <tr>
+        <td style="padding:12px 14px;border-top:1px solid #eef3f2;vertical-align:middle;">
+          <div style="font-size:14px;font-weight:700;color:#0b1f1c;">${esc(i.label)}</div>
+          <div style="font-size:12.5px;color:#41514e;margin-top:2px;line-height:1.45;">${esc(i.text)}</div>
+        </td>
+        <td align="right" style="padding:12px 14px;border-top:1px solid #eef3f2;vertical-align:middle;white-space:nowrap;">
+          <span style="display:inline-block;background:${p.bg};color:${p.fg};font-size:11px;font-weight:800;padding:4px 9px;border-radius:999px;">${esc(p.word)}</span>
+          ${dw ? `<div style="font-size:12px;font-weight:700;color:${p.fg};margin-top:5px;">${esc(dw)}</div>` : ''}
+        </td>
+      </tr>`;
+  }).join('');
+  const html = `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e3ecea;border-radius:14px;overflow:hidden;background:#ffffff;">
+      <tr><td colspan="2" style="background:#f6faf9;padding:14px;">
+        <span style="display:inline-block;border:2px solid #111;border-radius:6px;background:#fff;padding:4px 10px;font-family:'Courier New',monospace;font-size:17px;font-weight:900;letter-spacing:2px;color:#111;">
+          <span style="display:inline-block;background:#1d4ed8;color:#fff;font-size:9px;font-family:Arial,sans-serif;letter-spacing:0;padding:1px 3px;border-radius:2px;vertical-align:middle;margin-right:6px;">IND</span>${esc(plate)}</span>
+        ${sub ? `<div style="font-size:12.5px;color:#6b8380;margin-top:8px;">${esc(sub)}</div>` : ''}
+      </td></tr>
+      ${rows}
+    </table>`;
+  const text = `\n${plate}${sub ? ` — ${sub}` : ''}\n${items.map((i) => `  • ${i.label}: ${i.text}${daysWords(i.days) ? ` (${daysWords(i.days)})` : ''}`).join('\n')}`;
+  return { html, text };
+}
+
+module.exports = { layout, esc, ist, rupees, mobile, duration, PANEL, vehicleCard, daysWords };

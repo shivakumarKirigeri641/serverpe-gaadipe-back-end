@@ -69,6 +69,8 @@ async function track(event, { mobile = null, userId = null, sessionId = null, ou
     const { rows } = await db.query(
       `INSERT INTO site_sign_ins (${cols.join(', ')})
             VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')}) RETURNING id`, vals);
+    // Every sign-in step in the server's log too (2026-10-07): the last four digits only.
+    console.log(`[sign-in] ${event}${mobile ? ` ••${String(mobile).slice(-4)}` : ''}${userId ? ` user ${userId}` : ''}${outcome ? ` (${outcome})` : ''}${ctx.city ? ` · ${ctx.city}` : ''}`);
     return rows[0]?.id || null;
   } catch (e) {
     console.error('[site] sign-in tracking:', e.message);
@@ -359,11 +361,22 @@ async function signOut(token, ctx = {}) {
  * hands, and keeping them is a legal obligation rather than a choice. The
  * message back says so plainly rather than implying a clean erasure.
  */
+/*
+ * ARCHIVED, NOT REACTIVATED (user, 2026-10-07: "if they sign in again it is a full
+ * fresh start, no older data given — but the admin panel has it"). The account and
+ * every row it owns stay exactly where they are; only its mobile is set aside as
+ * "a<id>-<mobile>" (archived_mobile keeps the number), so the next sign-in with that
+ * number creates a new, empty account. Admin searches by the last ten digits still
+ * find the archived one.
+ */
 async function deactivate(userId, { reason } = {}) {
   await db.tx(async (c) => {
     await c.query(
       `UPDATE users SET deactivated_at = now(), deactivated_reason = $2,
-              is_paused = true, modified_at = now() WHERE id = $1`, [userId, reason || null]);
+              is_paused = true, modified_at = now(),
+              archived_at = now(), archived_mobile = mobile,
+              mobile = 'a' || id || '-' || mobile
+        WHERE id = $1 AND archived_at IS NULL`, [userId, reason || null]);
     await c.query(`UPDATE watches SET is_active = false, modified_at = now() WHERE user_id = $1`, [userId]);
     await c.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'deactivated'
                     WHERE user_id = $1 AND ended_at IS NULL`, [userId]);

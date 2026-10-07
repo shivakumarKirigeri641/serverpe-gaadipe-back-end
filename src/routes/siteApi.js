@@ -520,15 +520,106 @@ router.post('/me/email/resend', safe(async (req, res) => {
  * not keep, and a customer finding that out later is worse than saying it now.
  */
 router.post('/me/deactivate', safe(async (req, res) => {
-  await auth.deactivate(req.user.id, { reason: String(req.body?.reason || '').slice(0, 500) });
+  // A reason is asked for (user, 2026-10-07) — what made someone leave is worth knowing.
+  const reason = String(req.body?.reason || '').trim().slice(0, 500);
+  if (reason.length < 3) return res.status(400).json({ error: 'reason_required', message: 'Please tell us why you are leaving.' });
+  await auth.deactivate(req.user.id, { reason });
   // No more notifications to any of their devices (2026-10-07).
   await require('../site/push').forget(req.user.id).catch(() => {});
+  console.log('[account] deactivated and archived: user %s (%s)', req.user.id, reason.slice(0, 60));
   res.json({
     ok: true,
     message: 'Your account is deactivated. Monitoring and alerts have stopped and you '
       + 'have been signed out. Your tax invoices are kept, as the law requires. '
-      + 'Sign in again any time with the same number to reopen the account.',
+      + 'If you sign in again with this number, you start a fresh account — your old vehicles and reports are not brought back.',
   });
+}));
+
+/*
+ * A NEW MOBILE NUMBER (user, 2026-10-07). Step 1 sends a sign-in code to the new
+ * number. Step 2 verifies it: the customer is signed in ON THE NEW NUMBER (a fresh
+ * account, or that number's own account if it has one) and this session ends. The
+ * old number's vehicles and reports stay with it; if the customer asks, a transfer
+ * request goes to the admin, who approves (everything moves) or rejects — and the
+ * customer is emailed either way.
+ */
+router.post('/me/mobile/code', safe(async (req, res) => {
+  const m = auth.localMobile(req.body?.mobile);
+  if (!/^[6-9]\d{9}$/.test(m)) return res.status(400).json({ error: 'bad_mobile', message: 'Please enter a 10-digit mobile number.' });
+  if (m === auth.localMobile(req.user.mobile)) return res.status(400).json({ error: 'same_mobile', message: 'That is already your number.' });
+  const out = await auth.requestCode({ mobile: m, ip: req.ip, ctx: { ip: req.ip, user_agent: req.get('user-agent'), device_id: req.get('x-gp-device') } });
+  console.log('[account] mobile change: code requested by user %s for a new number', req.user.id);
+  res.status(out.ok === false ? 400 : 200).json(out);
+}));
+router.post('/me/mobile/change', safe(async (req, res) => {
+  const m = auth.localMobile(req.body?.mobile);
+  const out = await auth.verifyCode({ mobile: m, code: req.body?.code, ip: req.ip, userAgent: req.get('user-agent'),
+    ctx: { ip: req.ip, user_agent: req.get('user-agent'), device_id: req.get('x-gp-device') } });
+  if (!out.ok) return res.status(400).json(out);
+  const oldId = String(req.user.id);
+  // This browser's old session ends: from now on it is signed in on the new number.
+  await db.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'mobile_changed' WHERE id = $1`, [req.siteSession.sessionId]);
+  await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'mobile_changed', $2)`,
+    [oldId, JSON.stringify({ to_user_id: out.user.id, to_mobile: m, transfer_requested: req.body?.transfer === true })]);
+  let transferId = null;
+  if (req.body?.transfer === true && String(out.user.id) !== oldId) {
+    const t = await db.one(
+      `INSERT INTO account_transfers (from_user_id, to_user_id, from_mobile, to_mobile, note) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [oldId, out.user.id, auth.localMobile(req.user.mobile), m, String(req.body?.note || '').trim().slice(0, 500) || null]);
+    transferId = String(t.id);
+    require('../util/adminPing').ping({ key: `transfer_request:${t.id}`, severity: 'info', source: 'customers', alert: false,
+      title: '📱 Mobile change: transfer requested',
+      text: `A customer moved from ${auth.localMobile(req.user.mobile)} to ${m} and asked for their vehicles and reports to move with them. Approve or reject it in the web admin → Transfers.` }).catch(() => {});
+  }
+  console.log('[account] mobile changed: user %s → user %s%s', oldId, out.user.id, transferId ? ` (transfer request ${transferId})` : '');
+  res.json({ ...out, transfer_request_id: transferId });
+}));
+
+/*
+ * A CODE BY EMAIL (user, 2026-10-07: "mail must be mandatory, with verification,
+ * before pay"). Six digits, ten minutes, five tries — the address is confirmed
+ * without leaving the payment window. Off the production server the code is not
+ * emailed but written to the server's log, so testing never mails anyone.
+ */
+router.post('/me/email/code', safe(async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const chk = await customerMail.checkEmail(email);
+  if (!chk.ok) return res.status(400).json({ error: chk.error, message: chk.message, suggestion: chk.suggestion || null });
+  const recent = await db.one(`SELECT 1 FROM email_codes WHERE user_id = $1 AND created_at > now() - interval '45 seconds'`, [req.user.id]);
+  if (recent) return res.status(429).json({ error: 'wait', message: 'A code was just sent. Please wait a moment before asking again.' });
+  const code = String(require('crypto').randomInt(100000, 1000000));
+  const hash = require('crypto').createHash('sha256').update(code).digest('hex');
+  await db.query(`INSERT INTO email_codes (user_id, email, code_hash, expires_at) VALUES ($1, $2, $3, now() + interval '10 minutes')`, [req.user.id, email, hash]);
+  if (String(process.env.NODE_ENV).toLowerCase() !== 'production') {
+    console.warn('[email-code] DEV (not emailed): %s gets %s', email, code);
+    return res.json({ ok: true, sent_to: email, dev: true });
+  }
+  const T = require('../mail/templates');
+  const mail = T.layout({ tagline: 'Confirm your email', badge: { text: 'Your code', tone: 'info' }, title: `${code} is your GaadiPe email code`,
+    lead: 'Type this code in GaadiPe to confirm your email address. It is valid for 10 minutes. If you did not ask for it, you can ignore this email.',
+    footer: 'You are receiving this because someone entered this address in GaadiPe.' });
+  const sent = await require('../mail/mailer').send({ to: email, subject: `${code} is your GaadiPe email code`, html: mail.html, text: mail.text });
+  if (!sent.ok) return res.status(502).json({ error: 'send_failed', message: 'We could not send the code just now. Please try again in a minute.' });
+  console.log('[email-code] sent to user %s', req.user.id);
+  res.json({ ok: true, sent_to: email });
+}));
+router.post('/me/email/verify', safe(async (req, res) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const row = await db.one(`SELECT * FROM email_codes WHERE user_id = $1 AND email = $2 AND consumed_at IS NULL AND expires_at > now() ORDER BY id DESC LIMIT 1`, [req.user.id, email]);
+  if (!row) return res.status(400).json({ error: 'code_expired', message: 'That code has expired. Please ask for a new one.' });
+  if (row.attempts >= 5) return res.status(400).json({ error: 'too_many', message: 'Too many wrong codes. Please ask for a new one.' });
+  const hash = require('crypto').createHash('sha256').update(String(req.body?.code || '').replace(/\D/g, '')).digest('hex');
+  if (hash !== row.code_hash) {
+    await db.query(`UPDATE email_codes SET attempts = attempts + 1 WHERE id = $1`, [row.id]);
+    return res.status(400).json({ error: 'wrong_code', message: `That code is not right. ${Math.max(0, 4 - row.attempts)} attempt(s) left.` });
+  }
+  await db.query(`UPDATE email_codes SET consumed_at = now() WHERE id = $1`, [row.id]);
+  const { rows } = await db.query(
+    `UPDATE users SET email = $2, email_verified_at = now(), email_unsubscribed_at = NULL,
+            email_token = coalesce(email_token, $3), modified_at = now()
+      WHERE id = $1 RETURNING *`, [req.user.id, email, require('crypto').randomBytes(24).toString('hex')]);
+  console.log('[email-code] verified for user %s', req.user.id);
+  res.json({ ok: true, user: auth.publicUser(rows[0]) });
 }));
 
 /* -------------------------------------------------------------- vehicles */
@@ -772,11 +863,16 @@ router.post('/buy', safe(async (req, res) => {
   }
   /* THE EMAIL, REQUIRED AT CHECKOUT (user, 2026-09-21): the daily updates the
      report includes go there while GaadiPe has no WhatsApp Business number. */
-  const buyerEmail = String(req.body?.email || '').trim();
+  const buyerEmail = String(req.body?.email || '').trim().toLowerCase();
   if (!customerMail.validEmail(buyerEmail)) {
-    return res.status(400).json({ error: 'email_required', message: 'Please enter your email — your daily vehicle updates are sent there.' });
+    return res.status(400).json({ error: 'email_required', message: 'Please enter your email — your report, invoice and vehicle alerts are sent there.' });
   }
-  await customerMail.setEmail(req.user.id, buyerEmail);
+  /* VERIFIED, NOT JUST TYPED (user, 2026-10-07): the report, the invoice and every
+     alert go to this address, so it is confirmed with a code before paying. */
+  const mine = await db.one(`SELECT email, email_verified_at FROM users WHERE id = $1`, [req.user.id]);
+  if (!(mine?.email_verified_at && String(mine.email || '').toLowerCase() === buyerEmail)) {
+    return res.status(400).json({ error: 'email_unverified', message: 'Please confirm your email with the code we send to it.' });
+  }
   await db.query(
     `UPDATE users SET display_name = $2, state_code = $3, modified_at = now() WHERE id = $1`,
     [req.user.id, buyerName, buyerState]);

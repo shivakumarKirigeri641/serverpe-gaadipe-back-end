@@ -23,7 +23,24 @@ const NOT_STOPPED = `NOT EXISTS (SELECT 1 FROM whatsapp_sessions ws WHERE ws.mob
 const MAILABLE_ANY = `u.email IS NOT NULL AND u.email_verified_at IS NOT NULL
   AND u.email_unsubscribed_at IS NULL AND u.deactivated_at IS NULL`;
 const MAILABLE = MAILABLE_ANY;          // the "how many have a confirmed address" count
-const mailableFor = (audience) => (audience === 'one' ? MAILABLE_ANY : `${MAILABLE_ANY} AND ${NOT_STOPPED}`);
+/*
+ * WHAT KIND OF EMAIL (user, 2026-10-07: "promotions, marketing, alerts,
+ * notifications"). A promotion or marketing email goes ONLY to people who ticked
+ * "tips & offers" (users.promo_consent_at — DPDP: consent for marketing is never
+ * assumed). An alert, a notification or a service message goes to every
+ * confirmed, subscribed address. Everyone can unsubscribe from the footer.
+ */
+const CATEGORIES = {
+  service: 'Service message (about their account or GaadiPe itself)',
+  alert: 'Alert (something they should act on)',
+  notification: 'Notification (news about the service)',
+  promotion: 'Promotion / marketing (offers, discounts) — opted-in customers only',
+};
+const PROMO_OK = `u.promo_consent_at IS NOT NULL`;
+const mailableFor = (audience, category = 'service') => [
+  audience === 'one' ? MAILABLE_ANY : `${MAILABLE_ANY} AND ${NOT_STOPPED}`,
+  category === 'promotion' ? PROMO_OK : null,
+].filter(Boolean).join(' AND ');
 const PAYING = `EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id = u.id AND s.is_active AND s.ends_on >= CURRENT_DATE)`;
 
 const AUDIENCES = {
@@ -46,10 +63,10 @@ function audienceWhere(audience, mobile) {
 }
 
 /** Who would receive it, and who would not (and why). */
-async function preview({ audience, mobile, subject, body }) {
+async function preview({ audience, mobile, subject, body, category = 'service' }) {
   const w = audienceWhere(audience, mobile);
   if (!w) return { ok: false, error: 'audience', message: 'Choose who to send to.' };
-  const MAILABLE = mailableFor(audience);
+  const MAILABLE = mailableFor(audience, CATEGORIES[category] ? category : 'service');
   const all = await db.one(`SELECT count(*)::int AS n FROM users u WHERE ${w.sql}`, w.params);
   const ok = await db.one(`SELECT count(*)::int AS n FROM users u WHERE ${w.sql} AND ${MAILABLE}`, w.params);
   const only = await C.onlyTo();
@@ -79,22 +96,23 @@ async function testSend({ subject, body }, admin) {
 }
 
 /** Queue it for the audience. Returns the campaign with its recipient count. */
-async function queue({ audience, mobile, subject, body }, adminId) {
+async function queue({ audience, mobile, subject, body, category = 'service' }, adminId) {
   if (String(await settings.get('admin_customer_email_enabled', 'true')).toLowerCase() === 'false') {
     return { ok: false, error: 'off', message: 'Writing to customers is switched off in Settings.' };
   }
   const w = audienceWhere(audience, mobile);
   if (!w) return { ok: false, error: 'audience', message: 'Choose who to send to.' };
-  const MAILABLE = mailableFor(audience);
+  const cat = CATEGORIES[category] ? category : 'service';
+  const MAILABLE = mailableFor(audience, cat);
   const subj = String(subject || '').trim().slice(0, 150);
   const text = String(body || '').trim().slice(0, 10000);
   if (subj.length < 3) return { ok: false, error: 'subject', message: 'Please write a subject.' };
   if (text.length < 10) return { ok: false, error: 'body', message: 'Please write the message.' };
   return db.tx(async (c) => {
     const camp = (await c.query(
-      `INSERT INTO admin_email_campaigns (admin_id, audience, target_mobile, subject, body)
-            VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [adminId, audience, audience === 'one' ? w.params[0] : null, subj, text])).rows[0];
+      `INSERT INTO admin_email_campaigns (admin_id, audience, target_mobile, subject, body, category)
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [adminId, audience, audience === 'one' ? w.params[0] : null, subj, text, cat])).rows[0];
     const ins = await c.query(
       `INSERT INTO customer_emails (user_id, kind, to_email, subject, campaign_id)
        SELECT u.id, 'announcement', u.email, $${w.params.length + 1}, $${w.params.length + 2}
@@ -149,4 +167,27 @@ async function log({ kind = null, status = null, q = '', limit = 200 } = {}) {
            totals: totals.rows, reach };
 }
 
-module.exports = { AUDIENCES, preview, testSend, queue, cancel, campaigns, log };
+/*
+ * EMAILS GIVEN BUT NEVER CONFIRMED (user, 2026-10-07: "some have provided mail ids,
+ * I can broadcast them"). A broadcast only reaches CONFIRMED addresses; this asks
+ * the rest to confirm — the ordinary confirmation email, at most once a week each.
+ */
+const UNCONFIRMED = `u.email IS NOT NULL AND u.email_verified_at IS NULL AND u.email_unsubscribed_at IS NULL AND u.deactivated_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM customer_emails e WHERE e.user_id = u.id AND e.kind = 'confirm' AND e.created_at > now() - interval '7 days')`;
+async function reach() {
+  const r = await db.one(
+    `SELECT count(*) FILTER (WHERE email IS NOT NULL)::int AS with_email,
+            count(*) FILTER (WHERE email IS NOT NULL AND email_verified_at IS NOT NULL AND email_unsubscribed_at IS NULL AND deactivated_at IS NULL)::int AS confirmed,
+            count(*) FILTER (WHERE email IS NOT NULL AND email_verified_at IS NULL AND deactivated_at IS NULL)::int AS unconfirmed,
+            count(*) FILTER (WHERE email_verified_at IS NOT NULL AND email_unsubscribed_at IS NULL AND deactivated_at IS NULL AND promo_consent_at IS NOT NULL)::int AS promo_ok,
+            count(*) FILTER (WHERE email_unsubscribed_at IS NOT NULL)::int AS unsubscribed
+       FROM users`);
+  const ask = await db.one(`SELECT count(*)::int AS n FROM users u WHERE ${UNCONFIRMED}`);
+  return { ...r, can_ask_now: ask.n };
+}
+async function askToConfirm() {
+  const r = await db.query(`INSERT INTO customer_emails (user_id, kind, to_email) SELECT u.id, 'confirm', u.email FROM users u WHERE ${UNCONFIRMED}`);
+  return { ok: true, queued: r.rowCount };
+}
+
+module.exports = { AUDIENCES, CATEGORIES, preview, testSend, queue, cancel, campaigns, log, reach, askToConfirm };

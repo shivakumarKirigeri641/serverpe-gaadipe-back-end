@@ -184,7 +184,10 @@ async function customer(id) {
   const { rows: openSites } = await db.query(
     `SELECT id, device_id, ip, user_agent, created_at, last_used_at FROM site_sessions WHERE user_id = $1 AND ended_at IS NULL ORDER BY last_used_at DESC NULLS LAST LIMIT 20`, [uid]);
   const { rows: vehicles } = await db.query(
-    `SELECT v.reg_no, v.maker, v.model, uv.last_checked_at,
+    `SELECT v.reg_no, v.maker, v.model, v.fuel, v.vehicle_class, v.reg_date, v.insurance_upto, v.pucc_upto, v.tax_upto,
+            v.fitness_upto, v.permit_upto, v.owner_serial, (v.financer IS NOT NULL AND v.financer <> '') AS financed,
+            v.blacklist_status, v.rc_status, uv.check_count, uv.first_checked_at, uv.last_checked_at,
+            (SELECT max(r.valid_until) FROM vehicle_reports r WHERE r.user_id = $1 AND r.reg_no = v.reg_no) AS report_valid_until,
             EXISTS (SELECT 1 FROM vehicle_reports r WHERE r.user_id = $1 AND r.reg_no = v.reg_no) AS has_report,
             EXISTS (SELECT 1 FROM watches x WHERE x.user_id = $1 AND x.vehicle_id = v.id AND x.is_active) AS watched
        FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id WHERE uv.user_id = $1 ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 50`, [uid]);

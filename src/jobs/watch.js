@@ -343,13 +343,21 @@ function alertMail(person, byVehicle) {
   const name = String(person.name || '').split(' ')[0] || 'there';
   const regs = [...byVehicle.keys()];
   const count = [...byVehicle.values()].reduce((n, l) => n + l.length, 0);
+  // One card per vehicle (2026-10-07): the plate, then each finding with its pill.
+  const toneOf = (key) => (/:expired$/.test(key || '') ? 'bad' : /:expiring$/.test(key || '') ? 'warn' : 'info');
+  const cards = regs.map((reg) => T.vehicleCard({
+    reg, items: byVehicle.get(reg).map((i) => ({ label: i.label, text: i.text, tone: toneOf(i.key) })),
+  }));
+  const bad = [...byVehicle.values()].flat().some((i) => toneOf(i.key) === 'bad');
   const out = T.layout({
     tagline: 'Your vehicles today',
     preheader: regs.map((r) => `${r}: ${byVehicle.get(r).map((i) => i.text).join(', ')}`).join(' · ').slice(0, 140),
-    badge: { text: count === 1 ? 'Something changed' : `${count} things changed`, tone: 'watch' },
+    badge: { text: count === 1 ? 'Something changed' : `${count} things changed`, tone: bad ? 'wrong' : 'watch' },
     title: regs.length === 1 ? `An update on ${regs[0]}` : `Updates on ${regs.length} of your vehicles`,
-    lead: `Hi ${name}, GaadiPe checked your vehicle${regs.length === 1 ? '' : 's'} against the Government records today. Here is what changed.`,
-    sections: regs.map((reg) => ({ heading: reg, rows: byVehicle.get(reg).map((i) => [i.label, i.text]) })),
+    lead: `Hi ${name}, GaadiPe checked your vehicle${regs.length === 1 ? '' : 's'} against the Government records (VAHAN) today. Here is what changed.`,
+    intro: cards.map((c) => c.html),
+    textBlocks: cards.map((c) => c.text),
+    blocks: [`<div style="font-size:12.5px;line-height:1.6;color:#41514e;">Already renewed? The RTO record can take a few days to show the new date — GaadiPe keeps checking and will tell you when it does.</div>`],
     cta: { label: regs.length === 1 ? `Open ${regs[0]} in GaadiPe` : 'Open GaadiPe', url: `${C.SITE()}/chat${regs.length === 1 ? `?reg=${encodeURIComponent(regs[0])}` : ''}` },
     footer: 'You are receiving this because you asked GaadiPe to watch this vehicle.',
     footerHtml: person.email_token

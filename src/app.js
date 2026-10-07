@@ -22,6 +22,8 @@
  * ---------------------------------------------------------------------------
  */
 
+// First of all: keep the console's last lines for the web admin's Server log.
+require('./util/consoleTap').install();
 const express = require('express');
 const { config, validate } = require('./config');
 const cache = require('./util/cache');
