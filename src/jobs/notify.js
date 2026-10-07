@@ -84,6 +84,151 @@ const notDone = (kind, refExpr) => `NOT EXISTS (SELECT 1 FROM admin_notification
    WHERE n.kind = '${kind}' AND n.ref = ${refExpr}
      AND (n.status = 'sent' OR n.attempts >= ${MAX_ATTEMPTS}))`;
 
+/* ───────────────────────────────────────────────── the website (2026-10-07) ── */
+
+/*
+ * WEBSITE EMAILS (user, 2026-10-07: "mail trigger to admin, for me"). With
+ * WhatsApp gone the website is where customers are, so its moments are emailed
+ * the way WhatsApp's were. Each has its own switch, set from the website admin
+ * (webadmin.gaadipe.in → Emails):
+ *   web_check    a vehicle checked on the website after signing in  notify_web_checks
+ *   chat_check   a free check in the chat, without signing in        notify_chat_checks
+ *   push_on      a customer allowed notifications on a phone         notify_push_on
+ * The button opens the website admin (WEBADMIN_URL).
+ */
+const WEBADMIN = () => (process.env.WEBADMIN_URL || 'https://webadmin.gaadipe.in').replace(/\/+$/, '');
+const SOURCE_NAMES = { google_ads: 'Google Ads', meta_ads: 'Meta ads (Facebook / Instagram)', google: 'Google search',
+  organic: 'Other search', social: 'Social media', whatsapp: 'WhatsApp', referral: 'Another website', direct: 'Direct / typed the address' };
+const sourceName = (s) => SOURCE_NAMES[s] || (s ? s.replace(/_/g, ' ') : null);
+
+/** Where a customer first came from: the earliest website visitor linked to them. */
+async function sourceOfUser(userId) {
+  if (!userId) return null;
+  const v = await db.one(
+    `SELECT coalesce(nullif(first_touch->>'source', ''), 'direct') AS source, first_touch->>'campaign' AS campaign
+       FROM visitors WHERE user_id = $1 ORDER BY first_seen_at LIMIT 1`, [userId]).catch(() => null);
+  return v ? [sourceName(v.source), v.campaign].filter(Boolean).join(' · ') : 'Not known (no website visit linked)';
+}
+
+async function webChecks() {
+  if (!(await on('notify_web_checks'))) return 0;
+  const { rows } = await db.query(
+    `SELECT e.id, e.created_at, e.kind, e.detail, e.user_id FROM event_log e
+      WHERE e.kind IN ('vehicle_check', 'vehicle_check_repeat') AND e.detail->>'channel' = 'web'
+        AND e.created_at > now() - interval '1 hour' AND ${notDone('web_check', 'e.id::text')}
+      ORDER BY e.id LIMIT 30`);
+  let n = 0;
+  for (const e of rows) {
+    const d = e.detail || {};
+    n += await deliver('web_check', e.id, async () => {
+      const u = await db.one(
+        `SELECT u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name, u.email,
+                (SELECT count(*) FROM payments p WHERE p.user_id = u.id AND p.status = 'paid')::int AS paid,
+                (SELECT count(*) FROM event_log x WHERE x.user_id = u.id AND x.kind IN ('vehicle_check', 'vehicle_check_repeat')
+                   AND x.created_at >= (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'))::int AS today
+           FROM users u WHERE u.id = $1`, [e.user_id]);
+      const v = d.reg_no ? await db.one(`SELECT maker, model, fuel, vehicle_class FROM vehicles WHERE reg_no = $1`, [d.reg_no]) : null;
+      const bought = d.reg_no ? await db.one(
+        `SELECT 1 AS yes FROM vehicle_reports WHERE user_id = $1 AND reg_no = $2 LIMIT 1`, [e.user_id, d.reg_no]).catch(() => null) : null;
+      const kindOf = bought ? 'Repeat check · full report' : e.kind === 'vehicle_check_repeat' ? 'Repeat check · basic' : 'New vehicle';
+      const who = u?.name || T.mobile(u?.mobile);
+      const outcome = d.found === false ? 'Not found, or the records service failed' : 'Found';
+      return {
+        subject: `${d.found === false ? '⚠️' : '🔎'} ${d.reg_no || 'Vehicle'} checked on the website · ${who} · ${kindOf}`,
+        ...T.layout({
+          badge: { text: `Website check · ${kindOf}`, tone: d.found === false ? 'watch' : bought ? 'good' : 'info' },
+          title: `${who} checked ${d.reg_no || 'a vehicle'} on gaadipe.in`,
+          lead: `${T.ist(e.created_at)} · ${outcome}.`,
+          sections: [
+            { heading: 'Vehicle', rows: [
+              ['Number', d.reg_no], ['RTO', d.reg_no ? await rtoLine(d.reg_no) : null],
+              ['Make · model', v ? [v.maker, v.model].filter(Boolean).join(' · ') : '—'],
+              ['Fuel · type', v ? [v.fuel, v.vehicle_class].filter(Boolean).join(' · ') : '—'],
+              ['Result', outcome], ['Check', kindOf],
+            ] },
+            { heading: 'Who', rows: [
+              ['Name', u?.name || 'Not given'], ['Mobile', T.mobile(u?.mobile)], ['Email', u?.email],
+              ['Checks today', String(u?.today ?? 0)], ['Paid before', u?.paid ? `Yes (${u.paid})` : 'No'],
+              ['Came from', await sourceOfUser(e.user_id)],
+            ] },
+          ],
+          cta: { label: 'Open the website admin', url: `${WEBADMIN()}/customers` },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
+async function chatChecks() {
+  if (!(await on('notify_chat_checks'))) return 0;
+  const { rows } = await db.query(
+    `SELECT e.id, e.created_at, e.detail FROM event_log e
+      WHERE e.kind = 'chat_anon_check' AND e.created_at > now() - interval '1 hour'
+        AND ${notDone('chat_check', 'e.id::text')}
+      ORDER BY e.id LIMIT 30`);
+  let n = 0;
+  for (const e of rows) {
+    const d = e.detail || {};
+    n += await deliver('chat_check', e.id, async () => {
+      const v = d.reg_no ? await db.one(`SELECT maker, model, fuel, vehicle_class FROM vehicles WHERE reg_no = $1`, [d.reg_no]) : null;
+      const sameDevice = d.device ? await db.one(
+        `SELECT count(*)::int AS n FROM event_log WHERE kind = 'chat_anon_check' AND detail->>'device' = $1
+            AND created_at >= (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`, [d.device]) : null;
+      return {
+        subject: `${d.found ? '🆓' : '⚠️'} Free chat check · ${d.reg_no || 'vehicle'} · ${d.found ? 'found' : 'not found'}`,
+        ...T.layout({
+          badge: { text: 'Free check in the chat · not signed in', tone: d.found ? 'info' : 'watch' },
+          title: `Someone checked ${d.reg_no || 'a vehicle'} in the chat`,
+          lead: `${T.ist(e.created_at)} · ${d.found ? 'Basic details shown' : 'Not found, or the records service failed'}. They have not signed in yet.`,
+          sections: [
+            { heading: 'Vehicle', rows: [
+              ['Number', d.reg_no], ['RTO', d.reg_no ? await rtoLine(d.reg_no) : null],
+              ['Make · model', v ? [v.maker, v.model].filter(Boolean).join(' · ') : '—'],
+              ['Fuel · type', v ? [v.fuel, v.vehicle_class].filter(Boolean).join(' · ') : '—'],
+            ] },
+            { heading: 'Visitor', rows: [
+              ['Device', d.device ? `${String(d.device).slice(0, 10)}…` : 'Unknown'],
+              ['Free checks today (this device)', sameDevice ? `${sameDevice.n} of 3` : null],
+            ] },
+          ],
+          cta: { label: 'Open free checks', url: `${WEBADMIN()}/free-checks` },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
+async function pushOn() {
+  if (!(await on('notify_push_on'))) return 0;
+  const { rows } = await db.query(
+    `SELECT c.id, c.user_id, c.created_at, c.device FROM customer_push_subscriptions c
+      WHERE c.created_at > now() - interval '1 hour' AND ${notDone('push_on', 'c.id::text')}
+      ORDER BY c.id LIMIT 20`).catch(() => ({ rows: [] }));
+  let n = 0;
+  for (const c of rows) {
+    n += await deliver('push_on', c.id, async () => {
+      const u = await db.one(`SELECT mobile, coalesce(display_name, wa_profile_name) AS name FROM users WHERE id = $1`, [c.user_id]);
+      const who = u?.name || T.mobile(u?.mobile);
+      return {
+        subject: `🔔 Notifications on · ${who}`,
+        ...T.layout({
+          badge: { text: 'Allowed notifications', tone: 'good' },
+          title: `${who} allowed GaadiPe notifications`,
+          lead: `${T.ist(c.created_at)}. GaadiPe can now alert them on this phone, even with the site closed.`,
+          sections: [{ heading: 'Who', rows: [
+            ['Name', u?.name || 'Not given'], ['Mobile', T.mobile(u?.mobile)],
+            ['Device', String(c.device || '').slice(0, 120) || 'Unknown'], ['Came from', await sourceOfUser(c.user_id)],
+          ] }],
+          cta: { label: 'Open customers', url: `${WEBADMIN()}/customers` },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
 /* ───────────────────────────────────────────────────────────── sign-in ── */
 
 async function signIns() {
@@ -105,6 +250,7 @@ async function signIns() {
            FROM users u WHERE u.id = $1`, [s.user_id, s.session_id || 0]);
       if (!u) return null;
       const isNew = s.outcome === 'new_customer' || u.sign_ins <= 1;
+      const cameFrom = await sourceOfUser(u.id);
       const place = device.placeOf(s.city || s.region || s.country ? s : device.locate(s.ip)) || 'Unknown';
       const who = u.shown_name || 'A customer';
       const deviceLine = device.describe(s) || 'Unknown device';
@@ -120,6 +266,7 @@ async function signIns() {
               ['Name', u.shown_name || 'Not given'], ['Mobile', T.mobile(u.mobile)], ['Email', u.email],
               ['Customer since', T.ist(u.created_at)], ['Previous sign-in', u.previous_sign_in ? T.ist(u.previous_sign_in) : 'This is the first'],
               ['Language', u.preferred_language === 'hi' ? 'Hindi' : 'English'],
+              ['Came from', cameFrom],
             ] },
             { heading: 'Device', rows: [
               ['Device', [s.device_type, s.device_vendor, s.device_model].filter(Boolean).join(' · ')],
@@ -878,7 +1025,7 @@ async function dailySummary() {
 async function runOnce() {
   if (!mailer.configured()) return { skipped: 'mail not configured' };
   const out = {};
-  for (const [k, fn] of Object.entries({ signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
+  for (const [k, fn] of Object.entries({ signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waChecks, waOptOut,
                                             leftAtPayment, alertMails, security, dailySummary, weeklyMoney, whatsappSummary, weeklyDigest })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
@@ -989,5 +1136,5 @@ function start(everySeconds = 30) {
   console.log(`  admin email: every ${everySeconds}s from ${process.env.NOREPLYMAIL}`);
 }
 
-module.exports = { start, runOnce, signIns, payments, contacts, feedback, waHi, waChecks, waOptOut,
+module.exports = { start, runOnce, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waChecks, waOptOut,
                    leftAtPayment, security, dailySummary, weeklyMoney, whatsappSummary, weeklyDigest };

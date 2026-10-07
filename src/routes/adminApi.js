@@ -839,6 +839,16 @@ router.get('/web/customers', needs('customers.view'), safe(async (req, res) => {
   res.json(out);
 }));
 router.get('/web/free-checks', needs('dashboard.view'), safe(async (req, res) => res.json(await web.freeChecks({ range: req.query.range }))));
+router.get('/web/log', needs('customers.view'), safe(async (req, res) => res.json(await web.log({
+  range: req.query.range, kind: req.query.kind, q: req.query.q, pages: req.query.pages === '1', limit: req.query.limit }))));
+router.get('/web/emails', needs('dashboard.view'), safe(async (_req, res) => res.json(await web.emails())));
+router.put('/web/emails/:key', needs('settings'), safe(async (req, res) => {
+  try {
+    const out = await web.setEmail(req.params.key, req.body?.on === true);
+    await auth.audit({ adminId: req.admin.id, action: 'web_email_switch', ip: ipOf(req), detail: { key: out.key, on: out.on } });
+    res.json(out);
+  } catch (e) { res.status(e.status || 500).json({ error: 'not_saved', message: e.message }); }
+}));
 
 /* Signed-in visitors on the site, and one visit's trail. Polled, so not audited. */
 router.get('/live/visitors', safe(async (req, res) => res.json({

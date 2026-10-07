@@ -245,4 +245,139 @@ async function freeChecks({ range, limit = 200 } = {}) {
   };
 }
 
-module.exports = { overview, visitors, trail, customers, freeChecks, _test: { rangeOf } };
+/* ─────────────────────────────────────────────────────── the log ── */
+
+/*
+ * EVERY EVENT AND TRIGGER, IN WORDS (user, 2026-10-07: "clear logs for every
+ * event or trigger"). One time-ordered list from the tables that already
+ * record each thing — nothing new is written for it:
+ *   visit     events: arrived (with the source), payment page opened; page views on request
+ *   chat      event_log: free checks in the chat
+ *   sign-in   site_sign_ins: code sent, signed in, failed, signed out
+ *   check     event_log: website checks after signing in, full reports viewed
+ *   payment   payments started on the website: created, paid, failed
+ *   notify    customer_push_subscriptions: notifications allowed
+ *   email     admin_notifications: every email sent to the admin, or why it failed
+ */
+const LOG_KINDS = ['visit', 'chat', 'signin', 'check', 'payment', 'notify', 'email'];
+
+async function log({ range, kind = '', q = '', pages = false, limit = 200 } = {}) {
+  const r = rangeOf(range);
+  const want = LOG_KINDS.includes(kind) ? [kind] : LOG_KINDS;
+  const term = String(q || '').trim().replace(/[%_]/g, '');
+  const lim = Math.min(500, Number(limit) || 200);
+  const parts = [];
+  if (want.includes('visit')) {
+    parts.push(`SELECT e.occurred_at AS at, 'visit' AS kind, e.name AS what, e.mobile, e.reg_no,
+                       coalesce(e.page, '') AS detail, e.source, e.visitor_id AS ref, true AS ok
+                  FROM events e
+                 WHERE e.channel = 'web' AND e.occurred_at >= ${FROM}
+                   AND (e.name IN ('session_started', 'payment_page_viewed', 'cta_clicked', 'whatsapp_cta_clicked')
+                        OR ($4 AND e.name = 'page_view'))`);
+  }
+  if (want.includes('chat')) {
+    parts.push(`SELECT created_at, 'chat', 'chat_anon_check', NULL, detail->>'reg_no',
+                       left(coalesce(nullif(detail->>'device', ''), ''), 10), NULL, id::text, coalesce((detail->>'found')::boolean, false)
+                  FROM event_log WHERE kind = 'chat_anon_check' AND created_at >= ${FROM}`);
+  }
+  if (want.includes('signin')) {
+    parts.push(`SELECT s.created_at, 'signin', s.event, s.mobile, NULL,
+                       concat_ws(' · ', nullif(concat_ws(' ', s.device_vendor, s.device_model), ''), s.browser, s.city), NULL, s.id::text,
+                       s.event NOT IN ('sign_in_failed', 'code_refused')
+                  FROM site_sign_ins s WHERE s.created_at >= ${FROM}`);
+  }
+  if (want.includes('check')) {
+    parts.push(`SELECT l.created_at, 'check', l.kind, u.mobile, l.detail->>'reg_no', '', NULL, l.id::text,
+                       coalesce((l.detail->>'found')::boolean, true)
+                  FROM event_log l LEFT JOIN users u ON u.id = l.user_id
+                 WHERE l.created_at >= ${FROM}
+                   AND ((l.kind IN ('vehicle_check', 'vehicle_check_repeat') AND l.detail->>'channel' = 'web') OR l.kind = 'full_view')`);
+  }
+  if (want.includes('payment')) {
+    parts.push(`SELECT coalesce(p.paid_at, p.created_at), 'payment', 'payment_' || p.status, u.mobile, coalesce(p.raw->>'reg_no', ''),
+                       '₹' || to_char(p.amount_paise / 100.0, 'FM999990.00'), NULL, p.id::text, p.status NOT IN ('failed', 'cancelled')
+                  FROM payments p LEFT JOIN users u ON u.id = p.user_id
+                 WHERE p.raw->>'channel' = 'web' AND coalesce(p.paid_at, p.created_at) >= ${FROM}`);
+  }
+  if (want.includes('notify')) {
+    parts.push(`SELECT c.created_at, 'notify', 'push_on', u.mobile, NULL, left(coalesce(c.device, ''), 80), NULL, c.id::text, true
+                  FROM customer_push_subscriptions c LEFT JOIN users u ON u.id = c.user_id WHERE c.created_at >= ${FROM}`);
+  }
+  if (want.includes('email')) {
+    parts.push(`SELECT coalesce(n.sent_at, n.created_at), 'email', n.kind, NULL, NULL,
+                       CASE WHEN n.status = 'sent' THEN coalesce(n.sent_to, '') ELSE coalesce(n.last_error, n.status) END,
+                       n.status, n.ref, n.status = 'sent'
+                  FROM admin_notifications n WHERE coalesce(n.sent_at, n.created_at) >= ${FROM}`);
+  }
+  const { rows } = await db.query(
+    `SELECT * FROM (${parts.join('\n UNION ALL \n')}) x (at, kind, what, mobile, reg_no, detail, source, ref, ok)
+      WHERE ($2 = '' OR x.mobile ILIKE '%' || $2 || '%' OR x.reg_no ILIKE '%' || $2 || '%' OR x.detail ILIKE '%' || $2 || '%')
+        AND $4::boolean IS NOT NULL   -- $4 (page views) is used only when visits are asked for; named here so every filter binds it
+      ORDER BY x.at DESC LIMIT $3`,
+    [RANGES[r], term, lim, Boolean(pages)]);
+  const counts = await db.one(
+    `SELECT (SELECT count(*) FROM events WHERE channel = 'web' AND name = 'session_started' AND occurred_at >= ${FROM}) AS visit,
+            (SELECT count(*) FROM event_log WHERE kind = 'chat_anon_check' AND created_at >= ${FROM}) AS chat,
+            (SELECT count(*) FROM site_sign_ins WHERE created_at >= ${FROM}) AS signin,
+            (SELECT count(*) FROM event_log WHERE created_at >= ${FROM}
+               AND ((kind IN ('vehicle_check', 'vehicle_check_repeat') AND detail->>'channel' = 'web') OR kind = 'full_view')) AS "check",
+            (SELECT count(*) FROM payments WHERE raw->>'channel' = 'web' AND coalesce(paid_at, created_at) >= ${FROM}) AS payment,
+            (SELECT count(*) FROM customer_push_subscriptions WHERE created_at >= ${FROM}) AS notify,
+            (SELECT count(*) FROM admin_notifications WHERE coalesce(sent_at, created_at) >= ${FROM}) AS email`,
+    [RANGES[r]]);
+  return {
+    range: r,
+    counts: Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, n(v)])),
+    rows: rows.map((x) => ({ ...x, ok: x.ok !== false })),
+  };
+}
+
+/* ──────────────────────────────────────────────── emails to the admin ── */
+
+/* Every email the admin can get, with its switch (jobs/notify.js), in the order shown. */
+const EMAILS = [
+  ['notify_sign_ins', 'sign_in', 'Someone signs in on the website', 'New customers are marked 🆕, with where they came from'],
+  ['notify_web_checks', 'web_check', 'A vehicle is checked on the website', 'After signing in: new vehicle or repeat, found or not'],
+  ['notify_chat_checks', 'chat_check', 'A free check in the chat', 'Without signing in — can be many a day while ads run'],
+  ['notify_push_on', 'push_on', 'A customer allows notifications', 'On a phone or computer'],
+  ['notify_payments', 'payment', 'A payment succeeds', 'With the invoice PDF'],
+  ['notify_left_at_payment', 'left_at_pay', 'A ₹19 payment is left unpaid', '30 minutes after the payment page was opened'],
+  ['notify_contact', 'contact', 'A Contact us message', ''],
+  ['notify_feedback', 'feedback', 'A feedback note', ''],
+  ['daily_summary_email', 'daily_summary', 'The daily summary', 'At 11:55 pm, the whole day'],
+];
+
+async function emails() {
+  const keys = EMAILS.map((e) => e[0]);
+  const { rows } = await db.query(`SELECT key, value FROM app_settings WHERE key = ANY($1)`, [keys]);
+  const val = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  const { rows: stats } = await db.query(
+    `SELECT kind, count(*) FILTER (WHERE status = 'sent' AND sent_at >= now() - interval '1 day') AS sent_day,
+            count(*) FILTER (WHERE status <> 'sent' AND created_at >= now() - interval '1 day') AS failed_day,
+            max(sent_at) AS last_sent
+       FROM admin_notifications WHERE kind = ANY($1) GROUP BY kind`, [EMAILS.map((e) => e[1])]);
+  const by = Object.fromEntries(stats.map((s) => [s.kind, s]));
+  const mailer = require('../mail/mailer');
+  return {
+    configured: mailer.configured(),
+    to: await mailer.adminRecipients(),
+    rows: EMAILS.map(([key, kind, label, hint]) => ({
+      key, kind, label, hint,
+      exists: key in val,
+      on: key in val ? String(val[key]).toLowerCase() !== 'false' : true,
+      sent_day: n(by[kind]?.sent_day), failed_day: n(by[kind]?.failed_day), last_sent: by[kind]?.last_sent || null,
+    })),
+  };
+}
+
+/** Switch one email on or off. Only the keys above, and only ones that exist. */
+async function setEmail(key, on) {
+  if (!EMAILS.some((e) => e[0] === key)) throw Object.assign(new Error('Not an email switch.'), { status: 400 });
+  const { rowCount } = await db.query(
+    `UPDATE app_settings SET value = $2, modified_at = now() WHERE key = $1`, [key, on ? 'true' : 'false']);
+  if (!rowCount) throw Object.assign(new Error('That switch is not on this server yet — run the migrations.'), { status: 409 });
+  require('../util/settings').refresh();
+  return { ok: true, key, on };
+}
+
+module.exports = { overview, visitors, trail, customers, freeChecks, log, emails, setEmail, _test: { rangeOf } };
