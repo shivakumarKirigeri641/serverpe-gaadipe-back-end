@@ -646,7 +646,7 @@ router.post('/check', safe(async (req, res) => {
   // A paid customer sees every challan, so the whole list is asked for up front.
   const paid = await reports.validFor(req.user.id, parsed.regNo);
   const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' } : await require('../vehicle/rcBackup').freeOpts());
-  await quota.record(req.user.id, parsed.regNo, { repeat: q.repeat, found: data?.success === true });
+  await quota.record(req.user.id, parsed.regNo, { repeat: q.repeat, found: data?.success === true, channel: 'web' });
 
   if (!data?.success) {
     return res.status(data?.error === 'vehicle_not_found' ? 404 : 503).json({

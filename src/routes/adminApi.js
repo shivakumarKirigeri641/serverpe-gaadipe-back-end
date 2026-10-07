@@ -820,6 +820,26 @@ router.get('/live/activity', safe(async (req, res) => res.json({
   rows: await live.activity({ limit: Number(req.query.limit) || 50 }),
 })));
 
+/*
+ * THE WEBSITE ADMIN (user, 2026-10-07; src/admin/web.js, the webadmin front
+ * end): the website and the chat on their own — visitors, sources (Google and
+ * Meta ads), sign-ins, free checks, paid reports. Read-only; mobiles masked
+ * for roles without 'pii' like every other answer here.
+ */
+const web = require('../admin/web');
+router.get('/web/overview', needs('dashboard.view'), safe(async (req, res) => res.json(await web.overview({ range: req.query.range }))));
+router.get('/web/visitors', needs('customers.view'), safe(async (req, res) => res.json(await web.visitors({
+  range: req.query.range, source: req.query.source, q: req.query.q, limit: req.query.limit, offset: req.query.offset }))));
+router.get('/web/visitors/:id', needs('customers.view'), safe(async (req, res) => res.json(await web.trail(req.params.id))));
+router.get('/web/customers', needs('customers.view'), safe(async (req, res) => {
+  const out = await web.customers({ range: req.query.range, q: req.query.q, limit: req.query.limit, offset: req.query.offset });
+  if (!refreshing(req) && req.query.q) {
+    await auth.audit({ adminId: req.admin.id, action: 'web_customer_search', ip: ipOf(req), detail: { q: String(req.query.q).slice(0, 40) } });
+  }
+  res.json(out);
+}));
+router.get('/web/free-checks', needs('dashboard.view'), safe(async (req, res) => res.json(await web.freeChecks({ range: req.query.range }))));
+
 /* Signed-in visitors on the site, and one visit's trail. Polled, so not audited. */
 router.get('/live/visitors', safe(async (req, res) => res.json({
   rows: await live.visitors({ minutes: Number(req.query.minutes) || 30 }),

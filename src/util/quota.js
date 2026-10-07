@@ -118,10 +118,11 @@ async function check(userId, regNo) {
  * check, distinct or repeated"), so it never counts towards a limit — every
  * limit above reads vehicle_check only.
  */
-async function record(userId, regNo, { repeat = false, found = true } = {}) {
+async function record(userId, regNo, { repeat = false, found = true, channel = null } = {}) {
+  // channel 'web' marks a website check, so the website admin can count its own (2026-10-07).
   await db.query(
     `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, $2, $3)`,
-    [userId, repeat ? 'vehicle_check_repeat' : 'vehicle_check', JSON.stringify({ reg_no: regNo, found })]);
+    [userId, repeat ? 'vehicle_check_repeat' : 'vehicle_check', JSON.stringify({ reg_no: regNo, found, ...(channel ? { channel } : {}) })]);
 }
 
 module.exports = { check, record, tierOf };
