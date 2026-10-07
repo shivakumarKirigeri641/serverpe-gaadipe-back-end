@@ -59,8 +59,26 @@ function unmasked(payload) {
   return null;
 }
 
+/*
+ * WHATSAPP IS RETIRED (user, 2026-10-07: "stop sending WhatsApp messages, it's
+ * no more"). Meta disabled the account permanently; customers are reached by
+ * the website, SMS and email. Nothing leaves for WhatsApp — whatever .env says —
+ * until this is set back to false in the code.
+ */
+const RETIRED = true;
+let retiredSkips = 0;
+function retired(type, mobile) {
+  if (!RETIRED) return false;
+  retiredSkips += 1;
+  if (retiredSkips === 1 || retiredSkips % 50 === 0) {
+    console.log('[wa] WhatsApp is retired — not sending %s to ••%s (%d skipped since start)', type, String(mobile || '').slice(-4), retiredSkips);
+  }
+  return true;
+}
+
 async function post(payload, meta) {
   const { mobile, type, body, templateName } = meta;
+  if (retired(type, mobile)) return { ok: false, error: 'whatsapp_retired' };
 
   // Enforced here, at the one door every message leaves through, so no path —
   // a reply, a watch alert, a payment receipt — can reach a number outside the
@@ -257,6 +275,7 @@ async function list(mobile, { body, button, rows, header, footer, sectionTitle }
  */
 async function document(mobile, filePath, { filename, caption } = {}) {
   const fs = require('fs');
+  if (retired('document', mobile)) return { ok: false, error: 'whatsapp_retired' };
   // Checked before the upload too, or a blocked send still ships the PDF to Meta.
   if (!allowed(mobile)) {
     console.warn('[wa] %s not in WHATSAPP_ALLOWED_RECIPIENTS — not sending document', mobile);
