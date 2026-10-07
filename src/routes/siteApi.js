@@ -467,6 +467,16 @@ router.get('/me/consents', safe(async (req, res) => {
   res.json({ quizpe: Boolean(u?.quizpe_consent_at), quizpe_at: u?.quizpe_consent_at || null, text: QUIZPE_CONSENT });
 }));
 
+/* Notifications on this customer's phone (2026-10-07, src/site/push.js). */
+router.get('/push/key', safe(async (_req, res) => res.json({ key: await require('../site/push').publicKey() })));
+router.get('/push/status', safe(async (req, res) => res.json(await require('../site/push').status(req.user.id))));
+router.post('/push/subscribe', safe(async (req, res) => {
+  try {
+    res.json(await require('../site/push').subscribe(req.user.id, req.body?.subscription, req.body?.device || req.get('user-agent')));
+  } catch (e) { res.status(e.status || 500).json({ error: 'bad_subscription', message: e.message }); }
+}));
+router.post('/push/unsubscribe', safe(async (req, res) => res.json(await require('../site/push').unsubscribe(req.user.id, req.body?.endpoint))));
+
 /* The chat (2026-10-07): "welcome back" and their WhatsApp conversation — the signed-in owner of the number only. */
 router.get('/chat/summary', safe(async (req, res) => res.json(await require('../site/chat').summary(req.user))));
 router.get('/chat/history', safe(async (req, res) => res.json(await require('../site/chat').history(req.user, {
@@ -502,6 +512,8 @@ router.post('/me/email/resend', safe(async (req, res) => {
  */
 router.post('/me/deactivate', safe(async (req, res) => {
   await auth.deactivate(req.user.id, { reason: String(req.body?.reason || '').slice(0, 500) });
+  // No more notifications to any of their devices (2026-10-07).
+  await require('../site/push').forget(req.user.id).catch(() => {});
   res.json({
     ok: true,
     message: 'Your account is deactivated. Monitoring and alerts have stopped and you '
