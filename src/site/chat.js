@@ -69,7 +69,7 @@ async function anonCheck(req) {
   // Free sources only: an anonymous visitor never costs an IDSPay call.
   const data = await gateway.full(parsed.regNo, { backup: 0 });
   await db.query(`INSERT INTO event_log (kind, detail) VALUES ('chat_anon_check', $1)`,
-    [JSON.stringify({ device, ip, reg_no: parsed.regNo, found: data?.success === true })]).catch(() => {});
+    [JSON.stringify({ device, ip, reg_no: parsed.regNo, found: data?.success === true, ...(data?.success ? {} : { error: data?.error || 'failed' }) })]).catch(() => {});
 
   if (!data?.success) {
     return { status: data?.error === 'vehicle_not_found' ? 404 : 503, body: {

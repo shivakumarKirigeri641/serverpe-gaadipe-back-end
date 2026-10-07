@@ -98,7 +98,7 @@ async function testSend({ subject, body }, admin) {
 /** Queue it for the audience. Returns the campaign with its recipient count. */
 async function queue({ audience, mobile, subject, body, category = 'service' }, adminId) {
   if (String(await settings.get('admin_customer_email_enabled', 'true')).toLowerCase() === 'false') {
-    return { ok: false, error: 'off', message: 'Writing to customers is switched off in Settings.' };
+    return { ok: false, error: 'off', message: '“Write to customers” (admin_customer_email_enabled) is off. Switch it on at the top of this page.' };
   }
   const w = audienceWhere(audience, mobile);
   if (!w) return { ok: false, error: 'audience', message: 'Choose who to send to.' };

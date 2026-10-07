@@ -1885,6 +1885,8 @@ router.get('/customer-emails', safe(async (req, res) => {
     categories: customerEmails.CATEGORIES,
     reach: await customerEmails.reach(),
     rcs: { enabled: String(await require('../util/settings').get('rcs_enabled', 'false')) === 'true', ready: require('../channels/rcs').configured() },
+    // The broadcast's own switch, shown on the Broadcast page (2026-10-07).
+    write_enabled: String(await require('../util/settings').get('admin_customer_email_enabled', 'true')).toLowerCase() !== 'false',
   });
 }));
 router.post('/customer-emails/ask-to-confirm', needs('settings'), safe(async (req, res) => {
