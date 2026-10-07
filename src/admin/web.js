@@ -180,41 +180,89 @@ async function trail(visitorId) {
   return { visitor: { ...v, user_id: v.user_id ? String(v.user_id) : null }, rows: rows.reverse() };
 }
 
-/** Customers who signed in on the website, most recently active first. */
-async function customers({ range, q = '', limit = 100, offset = 0 } = {}) {
+/*
+ * EVERY CUSTOMER, WEBSITE AND WHATSAPP (user, 2026-10-07: "include WhatsApp
+ * customers as well"). One account per mobile across both, so a WhatsApp
+ * customer who signs in on the website is the same row. Each is tagged by
+ * where they have used GaadiPe, and by how an alert can reach them NOW that
+ * WhatsApp is disabled: browser notifications, a confirmed email, or nothing.
+ *   channel   all | web | whatsapp | both
+ *   reach     all | push | email | none
+ *   active    in range (default) | all  — "all" lists everyone ever
+ */
+async function customers({ range, q = '', channel = 'all', reach = 'all', active = 'range', limit = 100, offset = 0 } = {}) {
   const r = rangeOf(range);
   const term = String(q || '').trim().replace(/[%_]/g, '');
+  const CH = ['all', 'web', 'whatsapp', 'both'].includes(channel) ? channel : 'all';
+  const RE = ['all', 'push', 'email', 'none'].includes(reach) ? reach : 'all';
   const { rows } = await db.query(
-    `WITH active AS (
+    `WITH web AS (
        SELECT user_id, min(created_at) AS first_at FROM site_sign_ins
         WHERE event = 'signed_in' AND user_id IS NOT NULL GROUP BY user_id),
+     wa AS (
+       SELECT right(regexp_replace(mobile, '\\D', '', 'g'), 10) AS m10, min(created_at) AS first_at, max(created_at) AS last_at
+         FROM whatsapp_messages WHERE direction = 'in' GROUP BY 1),
      cust_src AS (
        SELECT DISTINCT ON (v.user_id) v.user_id, ${SRC} AS source, v.place
-         FROM visitors v WHERE v.user_id IS NOT NULL ORDER BY v.user_id, v.first_seen_at)
-     SELECT u.id AS user_id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name, u.email,
-            a.first_at, (a.first_at >= ${FROM}) AS is_new,
-            (SELECT max(coalesce(last_used_at, created_at)) FROM site_sessions WHERE user_id = u.id) AS last_seen,
-            (SELECT count(*) FROM site_sessions WHERE user_id = u.id AND ended_at IS NULL) AS open_sessions,
-            coalesce(c.source, 'unknown') AS source, c.place,
-            (SELECT count(*) FROM event_log WHERE user_id = u.id AND kind IN ('vehicle_check', 'vehicle_check_repeat')
+         FROM visitors v WHERE v.user_id IS NOT NULL ORDER BY v.user_id, v.first_seen_at),
+     base AS (
+       SELECT u.*, w.first_at AS web_first, wa.first_at AS wa_first, wa.last_at AS wa_last,
+              (SELECT max(coalesce(last_used_at, created_at)) FROM site_sessions WHERE user_id = u.id) AS web_last,
+              (SELECT count(*) FROM customer_push_subscriptions WHERE user_id = u.id) AS push_devices,
+              (u.email IS NOT NULL AND u.email_verified_at IS NOT NULL AND u.email_unsubscribed_at IS NULL) AS email_ok
+         FROM users u
+         LEFT JOIN web w ON w.user_id = u.id
+         LEFT JOIN wa ON wa.m10 = right(regexp_replace(u.mobile, '\\D', '', 'g'), 10)
+        WHERE (w.user_id IS NOT NULL OR wa.m10 IS NOT NULL) AND u.deactivated_at IS NULL)
+     SELECT b.id AS user_id, b.mobile, coalesce(b.display_name, b.wa_profile_name) AS name, b.email, b.email_ok,
+            CASE WHEN b.web_first IS NOT NULL AND b.wa_first IS NOT NULL THEN 'both'
+                 WHEN b.web_first IS NOT NULL THEN 'web' ELSE 'whatsapp' END AS channel,
+            least(b.web_first, b.wa_first) AS first_at, (least(b.web_first, b.wa_first) >= ${FROM}) AS is_new,
+            greatest(b.web_last, b.wa_last) AS last_seen, b.web_last, b.wa_last,
+            (SELECT count(*) FROM site_sessions WHERE user_id = b.id AND ended_at IS NULL) AS open_sessions,
+            coalesce(c.source, CASE WHEN b.web_first IS NULL THEN 'whatsapp' ELSE 'unknown' END) AS source, c.place,
+            (SELECT count(*) FROM event_log WHERE user_id = b.id AND kind IN ('vehicle_check', 'vehicle_check_repeat')
                                               AND created_at >= ${FROM}) AS checks,
-            (SELECT count(*) FROM payments WHERE user_id = u.id AND status = 'paid') AS paid,
-            (SELECT coalesce(sum(amount_paise), 0) FROM payments WHERE user_id = u.id AND status = 'paid') AS revenue_paise,
-            (SELECT count(*) FROM customer_push_subscriptions WHERE user_id = u.id) AS push_devices,
+            (SELECT count(*) FROM user_vehicles WHERE user_id = b.id) AS vehicles,
+            (SELECT count(*) FROM watches WHERE user_id = b.id AND is_active) AS watching,
+            (SELECT count(*) FROM payments WHERE user_id = b.id AND status = 'paid') AS paid,
+            (SELECT coalesce(sum(amount_paise), 0) FROM payments WHERE user_id = b.id AND status = 'paid') AS revenue_paise,
+            b.push_devices,
+            EXISTS (SELECT 1 FROM whatsapp_sessions ws WHERE ws.wa_opt_out_at IS NOT NULL
+                       AND right(regexp_replace(ws.mobile, '\\D', '', 'g'), 10) = right(regexp_replace(b.mobile, '\\D', '', 'g'), 10)) AS wa_stop,
             count(*) OVER () AS total_rows
-       FROM active a JOIN users u ON u.id = a.user_id
-       LEFT JOIN cust_src c ON c.user_id = u.id
-      WHERE (EXISTS (SELECT 1 FROM site_sessions s WHERE s.user_id = u.id
-                      AND coalesce(s.last_used_at, s.created_at) >= ${FROM})
-             OR a.first_at >= ${FROM})
-        AND ($2 = '' OR u.mobile ILIKE '%' || $2 || '%' OR coalesce(u.display_name, u.wa_profile_name, '') ILIKE '%' || $2 || '%'
-             OR coalesce(u.email, '') ILIKE '%' || $2 || '%')
+       FROM base b LEFT JOIN cust_src c ON c.user_id = b.id
+      WHERE ($5 = 'all' OR greatest(b.web_last, b.wa_last, least(b.web_first, b.wa_first)) >= ${FROM})
+        AND ($2 = '' OR b.mobile ILIKE '%' || $2 || '%' OR coalesce(b.display_name, b.wa_profile_name, '') ILIKE '%' || $2 || '%'
+             OR coalesce(b.email, '') ILIKE '%' || $2 || '%')
+        AND ($6 = 'all' OR $6 = CASE WHEN b.web_first IS NOT NULL AND b.wa_first IS NOT NULL THEN 'both'
+                                     WHEN b.web_first IS NOT NULL THEN 'web' ELSE 'whatsapp' END)
+        AND ($7 = 'all' OR ($7 = 'push' AND b.push_devices > 0) OR ($7 = 'email' AND b.email_ok)
+             OR ($7 = 'none' AND b.push_devices = 0 AND NOT b.email_ok))
       ORDER BY last_seen DESC NULLS LAST LIMIT $3 OFFSET $4`,
-    [RANGES[r], term, Math.min(200, Number(limit) || 100), Number(offset) || 0]);
+    [RANGES[r], term, Math.min(200, Number(limit) || 100), Number(offset) || 0, active === 'all' ? 'all' : 'range', CH, RE]);
+  /* The whole base, for the cards above the list: who can be reached, by what. */
+  const s = await db.one(
+    `WITH wa AS (SELECT DISTINCT right(regexp_replace(mobile, '\\D', '', 'g'), 10) AS m10 FROM whatsapp_messages WHERE direction = 'in'),
+          web AS (SELECT DISTINCT user_id FROM site_sign_ins WHERE event = 'signed_in' AND user_id IS NOT NULL),
+          b AS (SELECT u.id, (web.user_id IS NOT NULL) AS on_web, (wa.m10 IS NOT NULL) AS on_wa,
+                       EXISTS (SELECT 1 FROM customer_push_subscriptions p WHERE p.user_id = u.id) AS push,
+                       (u.email IS NOT NULL AND u.email_verified_at IS NOT NULL AND u.email_unsubscribed_at IS NULL) AS email_ok
+                  FROM users u LEFT JOIN web ON web.user_id = u.id
+                  LEFT JOIN wa ON wa.m10 = right(regexp_replace(u.mobile, '\\D', '', 'g'), 10)
+                 WHERE (web.user_id IS NOT NULL OR wa.m10 IS NOT NULL) AND u.deactivated_at IS NULL)
+     SELECT count(*) AS total, count(*) FILTER (WHERE on_web AND NOT on_wa) AS web_only,
+            count(*) FILTER (WHERE on_wa AND NOT on_web) AS whatsapp_only, count(*) FILTER (WHERE on_web AND on_wa) AS both,
+            count(*) FILTER (WHERE push) AS push, count(*) FILTER (WHERE email_ok) AS email,
+            count(*) FILTER (WHERE NOT push AND NOT email_ok) AS unreachable,
+            count(*) FILTER (WHERE on_wa AND NOT push AND NOT email_ok) AS whatsapp_unreachable
+       FROM b`);
   return {
     range: r, total: rows[0] ? n(rows[0].total_rows) : 0,
+    summary: Object.fromEntries(Object.entries(s).map(([k, v]) => [k, n(v)])),
     rows: rows.map(({ total_rows, ...x }) => ({ ...x, user_id: String(x.user_id), open_sessions: n(x.open_sessions),
-      checks: n(x.checks), paid: n(x.paid), revenue_paise: n(x.revenue_paise), push_devices: n(x.push_devices) })),
+      checks: n(x.checks), vehicles: n(x.vehicles), watching: n(x.watching), paid: n(x.paid),
+      revenue_paise: n(x.revenue_paise), push_devices: n(x.push_devices) })),
   };
 }
 

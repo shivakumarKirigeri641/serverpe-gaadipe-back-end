@@ -295,6 +295,12 @@ async function eveningDigest() {
       if (out.ok) r = { ok: true, channel: 'email' };
       else errors.push(out.skipped ? 'email held (test mode)' : `email: ${out.error}`);
     }
+    // A browser notification on every phone where they allowed it; tapping opens the chat.
+    const pushed = await require('../site/push').toCustomer(person.user_id, {
+      title: regs.length === 1 ? `🔔 ${regs[0]}: ${byVehicle.get(regs[0]).map((i) => i.label).join(', ')}` : `🔔 Updates on ${regs.length} vehicles`,
+      body: summary.slice(0, 300), url: regs.length === 1 ? `/chat?reg=${encodeURIComponent(regs[0])}` : '/chat', tag: `watch-${today}`,
+    }).catch((e) => { errors.push(`push: ${e.message}`); return 0; });
+    if (pushed) r = { ok: true, channel: r.ok ? `${r.channel}+push` : 'push' };
     if (require('../config').config.whatsapp.enabled) {
       const wa = await notify(w, ok, summary, byVehicle);
       if (wa?.ok) r = { ok: true, channel: r.ok ? 'email+whatsapp' : 'whatsapp' };

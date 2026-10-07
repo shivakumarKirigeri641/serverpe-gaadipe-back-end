@@ -832,7 +832,8 @@ router.get('/web/visitors', needs('customers.view'), safe(async (req, res) => re
   range: req.query.range, source: req.query.source, q: req.query.q, limit: req.query.limit, offset: req.query.offset }))));
 router.get('/web/visitors/:id', needs('customers.view'), safe(async (req, res) => res.json(await web.trail(req.params.id))));
 router.get('/web/customers', needs('customers.view'), safe(async (req, res) => {
-  const out = await web.customers({ range: req.query.range, q: req.query.q, limit: req.query.limit, offset: req.query.offset });
+  const out = await web.customers({ range: req.query.range, q: req.query.q, channel: req.query.channel, reach: req.query.reach,
+    active: req.query.active, limit: req.query.limit, offset: req.query.offset });
   if (!refreshing(req) && req.query.q) {
     await auth.audit({ adminId: req.admin.id, action: 'web_customer_search', ip: ipOf(req), detail: { q: String(req.query.q).slice(0, 40) } });
   }

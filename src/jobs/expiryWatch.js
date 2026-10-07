@@ -348,6 +348,14 @@ async function runOnce({ limit = 20 } = {}) {
       else if (!out.skipped) console.warn('[expiry] email failed for %s: %s', row.reg_no, out.error);
     }
 
+    // A browser notification too, on every phone where they allowed it (2026-10-07);
+    // tapping it opens this vehicle in the GaadiPe chat.
+    const pushed = await require('../site/push').toCustomer(row.user_id, {
+      title: `${row.reg_no}: ${claimed.length === 1 ? claimed[0].doc.label : `${claimed.length} documents`} ${claimed.some((d) => d.days < 0) ? 'expired' : 'expiring'}`,
+      body: documentLine(claimed), url: `/chat?reg=${encodeURIComponent(row.reg_no)}`, tag: `expiry-${row.reg_no}`,
+    }).catch((e) => { console.warn('[expiry] push failed for %s: %s', row.reg_no, e.message); return 0; });
+    if (pushed) warned += 1;
+
     // WhatsApp, once GaadiPe has a number: the approved template, one message,
     // every document on one line because a parameter may not contain a newline.
     if (config.whatsapp.enabled) {
