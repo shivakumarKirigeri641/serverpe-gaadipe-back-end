@@ -153,6 +153,48 @@ async function check() {
     await raise({ key: `revenue_target:${hourKey.slice(0, 10)}`, severity: 'success', source: 'revenue', title: 'Revenue crossed the daily target',
       description: `₹${(today.gross / 100).toLocaleString('en-IN')} today, target ₹${(s.target / 100).toLocaleString('en-IN')}.`, detail: today });
   }
+  /* THE WEBSITE (2026-10-07, the web admin's anomaly detection, spec §56–57). */
+  const w = {
+    otpPct: await settings.num('alert_otp_success_pct', 30), freeFail: await settings.num('alert_free_check_fail_pct', 70),
+    drop: await settings.num('alert_traffic_drop_pct', 60), conv: await settings.num('alert_conversion_drop_pct', 50),
+    stuck: await settings.num('alert_stuck_payment_count', 2),
+  };
+  const [otp, free, conv, stuck] = await Promise.all([
+    db.one(`SELECT count(*) FILTER (WHERE event = 'code_requested')::int AS sent, count(*) FILTER (WHERE event = 'signed_in')::int AS ok
+              FROM site_sign_ins WHERE created_at > now() - interval '30 minutes'`),
+    db.one(`SELECT count(*)::int AS n, count(*) FILTER (WHERE NOT coalesce((detail->>'found')::boolean, false))::int AS failed
+              FROM event_log WHERE kind = 'chat_anon_check' AND created_at > now() - interval '30 minutes'`),
+    db.one(`SELECT (SELECT count(DISTINCT visitor_id) FROM events WHERE channel = 'web'
+                     AND occurred_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS visitors,
+                   (SELECT count(*) FROM payments WHERE status = 'paid' AND raw->>'channel' = 'web'
+                     AND paid_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS paid,
+                   (SELECT count(DISTINCT visitor_id) FROM events WHERE channel = 'web' AND occurred_at > now() - interval '7 days'
+                     AND occurred_at < date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS v7,
+                   (SELECT count(*) FROM payments WHERE status = 'paid' AND raw->>'channel' = 'web' AND paid_at > now() - interval '7 days'
+                     AND paid_at < date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS p7`).catch(() => ({})),
+    db.one(`SELECT count(*)::int AS n FROM web_sessions WHERE ended_at IS NULL AND step = 'paying'
+              AND last_seen_at > now() - interval '75 seconds' AND coalesce(last_action_at, started_at) < now() - interval '5 minutes'`).catch(() => ({ n: 0 })),
+  ]);
+  const otpRate = pct(otp.ok, otp.sent);
+  await toggle(otp.sent >= 5 && otpRate < w.otpPct, {
+    key: 'web_otp_failing', severity: 'critical', source: 'sign_in', title: 'Sign-in codes not working',
+    description: `${otp.sent} sign-in codes sent in 30 minutes, only ${otp.ok} sign-ins (${otpRate}%, threshold ${w.otpPct}%). SMS may not be arriving — check Fast2SMS.`, detail: { ...otp, ok_pct: otpRate } });
+  const freeRate = pct(free.failed, free.n);
+  await toggle(free.n >= 5 && freeRate >= w.freeFail, {
+    key: 'web_free_checks_failing', severity: 'warning', source: 'website', title: 'Free checks failing',
+    description: `${free.failed} of ${free.n} free chat checks in 30 minutes found nothing or failed (${freeRate}%). Visitors are not seeing vehicles.`, detail: { ...free, failed_pct: freeRate } });
+  await toggle(avg >= 10 && traffic.hour < avg * (1 - w.drop / 100), {
+    key: 'traffic_drop', severity: 'warning', source: 'traffic', title: 'Traffic drop',
+    description: `${traffic.hour} website visitors in the last hour — ${Math.round((1 - traffic.hour / avg) * 100)}% below the 7-day hourly average of ${avg.toFixed(1)}. Check the ads and the site.`, detail: { hour: traffic.hour, avg_hour: avg } });
+  const todayRate = conv.visitors ? conv.paid / conv.visitors : 0;
+  const weekRate = conv.v7 ? conv.p7 / conv.v7 : 0;
+  await toggle(conv.visitors >= 50 && weekRate > 0 && todayRate < weekRate * (1 - w.conv / 100), {
+    key: 'conversion_drop', severity: 'warning', source: 'website', title: 'Conversion drop',
+    description: `${(todayRate * 100).toFixed(1)}% of today’s visitors paid, against ${(weekRate * 100).toFixed(1)}% over the last 7 days.`, detail: { ...conv } });
+  await toggle(stuck.n >= w.stuck, {
+    key: 'web_stuck_at_payment', severity: 'info', source: 'website', title: 'Customers waiting at payment',
+    description: `${stuck.n} visitor${stuck.n === 1 ? ' is' : 's are'} on the ₹19 payment step with no action for 5 minutes. Open Live users to see who.`, detail: stuck });
+
   // News of an earlier hour or day is closed when it is no longer current.
   await db.query(
     `UPDATE admin_alerts SET status = 'resolved', resolved_at = now(), resolution = 'Period ended'

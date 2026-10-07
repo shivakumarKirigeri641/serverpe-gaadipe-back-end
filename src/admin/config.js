@@ -155,6 +155,12 @@ const RULES = [
   ['backup_stale', 'Backup stale', 'warning', 'No backup within the threshold.', [['alert_backup_stale_hours', 'Hours without a backup']]],
   ['traffic_spike', 'Traffic spike', 'info', 'Website visitors in an hour above the 7-day hourly average by the threshold.', [['alert_traffic_spike_pct', 'Above the average by (%)']]],
   ['revenue_target', 'Revenue target reached', 'success', 'Today’s revenue crossed the target (0 = off).', [['alert_daily_revenue_target_paise', 'Daily target (paise)']]],
+  // The website (2026-10-07, the web admin's anomaly detection).
+  ['web_otp_failing', 'Sign-in codes not working', 'critical', 'Few of the sign-in codes sent in 30 minutes led to a sign-in (5+ sent) — SMS may not be arriving.', [['alert_otp_success_pct', 'Sign-ins per code below (%)']]],
+  ['web_free_checks_failing', 'Free checks failing', 'warning', 'Most free chat checks in 30 minutes found nothing or failed (5+ checks).', [['alert_free_check_fail_pct', 'Failed above (%)']]],
+  ['traffic_drop', 'Traffic drop', 'warning', 'Website visitors in an hour below the 7-day hourly average by the threshold (average 10+).', [['alert_traffic_drop_pct', 'Below the average by (%)']]],
+  ['conversion_drop', 'Conversion drop', 'warning', 'Today’s visitors who paid, against the last 7 days (50+ visitors today).', [['alert_conversion_drop_pct', 'Below the 7-day rate by (%)']]],
+  ['web_stuck_at_payment', 'Customers waiting at payment', 'info', 'Visitors on the ₹19 payment step with no action for 5 minutes.', [['alert_stuck_payment_count', 'At least this many']]],
 ];
 
 let muteCache = { at: 0, v: {} };

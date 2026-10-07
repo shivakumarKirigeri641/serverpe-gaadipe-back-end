@@ -915,6 +915,15 @@ router.get('/web/customers/:id/export', needs('customers.view'), safe(async (req
   res.json(out);
 }));
 
+/* Insights (src/admin/insights.js): leads, stuck, abandoned, computed insights, breakdowns, one vehicle. */
+const insightsMod = require('../admin/insights');
+router.get('/web/leads', needs('customers.view'), safe(async (req, res) => res.json(await insightsMod.leads({ days: req.query.days, band: req.query.band }))));
+router.get('/web/stuck', needs('customers.view'), safe(async (req, res) => res.json(await insightsMod.stuck({ seconds: req.query.seconds }))));
+router.get('/web/abandoned', needs('customers.view'), safe(async (req, res) => res.json(await insightsMod.abandoned({ range: req.query.range }))));
+router.get('/web/insights', needs('dashboard.view'), safe(async (req, res) => res.json(await insightsMod.insights({ range: req.query.range }))));
+router.get('/web/breakdown', needs('dashboard.view'), safe(async (req, res) => res.json(await insightsMod.breakdown({ range: req.query.range }))));
+router.get('/web/vehicles/:reg', needs('vehicles.view'), safe(async (req, res) => res.json(await insightsMod.vehicle(req.params.reg))));
+
 /* Minute-by-minute analytics and the live funnel (src/admin/analytics.js). */
 const analytics = require('../admin/analytics');
 router.get('/web/analytics/series', needs('dashboard.view'), safe(async (req, res) => res.json(await analytics.series({ range: req.query.range }))));
