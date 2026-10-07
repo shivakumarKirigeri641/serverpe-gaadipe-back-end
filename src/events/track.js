@@ -140,9 +140,21 @@ function touchOf({ utm = {}, referrer = '', landing = '' }) {
   let host = '';
   try { host = referrer ? new URL(referrer).hostname.replace(/^www\./, '') : ''; } catch { /* not a URL */ }
   const ownSite = /(^|\.)gaadipe\.in$/.test(host);
+  /*
+   * AD CLICK IDS (user, 2026-10-07): a Google Ads click lands with gclid /
+   * gbraid / wbraid / gad_source and usually no referrer (iPhones hide it), so
+   * every Google Ads visitor was read as "direct". The click id says it was a
+   * paid click, whatever the referrer. (Meta's fbclid is not used: Facebook
+   * adds it to ordinary shared links too; Meta ads carry utm_ tags instead.)
+   */
+  let q = null;
+  try { q = new URL(String(landing || ''), 'https://gaadipe.in').searchParams; } catch { /* not a URL */ }
+  const googleAd = q && (q.get('gclid') || q.get('gbraid') || q.get('wbraid') || q.get('gad_source'));
 
   let source;
-  if (src) {
+  let adCampaign = null;
+  if (!src && googleAd) { source = 'google_ads'; adCampaign = q.get('gad_campaignid') || null; }
+  else if (src) {
     source = /google/.test(src) && /(cpc|ppc|paid|ads)/.test(med) ? 'google_ads'
       : /(facebook|instagram|meta|fb|ig)/.test(src) ? (/(cpc|paid|ads)/.test(med) ? 'meta_ads' : 'social')
       : /whatsapp|^wa$/.test(src) ? 'whatsapp'
@@ -157,7 +169,7 @@ function touchOf({ utm = {}, referrer = '', landing = '' }) {
   return {
     source,
     medium: clip(utm.medium, 60) || null,
-    campaign: clip(utm.campaign, 120) || null,
+    campaign: clip(utm.campaign || adCampaign, 120) || null,
     term: clip(utm.term, 120) || null,
     content: clip(utm.content, 120) || null,
     referrer: ownSite ? null : clip(host, 120) || null,
