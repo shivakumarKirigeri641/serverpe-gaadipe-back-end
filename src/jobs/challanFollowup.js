@@ -39,7 +39,49 @@ function challanLine(c) {
           when && !Number.isNaN(when.getTime()) ? `most recent ${fmt(when)}` : null].filter(Boolean).join(' · ');
 }
 
+/*
+ * TELLING THE CUSTOMER (2026-10-07: WhatsApp is retired). By email when their
+ * address is confirmed, and a browser notification on every phone where they
+ * allowed it; WhatsApp only while it is switched on. Told = any of them.
+ */
 async function tellCustomer(r, c) {
+  const C = require('../mail/customer');
+  const T = require('../mail/templates');
+  const line = challanLine(c);
+  const site = C.SITE();
+  const open = `${site}/chat?open=reports`;
+  const told = [];
+  if (r.email && r.email_verified_at && !r.email_unsubscribed_at) {
+    const pending = c.pending_count > 0;
+    const card = T.vehicleCard({ reg: r.reg_no, sub: `Report ${r.report_number}`,
+      items: [{ label: 'Challans', text: line, tone: pending ? 'warn' : 'good' }] });
+    const mail = T.layout({
+      tagline: 'Your report is complete',
+      preheader: `${r.reg_no}: ${line}`,
+      badge: { text: pending ? 'Challans pending' : 'No pending challans', tone: pending ? 'watch' : 'good' },
+      title: `Challans added to your report for ${r.reg_no}`,
+      lead: `Hi ${String(r.name || 'there').split(' ')[0]}, the Government e-Challan service is answering again, so we checked the challans and added them to your report ${r.report_number} — same report, same download.`,
+      intro: [card.html], textBlocks: [card.text],
+      cta: { label: 'Open your report', url: open },
+      footer: 'You are receiving this because you bought a GaadiPe report for this vehicle.',
+      footerHtml: r.email_token ? `<a href="${T.esc(`${C.API()}/email/unsubscribe/${r.email_token}`)}" style="color:#0f766e;">Unsubscribe</a>` : '',
+    });
+    const out = await C.deliver(r.email, { subject: `${r.reg_no}: challans added to your report — GaadiPe`, ...mail }, r.email_token)
+      .catch((e) => ({ ok: false, error: e.message }));
+    if (out.ok) told.push('email');
+  }
+  const pushed = await require('../site/push').toCustomer(r.user_id, {
+    title: `${r.reg_no}: challans added to your report`, body: line, url: '/chat?open=reports', tag: `challans-${r.id}`,
+  }).catch(() => 0);
+  if (pushed) told.push('push');
+  if (require('../config').config.whatsapp.enabled) {
+    const wa = await tellOnWhatsApp(r, c).catch(() => ({ ok: false }));
+    if (wa?.ok) told.push('whatsapp');
+  }
+  return told.length ? { ok: true, via: told.join('+') } : { ok: false, error: 'no email, notifications or WhatsApp' };
+}
+
+async function tellOnWhatsApp(r, c) {
   const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
   const link = base && r.access_token ? `${base}/report/${r.access_token}` : null;
   const line = challanLine(c);
@@ -64,7 +106,8 @@ async function tick() {
   const every = Math.max(10, await settings.num('challan_followup_every_minutes', 30));
   const maxTries = await settings.num('challan_followup_max_tries', 48);
   const { rows } = await db.query(
-    `SELECT r.*, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name
+    `SELECT r.*, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
+            u.email, u.email_verified_at, u.email_unsubscribed_at, u.email_token
        FROM vehicle_reports r JOIN users u ON u.id = r.user_id
       WHERE r.payment_id IS NOT NULL AND r.valid_until > now()
         AND r.created_at > now() - interval '3 days'

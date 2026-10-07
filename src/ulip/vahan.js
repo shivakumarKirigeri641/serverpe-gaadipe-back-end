@@ -275,6 +275,15 @@ async function fetchRc(regNo, opts = {}) {
              code: first.code, error: first.message || 'Vehicle not found in VAHAN', calls };
   }
 
+  /* ULIP'S OWN DAILY LIMIT (2026-10-07): "Daily API limit exceeded for your
+     account". ULIP is still asked on every check (the user removed GaadiPe's own
+     pause), but its other format shares the same exhausted quota, so it is not
+     asked a second time: eChallan.app, then IDSPay, straight away. */
+  if (/daily api limit|limit exceeded/i.test(String(first.message || ''))) {
+    return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null, code: 'ULIP_DAILY_LIMIT',
+             error: 'VAHAN is not responding. Please try again in a few minutes.', calls });
+  }
+
   // A login failure is not worth a fallback: both datasets sit behind the same
   // token, so the second call would fail identically and burn another attempt.
   if (String(first.message || '').includes('ULIP login failed')) {

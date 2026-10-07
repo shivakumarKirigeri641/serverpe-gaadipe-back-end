@@ -144,6 +144,15 @@ async function runOnce({ limit = 20 } = {}) {
       else if (!out.skipped) console.warn('[renewal] email failed for %s: %s', r.reg_no, out.error);
     }
 
+    // A browser notification too, on every phone where they allowed it (2026-10-07:
+    // WhatsApp is retired); tapping it opens the vehicle in the chat.
+    const pushed = await require('../site/push').toCustomer(r.user_id, {
+      title: `${r.reg_no}: monitoring ends ${istDay(r.ends_on)}`,
+      body: `Renew for ${money(priced.paise)} to keep the daily checks and alerts for ${priced.plan.duration_days || 28} more days.`,
+      url: `/chat?reg=${encodeURIComponent(r.reg_no)}`, tag: `renewal-${r.subscription_id}`,
+    }).catch((e) => { console.warn('[renewal] push failed for %s: %s', r.reg_no, e.message); return 0; });
+    if (pushed) told += 1;
+
     // WhatsApp, once there is a number: the approved template. Every parameter
     // is non-empty and single-line, which is what Meta requires.
     if (config.whatsapp.enabled) {
