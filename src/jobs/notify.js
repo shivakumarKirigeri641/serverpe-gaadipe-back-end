@@ -152,7 +152,58 @@ async function webChecks() {
               ['Came from', await sourceOfUser(e.user_id)],
             ] },
           ],
-          cta: { label: 'Open the website admin', url: `${WEBADMIN()}/customers` },
+          cta: { label: 'Open the website admin', url: `${WEBADMIN()}/web/customers` },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
+/*
+ * SOMEONE ON THE WEBSITE (user, 2026-10-07: "I need a mail when someone taps my
+ * website"). One email per visit, about a minute after it starts, so it can say
+ * where they came from (Google Ads, search…), on what phone, where, whether they
+ * have been before, and what they have done so far. Switch: notify_visits.
+ */
+async function visits() {
+  if (!(await on('notify_visits'))) return 0;
+  const { rows } = await db.query(
+    `SELECT s.* FROM web_sessions s
+      WHERE s.started_at > now() - interval '1 hour' AND s.started_at < now() - interval '60 seconds'
+        AND ${notDone('visit', 's.session_id')}
+      ORDER BY s.started_at LIMIT 30`);
+  let n = 0;
+  for (const s of rows) {
+    n += await deliver('visit', s.session_id, async () => {
+      const before = await db.one(
+        `SELECT count(*)::int AS n, min(started_at) AS first FROM web_sessions WHERE visitor_id = $1 AND started_at < $2`,
+        [s.visitor_id, s.started_at]);
+      const u = s.user_id ? await db.one(
+        `SELECT mobile, coalesce(display_name, wa_profile_name) AS name FROM users WHERE id = $1`, [s.user_id]) : null;
+      const dev = s.device || {};
+      const pl = s.place || {};
+      const where = [pl.city, pl.region, pl.country].filter(Boolean).join(', ') || 'Not known';
+      const from = [sourceName(s.source || 'direct'), s.campaign].filter(Boolean).join(' · ');
+      const again = before?.n ? `Returning — visit ${before.n + 1} (first ${T.ist(before.first)})` : 'First visit';
+      const phone = [dev.device_type, dev.os, dev.browser].filter(Boolean).join(' · ') || 'Not known';
+      return {
+        subject: `👀 ${before?.n ? 'Returning visitor' : 'New visitor'} on gaadipe.in · ${sourceName(s.source || 'direct')}${pl.city ? ` · ${pl.city}` : ''}`,
+        ...T.layout({
+          badge: { text: before?.n ? 'Returning visitor' : 'New visitor', tone: s.source === 'google_ads' || s.source === 'meta_ads' ? 'good' : 'info' },
+          title: `Someone is on gaadipe.in${u ? ` — ${u.name || T.mobile(u.mobile)}` : ''}`,
+          lead: `${T.ist(s.started_at)} · from ${from}.`,
+          sections: [
+            { heading: 'The visit', rows: [
+              ['Came from', from], ['Landed on', s.landing || '/'], ['Phone / computer', phone], ['Where', where],
+              ['Been before?', again], ['Signed in', u ? `${u.name || 'Yes'} · ${T.mobile(u.mobile)}` : 'Not yet'],
+            ] },
+            { heading: 'So far', rows: [
+              ['Pages', String(s.pages || 0)], ['Taps', String(s.interactions || 0)],
+              ['Doing now', s.action || s.step || '—'], ['Visit id', s.session_id],
+            ] },
+          ],
+          cta: { label: 'Watch this visit', url: `${WEBADMIN()}/web/sessions/${encodeURIComponent(s.session_id)}` },
         }),
       };
     }) ? 1 : 0;
@@ -192,7 +243,7 @@ async function chatChecks() {
               ['Free checks today (this device)', sameDevice ? `${sameDevice.n} of 3` : null],
             ] },
           ],
-          cta: { label: 'Open free checks', url: `${WEBADMIN()}/free-checks` },
+          cta: { label: 'Open free checks', url: `${WEBADMIN()}/web/free-checks` },
         }),
       };
     }) ? 1 : 0;
@@ -221,7 +272,7 @@ async function pushOn() {
             ['Name', u?.name || 'Not given'], ['Mobile', T.mobile(u?.mobile)],
             ['Device', String(c.device || '').slice(0, 120) || 'Unknown'], ['Came from', await sourceOfUser(c.user_id)],
           ] }],
-          cta: { label: 'Open customers', url: `${WEBADMIN()}/customers` },
+          cta: { label: 'Open customers', url: `${WEBADMIN()}/web/customers` },
         }),
       };
     }) ? 1 : 0;
@@ -1031,7 +1082,7 @@ async function runOnce() {
      from WhatsApp"). WhatsApp is retired: "said hi", WhatsApp checks, STOP and its
      reason, left at the WhatsApp payment link and the WhatsApp summary no longer
      run; payments and alerts below mail only the website's. */
-  for (const [k, fn] of Object.entries({ signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback,
+  for (const [k, fn] of Object.entries({ visits, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback,
                                             alertMails, security, dailySummary, weeklyMoney, weeklyDigest })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
@@ -1142,5 +1193,5 @@ function start(everySeconds = 30) {
   console.log(`  admin email: every ${everySeconds}s from ${process.env.NOREPLYMAIL}`);
 }
 
-module.exports = { start, runOnce, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waChecks, waOptOut,
+module.exports = { start, runOnce, visits, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waChecks, waOptOut,
                    leftAtPayment, security, dailySummary, weeklyMoney, whatsappSummary, weeklyDigest };

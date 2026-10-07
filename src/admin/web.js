@@ -384,12 +384,12 @@ async function log({ range, kind = '', q = '', pages = false, limit = 200 } = {}
 
 /* Every email the admin can get, with its switch (jobs/notify.js), in the order shown. */
 const EMAILS = [
+  ['notify_visits', 'visit', 'Someone opens the website', 'One email per visit: where they came from, phone, place, new or returning, what they tapped'],
   ['notify_sign_ins', 'sign_in', 'Someone signs in on the website', 'New customers are marked 🆕, with where they came from'],
   ['notify_web_checks', 'web_check', 'A vehicle is checked on the website', 'After signing in: new vehicle or repeat, found or not'],
   ['notify_chat_checks', 'chat_check', 'A free check in the chat', 'Without signing in — can be many a day while ads run'],
   ['notify_push_on', 'push_on', 'A customer allows notifications', 'On a phone or computer'],
   ['notify_payments', 'payment', 'A payment succeeds', 'With the invoice PDF'],
-  ['notify_left_at_payment', 'left_at_pay', 'A ₹19 payment is left unpaid', '30 minutes after the payment page was opened'],
   ['notify_contact', 'contact', 'A Contact us message', ''],
   ['notify_feedback', 'feedback', 'A feedback note', ''],
   ['daily_summary_email', 'daily_summary', 'The daily summary', 'At 11:55 pm, the whole day'],
