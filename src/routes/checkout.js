@@ -297,8 +297,10 @@ router.get('/pay/:token', safe(async (req, res) => {
   // WHATSAPP-FIRST (user, 2026-09-25): while GaadiPe is on WhatsApp the site has
   // no account area to go back to, so every payment ends in the chat — even one
   // started on the web. That one opens with "Report" typed (see waJs).
+  // THE CHAT (2026-10-07): a web payment returns to the conversation, which
+  // opens the report right there (/chat?paid=REG).
   const backUrl = web && !WA_ON()
-    ? `${site}/app/${pay.reg_no ? `vehicle/${encodeURIComponent(pay.reg_no)}` : 'reports'}?paid=1`
+    ? `${site}/chat?paid=${encodeURIComponent(pay.reg_no || '1')}`
     : null;
   const chatText = web ? 'Report' : '';
   const validDays = await settings.num('report_valid_days', 7);
