@@ -76,7 +76,11 @@ function readRc(http, json, regNo, { storeFull = false } = {}) {
   if (http >= 500 || http === 0) return { outcome: 'RETRY', code: `HTTP${http}`, message: message || `HTTP ${http}` };
   if (http === 401 || http === 403) return { outcome: 'RETRY', code: `HTTP${http}`, message: message || 'key refused' };
   if (http === 404 && NOT_FOUND.test(message)) return { outcome: 'NOT_FOUND', code: 'HTTP404', message };
-  if (json?.provider_unavailable || json?.verification_pending || /PENDING/i.test(String(json?.rc_status || ''))) {
+  /* "Vehicle added for verification. Details will refresh when the records
+     service is available." (user, 2026-10-07): they have no record yet — go to
+     IDSPay at once, the same as provider_unavailable / verification_pending. */
+  if (json?.provider_unavailable || json?.verification_pending || /PENDING/i.test(String(json?.rc_status || ''))
+      || /added for verification|will refresh when the records service/i.test(message)) {
     return { outcome: 'RETRY', code: 'UNAVAILABLE', message: message || 'their records source is unavailable' };
   }
   const body = json?.data && typeof json.data === 'object' ? json.data

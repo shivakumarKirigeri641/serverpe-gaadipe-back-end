@@ -67,7 +67,8 @@ async function anonCheck(req) {
   }
 
   // Free sources only: an anonymous visitor never costs an IDSPay call.
-  const data = await gateway.full(parsed.regNo, { backup: 0 });
+  // The same rule as every free check (rc_backup_paid_only): ULIP, eChallan.app, and IDSPay only if switched on for free checks.
+  const data = await gateway.full(parsed.regNo, await require('../vehicle/rcBackup').freeOpts());
   await db.query(`INSERT INTO event_log (kind, detail) VALUES ('chat_anon_check', $1)`,
     [JSON.stringify({ device, ip, reg_no: parsed.regNo, found: data?.success === true, ...(data?.success ? {} : { error: data?.error || 'failed' }) })]).catch(() => {});
 
