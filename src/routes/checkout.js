@@ -297,11 +297,14 @@ router.get('/pay/:token', safe(async (req, res) => {
   // WHATSAPP-FIRST (user, 2026-09-25): while GaadiPe is on WhatsApp the site has
   // no account area to go back to, so every payment ends in the chat — even one
   // started on the web. That one opens with "Report" typed (see waJs).
-  // THE CHAT (2026-10-07): a web payment returns to the conversation, which
-  // opens the report right there (/chat?paid=REG).
-  const backUrl = web && !WA_ON()
+  // THE CHAT (2026-10-07): a web payment ALWAYS returns to the conversation on
+  // gaadipe.in, which opens the full report and its PDF there (/chat?paid=REG) —
+  // whatever WHATSAPP_ENABLED says. With the WhatsApp account disabled, "Open
+  // WhatsApp" after paying sent a paying customer to a dead end.
+  const backUrl = web
     ? `${site}/chat?paid=${encodeURIComponent(pay.reg_no || '1')}`
     : null;
+  void WA_ON;
   const chatText = web ? 'Report' : '';
   const validDays = await settings.num('report_valid_days', 7);
   const planLine = isReport
@@ -326,16 +329,16 @@ router.get('/pay/:token', safe(async (req, res) => {
 <div id="done" class="card" style="display:none">
   <h1>Payment successful ✅</h1>
   <p class="muted" style="margin:0 0 14px">${backUrl
-    ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready in your GaadiPe account.`
+    ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready — it opens in your GaadiPe chat with a Download PDF button.`
     : web
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready. WhatsApp opens with <b>Report</b> typed — press Send and it arrives in the chat.`
     : isReport
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is on its way to your WhatsApp chat.`
     : 'Your confirmation is on its way to your WhatsApp chat.'}</p>
   <p class="muted" id="mailedTo" style="margin:0 0 14px"></p>
-  <p class="muted" style="margin:0 0 14px">${backUrl ? 'Taking you back to it…' : 'Opening WhatsApp…'}</p>
+  <p class="muted" style="margin:0 0 14px">${backUrl ? 'Taking you back to the chat…' : 'Opening WhatsApp…'}</p>
   ${backUrl
-    ? `<button onclick="location.href=${JSON.stringify(backUrl)}">See my report</button>`
+    ? `<button onclick="location.href=${JSON.stringify(backUrl)}">Open my report in the chat</button>`
     : waButton('Open WhatsApp', chatText)}
 </div>
 
@@ -487,6 +490,11 @@ router.get('/pay/:token', safe(async (req, res) => {
     });
     rz.open();
   }
+  /* ASKED ONCE (user, 2026-10-07: "it asks the summary twice before pay"). Arriving
+     from the site's payment window (?go=1), the name, state, email and declaration
+     were just given there: save them and open Razorpay at once. This page stays
+     underneath, for a second try if Razorpay is closed. */
+  if (/[?&]go=1(&|$)/.test(location.search) && !btn.disabled) btn.onclick();
 </script>`));
 }));
 
