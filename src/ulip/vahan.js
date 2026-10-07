@@ -231,7 +231,8 @@ async function fetchRc(regNo, opts = {}) {
   const primaryIsXml = config.ulip.vahanPrimary === '01';
 
   const first = primaryIsXml ? await tryV1(regNo) : await tryV4(regNo);
-  calls.push({ path: first.path, outcome: first.outcome, code: first.code, ms: first.durationMs });
+  calls.push({ path: first.path, outcome: first.outcome, code: first.code, ms: first.durationMs,
+               ...(first.outcome === OUTCOME.RETRY && first.message ? { said: String(first.message).slice(0, 120) } : {}) });
 
   if (first.outcome === OUTCOME.FOUND) {
     return { ok: true, data: first.data, source: first.source, calls };
@@ -246,6 +247,11 @@ async function fetchRc(regNo, opts = {}) {
 
   // A login failure is not worth a fallback: both datasets sit behind the same
   // token, so the second call would fail identically and burn another attempt.
+  // The daily limit is the account's, so the other dataset is over it too.
+  if (first.code === 'DAILY_LIMIT') {
+    return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null, code: 'DAILY_LIMIT',
+             error: 'VAHAN is not responding. Please try again in a few minutes.', calls });
+  }
   if (String(first.message || '').includes('ULIP login failed')) {
     return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null, code: 'AUTH',
              error: 'Cannot authenticate with ULIP. Check credentials and that this host is whitelisted.', calls });
@@ -254,7 +260,8 @@ async function fetchRc(regNo, opts = {}) {
   // Anything else — mapping error, timeout, 5xx — is worth a second try on the
   // other format, which fails independently.
   const second = primaryIsXml ? await tryV4(regNo) : await tryV1(regNo);
-  calls.push({ path: second.path, outcome: second.outcome, code: second.code, ms: second.durationMs });
+  calls.push({ path: second.path, outcome: second.outcome, code: second.code, ms: second.durationMs,
+               ...(second.outcome === OUTCOME.RETRY && second.message ? { said: String(second.message).slice(0, 120) } : {}) });
 
   if (second.outcome === OUTCOME.FOUND) {
     console.warn(`[vahan] ${regNo} served by ${second.source} after ${first.source} failed (${first.code})`);
