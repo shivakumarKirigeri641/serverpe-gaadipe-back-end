@@ -67,7 +67,38 @@ function parseDate(v) {
 }
 
 /** The shape the rest of the system works with — provider-agnostic. */
+/*
+ * WHAT THE NUMBER ITSELF SAYS (2026-10-07: an IDSPay answer came without its RTO
+ * code). The state and RTO are read from the registration number when a source
+ * leaves them out, so every source — ULIP, eChallan.app, IDSPay — gives the same
+ * fields. A source's own value always wins.
+ */
+function fillFromReg(data, regNo) {
+  if (!data) return data;
+  const reg = String(data.reg_no || regNo || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!data.rto_code) {
+    const code = require('../admin/geo').rtoCode(reg);
+    if (code && !code.startsWith('BH')) data.rto_code = code;
+  }
+  if (!data.state_code && /^[A-Z]{2}/.test(reg) && !reg.startsWith('BH') && !/^\d{2}BH/.test(reg)) data.state_code = reg.slice(0, 2);
+  return data;
+}
+
+/*
+ * A FOUND answer that left out fields every vehicle has (2026-10-07): names
+ * only, never values — enough to spot a source whose field names changed.
+ */
+const ALWAYS = ['maker', 'model', 'vehicle_class', 'fuel', 'reg_date', 'owner_serial', 'registered_at'];
+function noteGaps(source, regNo, data) {
+  const gaps = ALWAYS.filter((k) => data?.[k] == null || data[k] === '');
+  if (gaps.length) console.warn('[rc-map] %s answer for %s…: empty %s', source, String(regNo || '').slice(0, 4), gaps.join(', '));
+}
+
 function mapJson(regNo, d) {
+  return fillFromReg(mapJsonRaw(regNo, d), regNo);
+}
+
+function mapJsonRaw(regNo, d) {
   return {
     reg_no: blank(d.rcRegnNo) || regNo,
     status: blank(d.rcStatus),
@@ -204,7 +235,7 @@ async function tryV4(regNo) {
   const r = await post('VAHAN/04', { vehiclenumber: regNo });
   if (r.outcome === OUTCOME.FOUND) {
     const data = mapAny(regNo, r.payload);
-    if (usable(data)) return { ...r, data, source: 'VAHAN/04' };
+    if (usable(data)) { noteGaps('VAHAN/04', regNo, data); return { ...r, data, source: 'VAHAN/04' }; }
     console.warn(`[vahan] VAHAN/04 ${regNo}: "found" but unreadable or empty — ${shapeOf(r.payload)}`);
     return { ...r, outcome: OUTCOME.RETRY, code: 'EMPTY_RECORD', message: 'VAHAN/04 returned no usable record', data: null, source: 'VAHAN/04' };
   }
@@ -215,7 +246,7 @@ async function tryV1(regNo) {
   const r = await post('VAHAN/01', { vehiclenumber: regNo });
   if (r.outcome === OUTCOME.FOUND) {
     const data = mapAny(regNo, r.payload);
-    if (usable(data)) return { ...r, data, source: 'VAHAN/01' };
+    if (usable(data)) { noteGaps('VAHAN/01', regNo, data); return { ...r, data, source: 'VAHAN/01' }; }
     console.warn(`[vahan] VAHAN/01 ${regNo}: "found" but unreadable or empty — ${shapeOf(r.payload)}`);
     return { ...r, outcome: OUTCOME.RETRY, code: 'EMPTY_RECORD', message: 'VAHAN/01 returned no usable record', data: null, source: 'VAHAN/01' };
   }
@@ -312,4 +343,4 @@ async function backup(regNo, calls, opts, failure) {
   return { ...failure, calls };
 }
 
-module.exports = { fetchRc, mapJson, mapXml, mapAny, usable, parseDate };
+module.exports = { fetchRc, mapJson, mapXml, mapAny, usable, parseDate, fillFromReg, noteGaps };

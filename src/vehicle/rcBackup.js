@@ -201,6 +201,8 @@ function read(http, json, regNo, { storeFull = false } = {}) {
     console.error('[rc-backup] answer not understood for %s; keys: %s', regNo, Object.keys(d).join(','));
     return { outcome: 'RETRY', code: 'UNREADABLE', message: 'backup answer could not be read' };
   }
+  require('../ulip/vahan').fillFromReg(data, regNo);
+  require('../ulip/vahan').noteGaps('IDSPay', regNo, data);
   return { outcome: 'FOUND', data };
 }
 

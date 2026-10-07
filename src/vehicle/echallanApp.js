@@ -68,7 +68,6 @@ async function noteCredits(json) {
 }
 
 const NOT_FOUND = /not\s*found|no\s*record|invalid\s*(vehicle|reg|rc)|does\s*not\s*exist/i;
-const camel = (k) => k.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
 
 /** Their answer, as { outcome: FOUND | NOT_FOUND | RETRY, data?, code, message }. */
 function readRc(http, json, regNo, { storeFull = false } = {}) {
@@ -85,9 +84,17 @@ function readRc(http, json, regNo, { storeFull = false } = {}) {
   }
   const body = json?.data && typeof json.data === 'object' ? json.data
     : json?.result && typeof json.result === 'object' ? json.result : json;
-  // VAHAN's own snake_case names -> the camelCase ULIP's reader takes.
-  const c = {};
-  for (const [k, v] of Object.entries(body || {})) if (typeof v !== 'object' || v === null) c[camel(k)] = v;
+  /* VAHAN's own names, matched the way ULIP's reader matches them (2026-10-07):
+     case and underscores ignored, so rc_maker_desc, RC_MAKER_DESC and
+     rcMakerDesc are one field; one level of nesting is flattened too. */
+  const norm = (k) => String(k).toLowerCase().replace(/[^a-z0-9]/g, '');
+  const flat = {};
+  for (const [k, v] of Object.entries(body || {})) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      for (const [k2, v2] of Object.entries(v)) if (v2 == null || typeof v2 !== 'object') flat[norm(k2)] ??= v2;
+    } else if (v == null || typeof v !== 'object') flat[norm(k)] = v;
+  }
+  const c = new Proxy(flat, { get: (t, prop) => (typeof prop === 'string' ? t[norm(prop)] : undefined) });
   const vahan = require('../ulip/vahan');
   const data = vahan.mapJson(regNo, c);
   if (!vahan.usable(data)) {
@@ -106,6 +113,7 @@ function readRc(http, json, regNo, { storeFull = false } = {}) {
     data.engine = maskTail(data.engine);
     data.address = maskAddress(data.address);
   }
+  require('../ulip/vahan').noteGaps('eChallan.app', regNo, data);
   return { outcome: 'FOUND', data };
 }
 
