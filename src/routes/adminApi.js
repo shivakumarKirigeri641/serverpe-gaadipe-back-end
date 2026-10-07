@@ -915,8 +915,8 @@ router.get('/web/customers/:id/export', needs('customers.view'), safe(async (req
   res.json(out);
 }));
 
-/* Insights (src/admin/insights.js): leads, stuck, abandoned, computed insights, breakdowns, one vehicle. */
-const insightsMod = require('../admin/insights');
+/* Insights (src/admin/webInsights.js): leads, stuck, abandoned, computed insights, breakdowns, one vehicle. */
+const insightsMod = require('../admin/webInsights');
 router.get('/web/leads', needs('customers.view'), safe(async (req, res) => res.json(await insightsMod.leads({ days: req.query.days, band: req.query.band }))));
 router.get('/web/stuck', needs('customers.view'), safe(async (req, res) => res.json(await insightsMod.stuck({ seconds: req.query.seconds }))));
 router.get('/web/abandoned', needs('customers.view'), safe(async (req, res) => res.json(await insightsMod.abandoned({ range: req.query.range }))));
