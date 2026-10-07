@@ -31,7 +31,6 @@ const state = {
   refusals: 0,          // refused logins in a row; each one doubles the pause
   attempts: [],         // when each login was tried (the hourly budget)
   restored: false,      // the saved pause has been read back after a restart
-  limitUntil: 0, limitHitAt: 0, limitSaid: null,   // ULIP's daily API limit (see hitDailyLimit)
 };
 
 /*
@@ -81,66 +80,6 @@ async function restorePause() {
       console.warn('[ulip] login pause carried over the restart: %d more min', Math.ceil((state.lockedUntil - Date.now()) / 60000));
     }
   } catch { /* no saved pause — carry on */ }
-  try {
-    const row = await require('../db').one(`SELECT value FROM app_settings WHERE key = 'ulip_daily_limit'`);
-    const saved = row?.value ? JSON.parse(row.value) : null;
-    if (saved) {
-      state.limitHitAt = Math.max(state.limitHitAt, Number(saved.hitAt) || 0);
-      if (Number(saved.until) > Date.now() && Number(saved.until) > state.limitUntil) {
-        state.limitUntil = Number(saved.until);
-        state.limitSaid = saved.said || null;
-        console.warn('[ulip] daily-limit pause carried over the restart: until %s', istTime(state.limitUntil));
-      }
-    }
-  } catch { /* no saved limit — carry on */ }
-}
-
-/*
- * ULIP'S DAILY API LIMIT (2026-10-07). ULIP answered VAHAN/04 with
- * code "NO_DATA_FOUND" and the message "Daily API limit exceeded for your
- * account. Please contact the administrator." — logged only as a retry, so it
- * looked like VAHAN being down, and every customer check, the watchdog and the
- * waiting list kept asking (each one counting against the same limit).
- * Now a "limit exceeded" answer, in whatever field ULIP puts it, stops every
- * ULIP call until midnight IST: lookups fail at once with code DAILY_LIMIT and
- * go to eChallan.app and the RC backup, and the admin is told once. If the
- * limit is hit again within a day of the last time (a rolling 24 hours, not a
- * midnight reset), the next try is an hour later instead. The pause is saved
- * (app_settings ulip_daily_limit), so a restart does not ask again; deleting
- * that row ends it.
- */
-const LIMIT_RE = /limit\s+exceeded/i;
-const IST_MS = 5.5 * 3600e3;
-const istTime = (ms) => new Date(ms + IST_MS).toISOString().slice(0, 16).replace('T', ' ');
-function nextIstMidnight(now = Date.now()) {
-  const d = new Date(now + IST_MS);
-  d.setUTCHours(24, 0, 0, 0);
-  return d.getTime() - IST_MS;
-}
-
-function hitDailyLimit(said) {
-  const now = Date.now();
-  if (now < state.limitUntil) return;            // already paused (calls that were in flight)
-  const again = state.limitHitAt && now - state.limitHitAt < 24 * 3600e3;
-  state.limitUntil = again ? now + 3600e3 : nextIstMidnight(now);
-  state.limitHitAt = now;
-  state.limitSaid = String(said || 'Daily API limit exceeded').slice(0, 160);
-  try {
-    require('../db').query(
-      `INSERT INTO app_settings (key, value) VALUES ('ulip_daily_limit', $1)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, modified_at = now()`,
-      [JSON.stringify({ until: state.limitUntil, hitAt: state.limitHitAt, said: state.limitSaid })]).catch(() => {});
-  } catch { /* the pause in memory still holds */ }
-  console.error('[ulip] daily API limit reached ("%s") — no ULIP calls until %s IST', state.limitSaid, istTime(state.limitUntil));
-  if (again) return;                             // told once per day, not every hour
-  try {
-    require('../util/adminPing').ping({
-      key: 'ulip_daily_limit', severity: 'warning', source: 'vehicle_api',
-      title: '⏳ ULIP daily limit reached',
-      text: `ULIP said: "${state.limitSaid}". GaadiPe has stopped calling ULIP until ${istTime(state.limitUntil)} IST `
-        + 'and is using eChallan.app and the RC backup meanwhile. Ask ULIP support for the daily limit and a higher one.',
-    }).catch(() => {});
-  } catch { /* the ping is never worth a failure here */ }
 }
 
 function pauseLogins(why) {
@@ -288,13 +227,6 @@ async function post(path, body) {
     signal: AbortSignal.timeout(config.ulip.timeoutMs),
   });
 
-  await restorePause();
-  if (Date.now() < state.limitUntil) {
-    return { outcome: OUTCOME.RETRY, code: 'DAILY_LIMIT',
-             message: `ULIP daily API limit reached ("${state.limitSaid}"), not asked again until ${istTime(state.limitUntil)} IST`,
-             payload: null, httpStatus: null, durationMs: 0, path };
-  }
-
   try {
     let token = await getToken();
     let res = await send(token);
@@ -313,16 +245,9 @@ async function post(path, body) {
       return { outcome: OUTCOME.RETRY, code: 'BAD_JSON', message: text.slice(0, 200), payload: null, httpStatus: res.status, durationMs, path };
     }
 
-    let verdict = classify(res.status, parsed);
-    // The limit hides under any code, even a "found" whose record is the message itself.
-    if (LIMIT_RE.test(text)) {
-      const entry = Array.isArray(parsed?.response) ? parsed.response[0] : parsed?.response;
-      const said = [parsed?.message, entry?.message?.text, typeof verdict.payload === 'string' ? verdict.payload : null]
-        .find((s) => LIMIT_RE.test(String(s || ''))) || 'Daily API limit exceeded';
-      verdict = { outcome: OUTCOME.RETRY, code: 'DAILY_LIMIT', message: String(said), payload: null };
-      hitDailyLimit(said);
-    }
+    const verdict = classify(res.status, parsed);
     if (config.logCalls) {
+      // ULIP's own words on a failure ("Daily API limit exceeded…" hides under NO_DATA_FOUND).
       console.log(`[ulip] ${path.padEnd(12)} ${String(res.status).padEnd(3)} ${String(durationMs).padStart(5)}ms  ${verdict.outcome}${verdict.code && verdict.code !== '200' ? ' (' + verdict.code + ')' : ''}`
         + (verdict.outcome === OUTCOME.RETRY && verdict.message ? ` — ${String(verdict.message).slice(0, 100)}` : ''));
     }
