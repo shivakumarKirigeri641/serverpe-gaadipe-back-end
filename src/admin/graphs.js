@@ -2,17 +2,18 @@
  * src/admin/graphs.js — the numbers behind the admin's Graphs section (user,
  * 2026-10-03: "a separate main option for graphs only … nested graphs").
  *
- * Seven pages, each a set of daily series over the last 7, 30 or 90 days (IST
- * days, every day present — a quiet day is a zero, not a gap) and a drill-down
- * for the mark that was clicked:
+ * THE WEBSITE ONLY (2026-10-07: WhatsApp is retired, and every comparison is
+ * the website's). Each page is a set of daily series over the last 7, 30 or 90
+ * days (IST days, every day present — a quiet day is a zero, not a gap) and a
+ * drill-down for the mark that was clicked:
  *
- *   overview   customers, checks (distinct / repeat), full reports, revenue  → a day by hour
- *   funnel     hi → agreed → number → free check → tapped ₹19 → link → paid  → who stopped at a step
- *   money      revenue, GST, gateway fee, API, WhatsApp, ads, what is left   → a day's payments
- *   customers  new vs returning, STOP vs back, where they came from, why STOP → the people
- *   vehicles   checks by state, type / fuel / make, documents expiring       → state → RTO → vehicles
- *   whatsapp   messages in / out, template cost by category                  → a day by message type
- *   services   provider calls answered / failed, speed, RC backup spend      → a provider's errors
+ *   overview   website customers, checks (distinct / repeat), reports, revenue → a day by hour
+ *   funnel     visit → checked → saw it → tapped Full report → payment → paid → report → who stopped
+ *   money      website revenue, GST, gateway fee, API, SMS, ads, what is left   → a day's payments
+ *   customers  new vs returning, sign-ins, where they came from (ads, search…) → the people
+ *   vehicles   checks by state, type / fuel / make, documents expiring        → state → RTO → vehicles
+ *   services   provider calls answered / failed, speed, RC backup spend       → a provider's errors
+ *   today      today, minute by minute
  *
  * Read-only. Everything here is already elsewhere in the panel as tables; this
  * only draws it.
@@ -33,8 +34,10 @@ const DAYS = `days AS (SELECT generate_series((now() ${IST})::date - ($1::int - 
 const FROM = `((now() ${IST})::date - ($1::int - 1))`;
 const since = (col) => `${col} >= (${FROM}::timestamp ${IST})`;
 
-const CHECKS = `kind IN ('vehicle_check', 'vehicle_check_repeat')`;
-const PAID = `p.status = 'paid' AND p.amount_paise > 0`;
+/* A website vehicle check: a free check in the chat, or a signed-in check on the website. */
+const CHECKS = `(kind = 'chat_anon_check' OR (kind IN ('vehicle_check', 'vehicle_check_repeat') AND detail->>'channel' = 'web'))`;
+/* A paid website payment. */
+const PAID = `p.status = 'paid' AND p.amount_paise > 0 AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
 const mask = (m) => (m ? `••••••${String(m).slice(-4)}` : null);
 
 /* ─────────────────────────────── overview ─────────────────────────────── */
@@ -43,7 +46,7 @@ async function overview({ days }) {
   const n = span(days);
   const { rows } = await db.query(
     `WITH ${DAYS},
-       u AS (SELECT ${dayOf('created_at')} AS d, count(*) AS n FROM users WHERE ${since('created_at')} GROUP BY 1),
+       u AS (SELECT ${dayOf('created_at')} AS d, count(*) AS n FROM users WHERE signup_channel = 'web' AND ${since('created_at')} GROUP BY 1),
        c AS (SELECT ${dayOf('created_at')} AS d, count(*) AS n, count(DISTINCT detail->>'reg_no') AS distinct_n
                FROM event_log WHERE ${CHECKS} AND ${since('created_at')} GROUP BY 1),
        r AS (SELECT ${dayOf('r.created_at')} AS d, count(*) AS n FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
@@ -70,7 +73,7 @@ async function overviewDay({ day }) {
   const { rows } = await db.query(
     `WITH h AS (SELECT generate_series(0, 23) AS h),
        u AS (SELECT extract(hour FROM created_at ${IST})::int AS h, count(*) AS n FROM users
-              WHERE ${dayOf('created_at')} = $1::date GROUP BY 1),
+              WHERE signup_channel = 'web' AND ${dayOf('created_at')} = $1::date GROUP BY 1),
        c AS (SELECT extract(hour FROM created_at ${IST})::int AS h, count(*) AS n FROM event_log
               WHERE ${CHECKS} AND ${dayOf('created_at')} = $1::date GROUP BY 1),
        r AS (SELECT extract(hour FROM r.created_at ${IST})::int AS h, count(*) AS n FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
@@ -82,41 +85,31 @@ async function overviewDay({ day }) {
 
 /* ──────────────────────────────── funnel ──────────────────────────────── */
 
+/* The website's journey, one visit per step (admin/analytics.js — the same stages everywhere). */
 const STEPS = [
-  ['hi', 'Said hi'], ['agreed', 'Agreed to terms'], ['number', 'Sent a number'], ['basic_shown', 'Saw the free check'],
-  ['buy_tapped', 'Tapped ₹19'], ['link_sent', 'Got the payment link'], ['paid', 'Paid'],
+  ['visited', 'Visited the website'], ['searched', 'Checked a vehicle'], ['saw', 'Saw the vehicle'],
+  ['cta', 'Tapped Full report'], ['pay_started', 'Payment started'], ['paid', 'Paid'], ['report', 'Report generated'],
 ];
-
-/* Who reached each step in the period, by mobile. "Paid" is a paid payment. */
-const REACHED = `
-  SELECT detail->>'step' AS step, detail->>'mobile' AS mobile, max(created_at) AS at
-    FROM event_log WHERE kind = 'funnel' AND detail->>'step' = ANY($2::text[]) AND ${since('created_at')}
-   GROUP BY 1, 2
-  UNION ALL
-  SELECT 'paid', u.mobile, max(p.paid_at) FROM payments p JOIN users u ON u.id = p.user_id
-   WHERE ${PAID} AND ${since('p.paid_at')} GROUP BY 2`;
+async function visitsSince(n) {
+  const a = await db.one(`SELECT (${FROM}::timestamp ${IST}) AS a`, [n]);
+  return require('./analytics').perVisit({ from: a.a, to: new Date() });
+}
 
 async function funnel({ days }) {
   const n = span(days);
-  const { rows } = await db.query(
-    `SELECT step, count(DISTINCT mobile)::int AS people FROM (${REACHED}) x GROUP BY 1`, [n, STEPS.map(([k]) => k)]);
-  const by = Object.fromEntries(rows.map((r) => [r.step, r.people]));
-  return { days: n, steps: STEPS.map(([key, label]) => ({ key, label, people: by[key] || 0 })) };
+  const visits = await visitsSince(n);
+  return { days: n, steps: STEPS.map(([key, label]) => ({ key, label, people: visits.filter((v) => v.at[key]).length })) };
 }
 
-/** Who reached `step` in the period and went no further. */
+/** The visits that reached `step` in the period and went no further. */
 async function funnelStep({ days, step }) {
   const n = span(days);
   const i = STEPS.findIndex(([k]) => k === step);
   if (i < 0) return { people: [] };
-  const later = STEPS.slice(i + 1).map(([k]) => k);
-  const { rows } = await db.query(
-    `WITH x AS (${REACHED})
-     SELECT x.mobile, x.at, coalesce(u.display_name, u.wa_profile_name) AS name
-       FROM x LEFT JOIN users u ON u.mobile = x.mobile
-      WHERE x.step = $3 AND NOT EXISTS (SELECT 1 FROM x y WHERE y.mobile = x.mobile AND y.step = ANY($4::text[]))
-      ORDER BY x.at DESC LIMIT 100`, [n, STEPS.map(([k]) => k), step, later]);
-  return { step, people: rows.map((r) => ({ mobile: r.mobile, masked: mask(r.mobile), name: r.name, at: r.at })) };
+  const next = STEPS[i + 1]?.[0];
+  const rows = (await visitsSince(n)).filter((v) => v.at[step] && (!next || !v.at[next])).slice(0, 100);
+  return { step, people: rows.map((v) => ({ mobile: v.mobile, masked: mask(v.mobile), name: v.name || (v.user_id ? null : 'Not signed in'),
+    at: v.at[step], session_id: v.session_id })) };
 }
 
 /* ──────────────────────────────── money ───────────────────────────────── */
@@ -129,25 +122,25 @@ async function money({ days }) {
        p AS (SELECT ${dayOf('paid_at')} AS d, sum(amount_paise) AS gross, count(*) AS n FROM payments p
               WHERE ${PAID} AND ${since('paid_at')} GROUP BY 1),
        a AS (SELECT ${dayOf('created_at')} AS d, sum(cost_paise) AS c FROM api_calls WHERE ${since('created_at')} GROUP BY 1),
-       w AS (SELECT ${dayOf('m.created_at')} AS d, ${ledger.waCostSql('m', R)} AS c FROM whatsapp_messages m
-              WHERE m.direction = 'out' AND m.message_type = 'template' AND ${since('m.created_at')} GROUP BY 1),
+       o AS (SELECT ${dayOf('created_at')} AS d, count(*) AS n FROM site_otps WHERE ${since('created_at')} GROUP BY 1),
        s AS (SELECT day AS d, sum(amount_paise) AS c FROM ad_spend WHERE product = 'gaadipe' AND day >= ${FROM} GROUP BY 1)
      SELECT days.d, coalesce(p.gross, 0)::bigint AS gross, coalesce(p.n, 0)::int AS payments,
-            coalesce(a.c, 0)::bigint AS api, coalesce(w.c, 0)::bigint AS whatsapp, coalesce(s.c, 0)::bigint AS ads
-       FROM days LEFT JOIN p USING (d) LEFT JOIN a USING (d) LEFT JOIN w USING (d) LEFT JOIN s USING (d)
+            coalesce(a.c, 0)::bigint AS api, coalesce(o.n, 0)::int AS sms_n, coalesce(s.c, 0)::bigint AS ads
+       FROM days LEFT JOIN p USING (d) LEFT JOIN a USING (d) LEFT JOIN o USING (d) LEFT JOIN s USING (d)
       ORDER BY days.d`, [n]);
   const g = Number(R.gst_percent || 18) / 100;
   const fee = (Number(R.fee_percent || 2) / 100) * (1 + Number(R.fee_gst_percent || 18) / 100);
+  const smsRate = Number(R.sms_rate_paise || 0);
   return {
     days: n,
-    note: 'GST from the rate in force; the gateway fee estimated at the fee % in Settings; WhatsApp at the per-category rates.',
+    note: 'Website payments. GST from the rate in force; the gateway fee estimated at the fee % in Settings; SMS sign-in codes at the SMS rate.',
     series: rows.map((x) => {
       const gross = Number(x.gross);
       const gst = Math.round(gross - gross / (1 + g));
       const gateway = Math.round(gross * fee);
-      const api = Number(x.api); const whatsapp = Number(x.whatsapp); const ads = Number(x.ads);
-      return { d: iso(x.d), payments: x.payments, gross, gst, gateway, api, whatsapp, ads,
-               left: gross - gst - gateway - api - whatsapp - ads };
+      const api = Number(x.api); const sms = Number(x.sms_n) * smsRate; const ads = Number(x.ads);
+      return { d: iso(x.d), payments: x.payments, gross, gst, gateway, api, sms, ads,
+               left: gross - gst - gateway - api - sms - ads };
     }),
   };
 }
@@ -164,85 +157,40 @@ async function moneyDay({ day }) {
 
 /* ─────────────────────────────── customers ────────────────────────────── */
 
-const SOURCE = `CASE WHEN ws.attribution->>'channel' = 'whatsapp_ad' THEN 'WhatsApp ads'
-                     WHEN u.signup_channel = 'web' OR EXISTS (SELECT 1 FROM visitors v WHERE v.mobile = u.mobile) THEN 'Website'
-                     ELSE 'WhatsApp direct' END`;
+/* Where a website customer first came from: their earliest website visit's source. */
+const SOURCE = `coalesce((SELECT CASE coalesce(nullif(v.first_touch->>'source', ''), 'direct')
+                                   WHEN 'google_ads' THEN 'Google Ads' WHEN 'meta_ads' THEN 'Meta ads' WHEN 'google' THEN 'Google search'
+                                   WHEN 'organic' THEN 'Other search' WHEN 'social' THEN 'Social media' WHEN 'referral' THEN 'Another website'
+                                   ELSE 'Direct / typed the address' END
+                              FROM visitors v WHERE v.user_id = u.id ORDER BY v.first_seen_at LIMIT 1), 'Not known')`;
 
 async function customers({ days }) {
   const n = span(days);
-  const [daily, sources, reasons] = await Promise.all([
+  const [daily, sources] = await Promise.all([
     db.query(
       `WITH ${DAYS},
-         nu AS (SELECT ${dayOf('created_at')} AS d, count(*) AS n FROM users WHERE ${since('created_at')} GROUP BY 1),
+         nu AS (SELECT ${dayOf('created_at')} AS d, count(*) AS n FROM users WHERE signup_channel = 'web' AND ${since('created_at')} GROUP BY 1),
          act AS (SELECT ${dayOf('e.occurred_at')} AS d, count(DISTINCT e.user_id) AS n FROM events e JOIN users u ON u.id = e.user_id
-                  WHERE ${since('e.occurred_at')} AND ${dayOf('u.created_at')} < ${dayOf('e.occurred_at')} GROUP BY 1),
-         st AS (SELECT ${dayOf('created_at')} AS d, count(*) FILTER (WHERE detail->>'step' = 'opt_out') AS stops,
-                       count(*) FILTER (WHERE detail->>'step' = 'opt_in') AS back
-                  FROM event_log WHERE kind = 'funnel' AND detail->>'step' IN ('opt_out', 'opt_in') AND ${since('created_at')} GROUP BY 1)
-       SELECT days.d, coalesce(nu.n, 0)::int AS new, coalesce(act.n, 0)::int AS returning,
-              coalesce(st.stops, 0)::int AS stops, coalesce(st.back, 0)::int AS back
-         FROM days LEFT JOIN nu USING (d) LEFT JOIN act USING (d) LEFT JOIN st USING (d) ORDER BY days.d`, [n]),
+                  WHERE e.channel = 'web' AND ${since('e.occurred_at')} AND ${dayOf('u.created_at')} < ${dayOf('e.occurred_at')} GROUP BY 1),
+         si AS (SELECT ${dayOf('created_at')} AS d, count(*) AS n FROM event_log WHERE kind = 'site_sign_in' AND ${since('created_at')} GROUP BY 1)
+       SELECT days.d, coalesce(nu.n, 0)::int AS new, coalesce(act.n, 0)::int AS returning, coalesce(si.n, 0)::int AS sign_ins
+         FROM days LEFT JOIN nu USING (d) LEFT JOIN act USING (d) LEFT JOIN si USING (d) ORDER BY days.d`, [n]),
     db.query(
       `SELECT ${SOURCE} AS source, count(*)::int AS n
-         FROM users u LEFT JOIN whatsapp_sessions ws ON ws.mobile = u.mobile
-        WHERE ${since('u.created_at')} GROUP BY 1 ORDER BY 2 DESC`, [n]),
-    db.query(
-      `SELECT detail->>'reason' AS reason, count(*)::int AS n FROM event_log
-        WHERE kind = 'funnel' AND detail->>'step' = 'opt_out_reason' AND ${since('created_at')}
-        GROUP BY 1 ORDER BY 2 DESC`, [n]),
+         FROM users u WHERE u.signup_channel = 'web' AND ${since('u.created_at')} GROUP BY 1 ORDER BY 2 DESC`, [n]),
   ]);
-  return { days: n, series: daily.rows.map((x) => ({ ...x, d: iso(x.d) })), sources: sources.rows, reasons: reasons.rows };
+  return { days: n, series: daily.rows.map((x) => ({ ...x, d: iso(x.d) })), sources: sources.rows, reasons: [] };
 }
 
-/** The people behind a source or a STOP reason. */
-async function customersOf({ days, source, reason, day }) {
+/** The people behind a source. */
+async function customersOf({ days, source }) {
   const n = span(days);
-  /*
-   * WHO SAID STOP, AND WHO CAME BACK, on one day (user, 2026-10-03): each with
-   * name, number, when, the reason given, how they came back (START or Undo),
-   * whether they paid before, and whether they are stopped now.
-   */
-  if (isDay(day)) {
-    const { rows } = await db.query(
-      `SELECT e.detail->>'step' AS step, e.detail->>'mobile' AS mobile, e.created_at AS at,
-              (e.detail->>'undo') = 'true' AS undo,
-              coalesce(u.display_name, u.wa_profile_name) AS name,
-              ws.wa_opt_out_at IS NOT NULL AS stopped_now,
-              (SELECT r.detail->>'reason' FROM event_log r WHERE r.kind = 'funnel' AND r.detail->>'step' = 'opt_out_reason'
-                 AND r.detail->>'mobile' = e.detail->>'mobile' AND r.created_at >= e.created_at - interval '1 minute'
-               ORDER BY r.id LIMIT 1) AS reason,
-              (SELECT r.detail->>'said' FROM event_log r WHERE r.kind = 'funnel' AND r.detail->>'step' = 'opt_out_reason'
-                 AND r.detail->>'mobile' = e.detail->>'mobile' AND r.created_at >= e.created_at - interval '1 minute'
-               ORDER BY r.id LIMIT 1) AS said,
-              (SELECT count(*)::int FROM payments p WHERE p.user_id = u.id AND ${PAID}) AS paid
-         FROM event_log e
-         LEFT JOIN users u ON u.mobile = e.detail->>'mobile'
-         LEFT JOIN whatsapp_sessions ws ON ws.mobile = e.detail->>'mobile'
-        WHERE e.kind = 'funnel' AND e.detail->>'step' IN ('opt_out', 'opt_in') AND ${dayOf('e.created_at')} = $1::date
-        ORDER BY e.created_at`, [day]);
-    const person = (r) => ({ ...r, masked: mask(r.mobile) });
-    return {
-      day,
-      stopped: rows.filter((r) => r.step === 'opt_out').map(person),
-      came_back: rows.filter((r) => r.step === 'opt_in').map(person),
-    };
-  }
-  if (reason) {
-    const { rows } = await db.query(
-      `SELECT e.detail->>'mobile' AS mobile, e.detail->>'said' AS said, e.created_at AS at,
-              coalesce(u.display_name, u.wa_profile_name) AS name
-         FROM event_log e LEFT JOIN users u ON u.mobile = e.detail->>'mobile'
-        WHERE e.kind = 'funnel' AND e.detail->>'step' = 'opt_out_reason' AND e.detail->>'reason' = $2 AND ${since('e.created_at')}
-        ORDER BY e.id DESC LIMIT 100`, [n, String(reason)]);
-    return { people: rows.map((r) => ({ ...r, masked: mask(r.mobile) })) };
-  }
   const { rows } = await db.query(
     `SELECT u.mobile, u.created_at AS at, coalesce(u.display_name, u.wa_profile_name) AS name
-       FROM users u LEFT JOIN whatsapp_sessions ws ON ws.mobile = u.mobile
-      WHERE ${since('u.created_at')} AND ${SOURCE} = $2 ORDER BY u.created_at DESC LIMIT 100`, [n, String(source || '')]);
+       FROM users u WHERE u.signup_channel = 'web' AND ${since('u.created_at')} AND ${SOURCE} = $2
+      ORDER BY u.created_at DESC LIMIT 100`, [n, String(source || '')]);
   return { people: rows.map((r) => ({ ...r, masked: mask(r.mobile) })) };
 }
-
 /* ─────────────────────────────── vehicles ─────────────────────────────── */
 
 const REG = `upper(regexp_replace(detail->>'reg_no', '[^A-Za-z0-9]', '', 'g'))`;
@@ -311,43 +259,6 @@ async function vehiclesOf({ days, state, rto }) {
     rtos: Object.values(by).map((x) => ({ code: x.code, name: names[x.code] || null, checks: x.checks, vehicles: x.regs.size }))
       .sort((a, b) => b.checks - a.checks),
   };
-}
-
-/* ─────────────────────────────── whatsapp ─────────────────────────────── */
-
-async function whatsapp({ days }) {
-  const n = span(days);
-  const R = await ledger.rates();
-  const cat = `upper(coalesce((SELECT t.category FROM wa_templates t WHERE t.template_name = m.template_name LIMIT 1), ''))`;
-  // As Meta bills (2026-10-03): refused templates and utility ones inside an open window are free.
-  const ok = `coalesce(m.error_message, '') = ''`;
-  const win = `EXISTS (SELECT 1 FROM whatsapp_messages wi WHERE wi.mobile = m.mobile AND wi.direction = 'in'
-                      AND wi.created_at <= m.created_at AND wi.created_at > m.created_at - interval '24 hours')`;
-  const { rows } = await db.query(
-    `WITH ${DAYS},
-       x AS (SELECT ${dayOf('m.created_at')} AS d,
-                    count(*) FILTER (WHERE m.direction = 'in') AS inbound,
-                    count(*) FILTER (WHERE m.direction = 'out' AND m.message_type <> 'template') AS replies,
-                    count(*) FILTER (WHERE m.direction = 'out' AND m.message_type = 'template') AS templates,
-                    count(DISTINCT m.mobile) FILTER (WHERE m.direction = 'in') AS people,
-                    coalesce(sum(CASE WHEN m.direction = 'out' AND m.message_type = 'template' AND ${ok} AND ${cat} = 'MARKETING' THEN ${Number(R.wa_marketing_paise) || 0} END), 0) AS marketing,
-                    coalesce(sum(CASE WHEN m.direction = 'out' AND m.message_type = 'template' AND ${ok} AND ${cat} = 'UTILITY' AND NOT ${win} THEN ${Number(R.wa_utility_paise) || 0} END), 0) AS utility,
-                    coalesce(sum(CASE WHEN m.direction = 'out' AND m.message_type = 'template' AND ${ok} AND ${cat} NOT IN ('MARKETING', 'UTILITY') THEN ${Number(R.wa_rate_paise) || 0} END), 0) AS other
-               FROM whatsapp_messages m WHERE ${since('m.created_at')} GROUP BY 1)
-     SELECT days.d, coalesce(x.inbound, 0)::int AS inbound, coalesce(x.replies, 0)::int AS replies,
-            coalesce(x.templates, 0)::int AS templates, coalesce(x.people, 0)::int AS people,
-            coalesce(x.marketing, 0)::int AS marketing, coalesce(x.utility, 0)::int AS utility, coalesce(x.other, 0)::int AS other
-       FROM days LEFT JOIN x USING (d) ORDER BY days.d`, [n]);
-  return { days: n, limit: await settings.num('whatsapp_messaging_limit', 250), series: rows.map((x) => ({ ...x, d: iso(x.d) })) };
-}
-
-async function whatsappDay({ day }) {
-  if (!isDay(day)) return { kinds: [] };
-  const { rows } = await db.query(
-    `SELECT direction, CASE WHEN message_type = 'template' THEN 'Template · ' || coalesce(template_name, '?') ELSE message_type END AS kind,
-            count(*)::int AS n
-       FROM whatsapp_messages WHERE ${dayOf('created_at')} = $1::date GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 40`, [day]);
-  return { day, kinds: rows };
 }
 
 /* ─────────────────────────────── services ─────────────────────────────── */
@@ -521,10 +432,10 @@ function iso(d) {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
 }
 
-const PAGES = { overview, funnel, money, customers, vehicles, whatsapp, services, today };
+const PAGES = { overview, funnel, money, customers, vehicles, services, today };
 const DRILLS = {
   overview: overviewDay, funnel: funnelStep, money: moneyDay, customers: customersOf,
-  vehicles: vehiclesOf, whatsapp: whatsappDay, services: servicesOf,
+  vehicles: vehiclesOf, services: servicesOf,
 };
 
 module.exports = { PAGES, DRILLS };
