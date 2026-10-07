@@ -21,9 +21,20 @@ function start(everySeconds = 60) {
   setTimeout(async () => {
     running = true;
     try {
-      // Two days, an hour at a time, so no single query is large.
-      for (let h = 48; h > 0; h -= 1) await analytics.rollup(new Date(Date.now() - h * 3600e3), new Date(Date.now() - (h - 1) * 3600e3));
-      console.log('[analytics] the last 48 hours are rolled up');
+      /* Two days, an hour at a time, so no single query is large. ONCE, the whole
+         retention window (35 days) is rebuilt: payments, revenue and reports are
+         now the website's only (2026-10-07), and older rows still held WhatsApp's. */
+      const settings = require('../util/settings');
+      const rebuilt = String(await settings.get('analytics_rebuilt_web_only', '')) === '1';
+      const hours = rebuilt ? 48 : 35 * 24;
+      for (let h = hours; h > 0; h -= 1) await analytics.rollup(new Date(Date.now() - h * 3600e3), new Date(Date.now() - (h - 1) * 3600e3));
+      if (!rebuilt) {
+        await require('../db').query(
+          `INSERT INTO app_settings (key, value) VALUES ('analytics_rebuilt_web_only', '1')
+           ON CONFLICT (key) DO UPDATE SET value = '1', modified_at = now()`);
+        settings.refresh?.();
+      }
+      console.log('[analytics] the last %d hours are rolled up', hours);
     } catch (e) { console.error('[analytics] backfill: %s', e.message); }
     finally { running = false; }
   }, 20 * 1000).unref();

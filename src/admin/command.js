@@ -109,36 +109,41 @@ function resolve({ range = 'today', from, to, compare = 'previous' } = {}) {
 const PERSON = `coalesce(e.mobile, u.mobile, 'web:' || e.visitor_id)`;
 
 /** Every count the KPI cards need, for [from, to). */
-const COUNTS = `
+/*
+ * THE WEBSITE'S FIGURES (user, 2026-10-07: WhatsApp is retired, and "every
+ * increase, decrease and percentage must compare the website — the ads").
+ * Visits and pages from the website's events; vehicle checks from event_log —
+ * the free chat checks and the signed-in website checks; reports, payments and
+ * money from website payments only (finance/ledger.js, channel 'website').
+ */
+const WEB_EVENTS = `
   count(DISTINCT e.visitor_id) FILTER (WHERE e.channel = 'web')                         AS visitors,
   count(DISTINCT e.session_id) FILTER (WHERE e.name = 'session_started')                AS visits,
   count(*) FILTER (WHERE e.name = 'page_view')                                          AS page_views,
-  count(*) FILTER (WHERE e.name IN ('vehicle_search_success', 'vehicle_search_failed')) AS searches,
-  count(*) FILTER (WHERE e.name = 'vehicle_search_success')                             AS retrieved,
-  count(*) FILTER (WHERE e.name = 'whatsapp_cta_clicked')                               AS wa_clicks,
-  count(*) FILTER (WHERE e.name = 'whatsapp_chat_started')                              AS chats_started,
-  count(DISTINCT e.mobile) FILTER (WHERE e.name = 'whatsapp_message_received')          AS chatting,
-  count(*) FILTER (WHERE e.name = 'whatsapp_vehicle_received')                          AS wa_vehicles,
-  count(*) FILTER (WHERE e.name = 'report_generated')                                   AS reports,
-  count(*) FILTER (WHERE e.name = 'payment_page_viewed')                                AS pay_views,
-  count(*) FILTER (WHERE e.name = 'payment_success')                                    AS paid,
-  coalesce(sum(e.amount_paise) FILTER (WHERE e.name = 'payment_success'), 0)            AS revenue_paise`;
+  count(*) FILTER (WHERE e.name = 'payment_page_viewed')                                AS pay_views`;
+const WEB_CHECK = `(kind = 'chat_anon_check' OR (kind IN ('vehicle_check', 'vehicle_check_repeat') AND detail->>'channel' = 'web'))`;
+const WEB_CHECKS = `
+  count(*) FILTER (WHERE ${WEB_CHECK})                                                  AS searches,
+  count(*) FILTER (WHERE ${WEB_CHECK} AND coalesce(detail->>'found', 'true') <> 'false') AS retrieved,
+  count(*) FILTER (WHERE kind = 'site_sign_in')                                         AS sign_ins`;
+const WEB_PAY = `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
 
 async function totals(from, to) {
-  const [ev, api, wa] = await Promise.all([
-    db.one(`SELECT ${COUNTS} FROM events e WHERE e.occurred_at >= $1 AND e.occurred_at < $2`, [from, to]),
+  const [ev, ck, rp, api, money] = await Promise.all([
+    db.one(`SELECT ${WEB_EVENTS} FROM events e WHERE e.occurred_at >= $1 AND e.occurred_at < $2`, [from, to]),
+    db.one(`SELECT ${WEB_CHECKS} FROM event_log WHERE created_at >= $1 AND created_at < $2
+              AND kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat', 'site_sign_in')`, [from, to]),
+    db.one(`SELECT count(*)::int AS reports FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
+             WHERE r.created_at >= $1 AND r.created_at < $2 AND ${WEB_PAY}`, [from, to]),
     db.one(`SELECT coalesce(sum(cost_paise), 0)::int AS api_cost_paise, count(*)::int AS api_calls
               FROM api_calls WHERE created_at >= $1 AND created_at < $2`, [from, to]),
-    db.one(`SELECT count(*)::int AS billed FROM whatsapp_messages
-             WHERE direction = 'out' AND message_type = 'template' AND created_at >= $1 AND created_at < $2`, [from, to]),
+    ledger.periodMoney(from, to, null, { channel: 'website' }),
   ]);
-  const n = Object.fromEntries(Object.entries(ev).map(([k, v]) => [k, Number(v || 0)]));
-  // The money is the ledger's (src/finance/ledger.js): actual gateway fees
-  // where Razorpay gave them, invoice GST, every cost in the period.
-  void wa;
-  const money = await ledger.periodMoney(from, to);
+  const n = Object.fromEntries(Object.entries({ ...ev, ...ck, ...rp }).map(([k, v]) => [k, Number(v || 0)]));
   return {
     ...n,
+    paid: money.payments,
+    revenue_paise: money.gross_paise,
     api_cost_paise: money.api_cost_total_paise,
     api_calls: api.api_calls,
     gst_paise: money.gst_paise,
@@ -149,32 +154,40 @@ async function totals(from, to) {
   };
 }
 
-/** The same counts per hour or per day, for the sparklines. */
+/** The same website figures per hour or per day, for the sparklines. */
 async function series(from, to, step) {
-  const rates = await ledger.rates();
   const { rows } = await db.query(
     `WITH b AS (
        SELECT t, t + $3::interval AS t2 FROM generate_series($1::timestamptz, $2::timestamptz - interval '1 second', $3::interval) t
      )
      SELECT b.t,
             to_char(b.t AT TIME ZONE 'Asia/Kolkata', $4) AS label,
-            ${COUNTS},
-            (SELECT coalesce(sum(cost_paise), 0) FROM api_calls a WHERE a.created_at >= b.t AND a.created_at < b.t2) AS api_cost_paise,
-            (SELECT ${ledger.waCostSql('m', rates)} FROM whatsapp_messages m WHERE m.direction = 'out' AND m.message_type = 'template'
-                AND m.created_at >= b.t AND m.created_at < b.t2) AS wa_cost
-       FROM b LEFT JOIN events e ON e.occurred_at >= b.t AND e.occurred_at < b.t2
-      GROUP BY b.t, b.t2 ORDER BY b.t`,
+            (SELECT count(DISTINCT e.visitor_id) FILTER (WHERE e.channel = 'web') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2) AS visitors,
+            (SELECT count(DISTINCT e.session_id) FILTER (WHERE e.name = 'session_started') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2) AS visits,
+            (SELECT count(*) FILTER (WHERE e.name = 'page_view') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2) AS page_views,
+            (SELECT count(*) FILTER (WHERE e.name = 'payment_page_viewed') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2) AS pay_views,
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WEB_CHECK}) AS searches,
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WEB_CHECK}
+                AND coalesce(detail->>'found', 'true') <> 'false') AS retrieved,
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND kind = 'site_sign_in') AS sign_ins,
+            (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
+              WHERE r.created_at >= b.t AND r.created_at < b.t2 AND ${WEB_PAY}) AS reports,
+            (SELECT coalesce(sum(cost_paise), 0) FROM api_calls a WHERE a.created_at >= b.t AND a.created_at < b.t2) AS api_cost_paise
+       FROM b ORDER BY b.t`,
     [from, to, step === 'hour' ? '1 hour' : '1 day', step === 'hour' ? 'HH24:00' : 'DD Mon']);
-  // Each bucket's net from the ledger's own payments, less that bucket's API
-  // calls and business messages — the same arithmetic as the period's total.
-  const { rows: pays } = await ledger.entries({ from, to });
+  // Each bucket's payments, revenue and net from the ledger's own website payments,
+  // less that bucket's API calls — the same arithmetic as the period's total.
+  const { rows: all } = await ledger.entries({ from, to });
+  const pays = all.filter((p) => p.channel === 'website');
   const out = [];
   for (const r of rows) {
     const n = Object.fromEntries(Object.entries(r).map(([k, v]) => [k, k === 'label' || k === 't' ? v : Number(v || 0)]));
     const t0 = new Date(r.t).getTime(); const t1 = t0 + (step === 'hour' ? 3600e3 : 86400e3);
     const mine = pays.filter((p) => { const at = new Date(p.paid_at || p.created_at).getTime(); return at >= t0 && at < t1; });
     const kept = mine.reduce((a, p) => a + p.net_revenue_paise - p.gateway_fee_paise - p.gateway_gst_paise, 0);
-    out.push({ ...n, net_paise: kept - n.api_cost_paise - n.wa_cost });
+    const paidRows = mine.filter((p) => p.status === 'paid' || p.paid_at);
+    out.push({ ...n, paid: paidRows.length, revenue_paise: paidRows.reduce((a, p) => a + (p.gross_paise ?? p.amount_paise ?? 0), 0),
+      net_paise: kept - n.api_cost_paise });
   }
   return out;
 }
@@ -187,18 +200,15 @@ async function series(from, to, step) {
 const KPIS = [
   ['visitors', 'Website visitors', 'Different browsers that opened gaadipe.in.', { drill: 'web' }],
   ['visits', 'Website visits', 'Visits started — one browser can visit more than once.', { drill: 'session_started' }],
-  ['wa_clicks', 'WhatsApp clicks', 'Taps on a link from the website into WhatsApp.', { drill: 'whatsapp_cta_clicked' }],
-  ['chats_started', 'New WhatsApp chats', 'People who wrote to GaadiPe for the very first time.', { drill: 'whatsapp_chat_started' }],
-  ['chatting', 'People chatting', 'Different people who sent at least one WhatsApp message.', { drill: 'whatsapp_message_received' }],
-  ['wa_vehicles', 'Vehicle numbers sent', 'Vehicle numbers typed into the WhatsApp chat.', { drill: 'whatsapp_vehicle_received' }],
-  ['searches', 'Vehicle lookups', 'Lookups that reached the Government records, found or not.', { drill: 'searches' }],
-  ['retrieved', 'Vehicle details retrieved', 'Lookups that found the vehicle and showed its details.', { drill: 'vehicle_search_success' }],
-  ['reports', 'Reports generated', 'Full reports (PDF) produced.', { drill: 'report_generated' }],
+  ['searches', 'Vehicle checks', 'Vehicle numbers checked on the website — free checks in the chat and signed-in checks.', {}],
+  ['retrieved', 'Vehicle details shown', 'Checks that found the vehicle and showed its details.', {}],
+  ['sign_ins', 'Sign-ins', 'Customers who signed in on the website with their mobile number.', {}],
   ['pay_views', 'Payment page views', 'Checkout pages opened while unpaid — once per payment.', { drill: 'payment_page_viewed' }],
-  ['paid', 'Successful payments', 'Payments that completed.', { drill: 'payment_success' }],
-  ['revenue_paise', 'Revenue', 'Money received, GST included — what customers paid.', { money: true, drill: 'payment_success' }],
+  ['paid', 'Successful payments', 'Website payments that completed.', { drill: 'payment_success' }],
+  ['revenue_paise', 'Revenue', 'Money received on the website, GST included — what customers paid.', { money: true, drill: 'payment_success' }],
+  ['reports', 'Reports generated', 'Full reports (PDF) produced for website payments.', { drill: 'report_generated' }],
   ['api_cost_paise', 'API cost', 'What the Government-records calls cost, from api_calls.', { money: true, worse_up: true, drill: 'api' }],
-  ['net_paise', 'Net contribution', 'Revenue after GST, the payment gateway fee and its GST, WhatsApp messaging and the API cost.', { money: true }],
+  ['net_paise', 'Net contribution', 'Website revenue after GST, the payment gateway fee and its GST, SMS and the API cost.', { money: true }],
 ];
 
 async function overview(q = {}) {
@@ -236,37 +246,20 @@ async function overview(q = {}) {
 /* ───────────────────────────────── funnel ──────────────────────────────── */
 
 /*
- * The whole journey, one person per stage, in order. Website stages count
- * browsers; chat stages count people (a mobile). A stage the product no
- * longer has is returned with n: null and why, so the screen says "No data".
+ * THE WEBSITE'S JOURNEY (2026-10-07: WhatsApp is retired). One visit per stage,
+ * in order — the same stages as the website analytics (admin/analytics.js):
+ * visited → checked a vehicle → saw it → tapped Full report → payment started →
+ * paid → report. A later stage implies the earlier ones.
  */
 const STAGES = [
-  ['web_visit', 'Website visit', { web: true }],
-  ['web_vehicle', 'Vehicle number entered on the website', { gone: 'The website is WhatsApp-only now — vehicle numbers are entered in the chat.' }],
-  ['wa_click', 'WhatsApp button clicked', { web: true, names: ['whatsapp_cta_clicked'] }],
-  ['chat', 'WhatsApp conversation', { names: ['whatsapp_message_received'] }],
-  ['terms', 'Agreed to the terms', { names: ['terms_accepted'] }],
-  ['vehicle', 'Vehicle number sent', { names: ['whatsapp_vehicle_received', 'vehicle_search_success', 'vehicle_search_failed'] }],
-  ['retrieved', 'Vehicle details retrieved', { names: ['vehicle_search_success'] }],
-  ['preview', 'Tapped the full report', { names: ['report_preview_viewed'] }],
-  ['pay_start', 'Payment link sent', { names: ['payment_started'] }],
-  ['pay_view', 'Payment page opened', { names: ['payment_page_viewed'] }],
-  ['paid', 'Payment completed', { names: ['payment_success'] }],
-  ['delivered', 'Report delivered', { names: ['report_delivered'] }],
+  ['visited', 'Website visit'], ['searched', 'Checked a vehicle'], ['saw', 'Saw the vehicle'],
+  ['cta', 'Tapped Full report'], ['pay_started', 'Payment started'], ['paid', 'Payment completed'],
+  ['report', 'Report generated'],
 ];
 
 async function stageCounts(from, to) {
-  const cols = STAGES.map(([key, , o]) => {
-    if (o.gone) return `NULL::int AS ${key}`;
-    if (o.web && !o.names) return `count(DISTINCT e.visitor_id) FILTER (WHERE e.channel = 'web')::int AS ${key}`;
-    const inNames = o.names.map((n) => `'${n}'`).join(',');
-    return o.web
-      ? `count(DISTINCT e.visitor_id) FILTER (WHERE e.name IN (${inNames}))::int AS ${key}`
-      : `count(DISTINCT ${PERSON}) FILTER (WHERE e.name IN (${inNames}))::int AS ${key}`;
-  }).join(',\n');
-  return db.one(
-    `SELECT ${cols} FROM events e LEFT JOIN users u ON u.id = e.user_id
-      WHERE e.occurred_at >= $1 AND e.occurred_at < $2`, [from, to]);
+  const visits = await require('./analytics').perVisit({ from, to });
+  return Object.fromEntries(STAGES.map(([key]) => [key, visits.filter((v) => v.at[key]).length]));
 }
 
 async function funnel(r) {
@@ -275,22 +268,17 @@ async function funnel(r) {
     r.prevFrom ? stageCounts(r.prevFrom, r.prevTo) : null,
   ]);
   let last = null; let lastLabel = null;
-  return STAGES.map(([key, label, o]) => {
-    const n = cur[key] == null ? null : Number(cur[key]);
-    // Conversion is from the nearest earlier stage that has people in it: a
-    // stage with no data yet (a newly tracked event) must not blank the next.
+  return STAGES.map(([key, label]) => {
+    const n = Number(cur[key] || 0);
     const base = last; const baseLabel = lastLabel;
     if (n) { last = n; lastLabel = label; }
-    // People can join mid-journey (a returning customer, a chat started last
-    // week), so a stage can hold more than the one before it. That is shown as
-    // it is; only a negative drop-off is clamped, since it means nothing.
     return {
-      key, label, n, previous: prev && prev[key] != null ? Number(prev[key]) : null,
-      unavailable: o.gone || null,
-      conversion_pct: n == null || !base ? null : Math.round((n / base) * 1000) / 10,
-      drop_pct: n == null || !base ? null : Math.max(0, Math.round(((base - n) / base) * 1000) / 10),
+      key, label, n, previous: prev ? Number(prev[key] || 0) : null,
+      unavailable: null,
+      conversion_pct: !base ? null : Math.round((n / base) * 1000) / 10,
+      drop_pct: !base ? null : Math.max(0, Math.round(((base - n) / base) * 1000) / 10),
       from_stage: base ? baseLabel : null,
-      drill: o.gone ? null : `stage:${key}`,
+      drill: key === 'visited' ? 'stage:visited' : null,
     };
   });
 }
@@ -325,8 +313,6 @@ async function live({ since = null } = {}) {
     db.one(
       `SELECT
          count(DISTINCT visitor_id) FILTER (WHERE channel = 'web' AND occurred_at > now() - interval '5 minutes')::int  AS on_site,
-         count(DISTINCT mobile) FILTER (WHERE name = 'whatsapp_message_received' AND occurred_at > now() - interval '15 minutes')::int AS chatting,
-         count(*) FILTER (WHERE name IN ('vehicle_search_success','vehicle_search_failed') AND occurred_at > now() - interval '15 minutes')::int AS searches,
          count(*) FILTER (WHERE name = 'payment_success' AND occurred_at > now() - interval '60 minutes')::int AS paid_hour,
          count(*) FILTER (WHERE name IN ('vehicle_api_failed') AND occurred_at > now() - interval '15 minutes')::int AS api_errors,
          count(*) FILTER (WHERE name = 'report_delivered' AND status <> 'ok' AND occurred_at > now() - interval '60 minutes')::int AS delivery_errors
@@ -335,6 +321,13 @@ async function live({ since = null } = {}) {
   const paying = await db.one(
     `SELECT count(*)::int AS n FROM payments
       WHERE status = 'created' AND created_at > now() - interval '30 minutes'`);
+  // The website's checks and sign-ins in the last 15 minutes (2026-10-07: WhatsApp is retired).
+  const web = await db.one(
+    `SELECT count(*) FILTER (WHERE ${WEB_CHECK})::int AS searches,
+            count(DISTINCT detail->>'mobile') FILTER (WHERE kind = 'site_sign_in')::int AS signing_in
+       FROM event_log WHERE created_at > now() - interval '15 minutes'
+        AND kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat', 'site_sign_in')`);
+  now.searches = web.searches; now.signing_in = web.signing_in;
   const errors = now.api_errors + now.delivery_errors;
   return {
     status: errors ? { level: 'degraded', text: `${errors} error${errors === 1 ? '' : 's'} in the last hour` }
@@ -356,11 +349,8 @@ function namesFor(what) {
   if (what === 'web') return { web: true };
   if (what === 'searches') return { names: ['vehicle_search_success', 'vehicle_search_failed'] };
   if (what === 'api') return { names: ['vehicle_api_success', 'vehicle_api_failed'] };
-  if (String(what).startsWith('stage:')) {
-    const s = STAGES.find(([k]) => k === what.slice(6));
-    if (!s || s[2].gone) return null;
-    return s[2].names ? { names: s[2].names } : { web: true };
-  }
+  // The website funnel: its first stage opens the website's events (the visits behind each stage are on /web/analytics).
+  if (String(what).startsWith('stage:')) return what === 'stage:visited' ? { web: true } : null;
   return /^[a-z_]{3,60}$/.test(String(what)) ? { names: [what] } : null;
 }
 

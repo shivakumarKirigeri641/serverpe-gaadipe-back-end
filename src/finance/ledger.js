@@ -217,8 +217,14 @@ function total(rows) {
  * period that no payment explains — lookups that never became a sale,
  * messages to people who did not buy, sign-in codes.
  */
-async function periodMoney(from, to, prefetched) {
-  const { rows, rates: R } = prefetched || await entries({ from, to });
+async function periodMoney(from, to, prefetched, { channel = null } = {}) {
+  const got = prefetched || await entries({ from, to });
+  const R = got.rates;
+  /* THE WEBSITE ONLY (user, 2026-10-07: "compare everything with the website"):
+     channel 'website' keeps the website's payments and leaves WhatsApp's
+     template messages out of the costs. */
+  const webOnly = channel === 'website';
+  const rows = webOnly ? got.rows.filter((r) => r.channel === 'website') : got.rows;
   const t = total(rows);
   /*
    * THE RC BACKUP, EVERY CALL (user, 2026-10-05). api_calls holds a backup
@@ -239,7 +245,7 @@ async function periodMoney(from, to, prefetched) {
   const backupRate = await settings.num('rc_backup_cost_paise', 300);
   const backupCost = backup.n * backupRate;
   const apiAll = api.c + backupCost;
-  const waAll = Number(wa.cost || 0);
+  const waAll = webOnly ? 0 : Number(wa.cost || 0);
   const smsAll = sms.n * R.sms_rate_paise;
   const unattributed = Math.max(0, apiAll - t.api_cost_paise) + Math.max(0, waAll - t.whatsapp_cost_paise) + smsAll;
   const net = t.net_revenue_paise - t.gateway_paise - Math.max(apiAll, t.api_cost_paise)

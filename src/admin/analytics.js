@@ -17,6 +17,8 @@
 const db = require('../db');
 
 const n = (v) => Number(v) || 0;
+/* A website payment (a payment's own record of where it was made). */
+const WEB_PAY = `coalesce(payments.raw->>'channel', payments.raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
 const METRICS = ['visitors', 'active_sessions', 'page_views', 'interactions', 'searches', 'free_checks', 'web_checks', 'otp_requests',
   'otp_success', 'otp_failed', 'pay_attempts', 'payments', 'revenue_paise', 'reports', 'api_calls', 'api_failures', 'api_ms_sum', 'errors'];
 
@@ -41,10 +43,14 @@ async function rollup(from, to) {
                    count(*) FILTER (WHERE event = 'signed_in') AS otp_success,
                    count(*) FILTER (WHERE event IN ('sign_in_failed', 'code_refused')) AS otp_failed
               FROM site_sign_ins WHERE created_at >= $1 AND created_at < $2 GROUP BY 1),
-     pa AS (SELECT date_trunc('minute', created_at) AS m, count(*) AS pay_attempts FROM payments WHERE created_at >= $1 AND created_at < $2 GROUP BY 1),
+     -- The website's payments and reports only (2026-10-07: every comparison is the website's).
+     pa AS (SELECT date_trunc('minute', created_at) AS m, count(*) AS pay_attempts FROM payments
+             WHERE created_at >= $1 AND created_at < $2 AND ${WEB_PAY} GROUP BY 1),
      pp AS (SELECT date_trunc('minute', paid_at) AS m, count(*) AS payments, sum(amount_paise) AS revenue_paise
-              FROM payments WHERE status = 'paid' AND paid_at >= $1 AND paid_at < $2 GROUP BY 1),
-     rp AS (SELECT date_trunc('minute', created_at) AS m, count(*) AS reports FROM vehicle_reports WHERE created_at >= $1 AND created_at < $2 GROUP BY 1),
+              FROM payments WHERE status = 'paid' AND paid_at >= $1 AND paid_at < $2 AND ${WEB_PAY} GROUP BY 1),
+     rp AS (SELECT date_trunc('minute', r.created_at) AS m, count(*) AS reports FROM vehicle_reports r
+              JOIN payments payments ON payments.id = r.payment_id
+             WHERE r.created_at >= $1 AND r.created_at < $2 AND ${WEB_PAY} GROUP BY 1),
      ap AS (SELECT date_trunc('minute', created_at) AS m, count(*) AS api_calls, count(*) FILTER (WHERE NOT ok) AS api_failures,
                    coalesce(sum(duration_ms) FILTER (WHERE NOT cache_hit), 0) AS api_ms_sum
               FROM api_calls WHERE created_at >= $1 AND created_at < $2 GROUP BY 1),
@@ -141,8 +147,9 @@ const STAGES = [
   ['visited', 'Visited'], ['searched', 'Searched a vehicle'], ['saw', 'Saw the vehicle'], ['cta', 'Tapped Full report'],
   ['pay_started', 'Payment started'], ['paid', 'Paid'], ['report', 'Report generated'],
 ];
-async function perVisit({ range = 'today' } = {}) {
-  const [a, z] = PERIODS[range] || PERIODS.today;
+async function perVisit({ range = 'today', from = null, to = null } = {}) {
+  // Explicit dates (the Command Center's periods) or a named range.
+  const [a, z] = from && to ? ['$1::timestamptz', '$2::timestamptz'] : (PERIODS[range] || PERIODS.today);
   const { rows } = await db.query(
     `WITH s AS (SELECT w.session_id, w.user_id, w.started_at, w.last_seen_at, w.source, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name
                   FROM web_sessions w LEFT JOIN users u ON u.id = w.user_id WHERE w.started_at >= ${a} AND w.started_at < ${z}),
@@ -155,7 +162,7 @@ async function perVisit({ range = 'today' } = {}) {
             (SELECT min(p.created_at) FROM payments p WHERE p.user_id = s.user_id AND p.created_at BETWEEN s.started_at AND s.last_seen_at + interval '30 minutes') AS pay_started,
             (SELECT min(p.paid_at) FROM payments p WHERE p.user_id = s.user_id AND p.status = 'paid' AND p.paid_at BETWEEN s.started_at AND s.last_seen_at + interval '30 minutes') AS paid,
             (SELECT min(r.created_at) FROM vehicle_reports r WHERE r.user_id = s.user_id AND r.created_at BETWEEN s.started_at AND s.last_seen_at + interval '30 minutes') AS report
-       FROM s LEFT JOIN e ON e.session_id = s.session_id ORDER BY s.started_at DESC`);
+       FROM s LEFT JOIN e ON e.session_id = s.session_id ORDER BY s.started_at DESC`, from && to ? [from, to] : []);
   // A later stage implies the earlier ones (a payment without a recorded search still searched).
   return rows.map((r) => {
     const at = { visited: r.started_at, searched: r.searched, saw: r.saw, cta: r.cta, pay_started: r.pay_started, paid: r.paid, report: r.report };
@@ -197,4 +204,4 @@ async function prune() {
   await db.query(`DELETE FROM events WHERE name = 'interaction' AND occurred_at < now() - make_interval(days => $1)`, [taps]);
 }
 
-module.exports = { rollup, series, summary, funnel, funnelPeople, prune, METRICS, STAGES };
+module.exports = { rollup, series, summary, funnel, funnelPeople, perVisit, prune, METRICS, STAGES };

@@ -38,17 +38,19 @@ function change(now, before, { worseUp = false } = {}) {
 async function attempts(from, to) {
   const r = await db.one(
     `SELECT count(*)::int AS n FROM payments
-      WHERE created_at >= $1 AND created_at < $2 AND amount_paise > 0 AND coalesce(gateway, '') <> 'free'`, [from, to]);
+      WHERE created_at >= $1 AND created_at < $2 AND amount_paise > 0 AND coalesce(gateway, '') <> 'free'
+        AND coalesce(raw->>'channel', raw->'paid_from'->>'channel', 'whatsapp') = 'web'`, [from, to]);
   return r.n;
 }
 
-/* The figures, for one window. */
+/* The figures, for one window — the website's (2026-10-07: WhatsApp is retired;
+   every comparison is the website's, so the WhatsApp days do not distort it). */
 async function figures(from, to) {
-  const [t, m, a] = await Promise.all([command.totals(from, to), ledger.periodMoney(from, to), attempts(from, to)]);
+  const [t, m, a] = await Promise.all([command.totals(from, to), ledger.periodMoney(from, to, null, { channel: 'website' }), attempts(from, to)]);
   return {
-    visitors: t.visitors, searches: t.wa_vehicles, conversations: t.chatting, lookups: t.searches,
+    visitors: t.visitors, searches: t.searches, sign_ins: t.sign_ins, lookups: t.api_calls,
     reports: t.reports, attempts: a, paid: m.payments, revenue: m.gross_paise,
-    api_cost: m.api_cost_total_paise, whatsapp_cost: m.messaging_paise, gateway_cost: m.gateway_paise,
+    api_cost: m.api_cost_total_paise, messaging_cost: m.messaging_paise, gateway_cost: m.gateway_paise,
     gst: m.gst_paise, refunds: m.refund_paise, net: m.net_paise, margin: m.margin_pct,
     free_reports: m.free_reports, fees_estimated: m.fees_estimated,
   };
@@ -56,20 +58,20 @@ async function figures(from, to) {
 
 /* What each figure is, whether up is bad, and where its rows are. */
 const METRICS = [
-  ['visitors', 'Visitors', 'Different browsers that opened the website.', {}, '/journey'],
-  ['searches', 'Vehicle searches', 'Vehicle numbers people sent on WhatsApp.', {}, '/lookups'],
-  ['conversations', 'WhatsApp conversations', 'Different people who wrote to GaadiPe on WhatsApp.', {}, '/whatsapp'],
-  ['lookups', 'Vehicle lookups', 'Searches answered from the Government records, found or not.', {}, '/lookups'],
-  ['reports', 'Reports generated', 'Full reports (PDF) issued.', {}, '/documents'],
-  ['attempts', 'Payment attempts', 'Checkouts opened for a paid report.', {}, '/payments'],
-  ['paid', 'Successful payments', 'Payments completed (free reports not counted).', {}, '/profitability'],
-  ['revenue', 'Revenue', 'What customers paid, GST included.', { money: true }, '/profitability'],
+  ['visitors', 'Visitors', 'Different browsers that opened the website.', {}, '/web/visitors'],
+  ['searches', 'Vehicle checks', 'Vehicle numbers checked on the website — free chat checks and signed-in checks.', {}, '/web/free-checks'],
+  ['sign_ins', 'Sign-ins', 'Customers who signed in on the website.', {}, '/web/customers'],
+  ['lookups', 'Government lookups', 'Calls to the Government records, found or not.', {}, '/api-monitor'],
+  ['reports', 'Reports generated', 'Full reports (PDF) issued for website payments.', {}, '/documents'],
+  ['attempts', 'Payment attempts', 'Checkouts opened for a paid report on the website.', {}, '/payments'],
+  ['paid', 'Successful payments', 'Website payments completed (free reports not counted).', {}, '/profitability'],
+  ['revenue', 'Revenue', 'What customers paid on the website, GST included.', { money: true }, '/profitability'],
   ['gst', 'GST', 'Output GST inside that revenue — from the tax invoices.', { money: true, worseUp: true }, '/finance'],
   ['gateway_cost', 'Payment gateway cost', 'Razorpay’s fee and its GST — actual where Razorpay gave it.', { money: true, worseUp: true }, '/profitability'],
   ['api_cost', 'API cost', 'Every Government-records call in the period.', { money: true, worseUp: true }, '/api-monitor'],
-  ['whatsapp_cost', 'WhatsApp & SMS cost', 'Business-initiated messages and sign-in codes, at the rates in Settings.', { money: true, worseUp: true }, '/whatsapp'],
+  ['messaging_cost', 'SMS cost', 'Sign-in codes by SMS, at the rate in Settings.', { money: true, worseUp: true }, '/profitability'],
   ['refunds', 'Refunds', 'Money returned to customers.', { money: true, worseUp: true }, '/payments?status=refunded'],
-  ['net', 'Net contribution', 'Revenue after GST, the gateway, refunds, API and messaging.', { money: true }, '/profitability'],
+  ['net', 'Net contribution', 'Website revenue after GST, the gateway, refunds, API and SMS.', { money: true }, '/profitability'],
 ];
 
 async function health(q = {}) {
@@ -89,14 +91,19 @@ async function health(q = {}) {
 }
 
 /* Distinct people at each step today, for the three conversions. */
+/* The website's journey today: visits → checked a vehicle → signed in → paid
+   (the same visits, from admin/analytics.js — 2026-10-07). */
 async function conversions(from, to) {
-  return db.one(
-    `SELECT count(DISTINCT e.visitor_id) FILTER (WHERE e.channel = 'web')::int AS visitors,
-            count(DISTINCT e.visitor_id) FILTER (WHERE e.name = 'whatsapp_cta_clicked')::int AS wa_clickers,
-            count(DISTINCT coalesce(e.mobile, e.user_id::text)) FILTER (WHERE e.name = 'whatsapp_message_received')::int AS chatters,
-            count(DISTINCT coalesce(e.mobile, e.user_id::text)) FILTER (WHERE e.name = 'whatsapp_vehicle_received')::int AS senders,
-            count(DISTINCT coalesce(e.mobile, e.user_id::text)) FILTER (WHERE e.name = 'payment_success')::int AS payers
-       FROM events e WHERE e.occurred_at >= $1 AND e.occurred_at < $2`, [from, to]);
+  const visits = await require('./analytics').perVisit({ from, to });
+  // Each step counts only visits that also made the step before it.
+  const checked = visits.filter((v) => v.at.searched);
+  const signedIn = checked.filter((v) => v.user_id);
+  return {
+    visitors: visits.length,
+    checkers: checked.length,
+    signed_in: signedIn.length,
+    payers: signedIn.filter((v) => v.at.paid).length,
+  };
 }
 const rate = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : null);
 
@@ -110,21 +117,21 @@ async function summary() {
                    count(*) FILTER (WHERE severity NOT IN ('critical', 'warning'))::int AS info
               FROM admin_alerts WHERE status IN ('open', 'acknowledged')`),
   ]);
-  const pick = ['website', 'database', 'records_api', 'whatsapp_api', 'payment_gateway', 'jobs'];
+  const pick = ['website', 'database', 'records_api', 'payment_gateway', 'jobs'];
   return {
     at: new Date(),
     today: {
-      visitors: today.visitors, searches: today.searches, conversations: today.conversations, reports: today.reports,
+      visitors: today.visitors, searches: today.searches, sign_ins: today.sign_ins, reports: today.reports,
       paid: today.paid, revenue: today.revenue, gst: today.gst, gateway_cost: today.gateway_cost,
-      api_cost: today.api_cost, whatsapp_cost: today.whatsapp_cost, refunds: today.refunds, net: today.net,
+      api_cost: today.api_cost, messaging_cost: today.messaging_cost, refunds: today.refunds, net: today.net,
     },
     conversion: [
-      { label: 'Visitor → WhatsApp', from: conv.visitors, to: conv.wa_clickers, pct: rate(conv.wa_clickers, conv.visitors), note: 'Website visitors who tapped through to WhatsApp.' },
-      { label: 'WhatsApp → Vehicle', from: conv.chatters, to: conv.senders, pct: rate(conv.senders, conv.chatters), note: 'People who wrote and then sent a vehicle number.' },
-      { label: 'Vehicle → Payment', from: conv.senders, to: conv.payers, pct: rate(conv.payers, conv.senders), note: 'People who sent a vehicle number and then paid.' },
+      { label: 'Visit → Vehicle check', from: conv.visitors, to: conv.checkers, pct: rate(conv.checkers, conv.visitors), note: 'Website visits that checked a vehicle.' },
+      { label: 'Vehicle check → Sign-in', from: conv.checkers, to: conv.signed_in, pct: rate(conv.signed_in, conv.checkers), note: 'Visits that checked a vehicle and signed in.' },
+      { label: 'Sign-in → Payment', from: conv.signed_in, to: conv.payers, pct: rate(conv.payers, conv.signed_in), note: 'Signed-in visits that paid.' },
     ],
     comparison: [
-      ['revenue', 'Revenue', true], ['paid', 'Paid reports'], ['visitors', 'Visitors'], ['conversations', 'WhatsApp'],
+      ['revenue', 'Revenue', true], ['paid', 'Paid reports'], ['visitors', 'Visitors'], ['searches', 'Vehicle checks'],
       ['net', 'Net contribution', true],
     ].map(([k, label, money]) => ({ key: k, label, money: Boolean(money), value: today[k], ...change(today[k], yday[k]) })),
     compare_label: 'Today so far vs yesterday to the same time',
