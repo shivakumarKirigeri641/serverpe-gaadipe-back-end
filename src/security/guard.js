@@ -92,8 +92,13 @@ function gate(surface) {
       }
 
       const isHandshake = req.path === '/_hs';
-      const limit = await settings.num(isHandshake ? 'rate_limit_handshakes_per_minute_ip' : 'rate_limit_per_minute_ip',
-        isHandshake ? 20 : 150);
+      /* The admin panels poll several live panels at once (2026-10-07: the web
+         admin), so their own, higher ceiling; the public site keeps its 150. */
+      const limit = isHandshake
+        ? await settings.num('rate_limit_handshakes_per_minute_ip', 20)
+        : surface === 'admin'
+          ? await settings.num('rate_limit_admin_per_minute_ip', 600)
+          : await settings.num('rate_limit_per_minute_ip', 150);
       const n = hit(`${surface}:${isHandshake ? 'hs' : 'all'}:${req.ip}`, 60 * 1000);
       if (n > limit) {
         await record('rate_limit', req, { surface, detail: { per_minute: n, limit, handshake: isHandshake } });

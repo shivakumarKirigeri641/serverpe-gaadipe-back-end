@@ -843,6 +843,14 @@ router.get('/web/free-checks', needs('dashboard.view'), safe(async (req, res) =>
 router.get('/web/log', needs('customers.view'), safe(async (req, res) => res.json(await web.log({
   range: req.query.range, kind: req.query.kind, q: req.query.q, pages: req.query.pages === '1', limit: req.query.limit }))));
 router.get('/web/emails', needs('dashboard.view'), safe(async (_req, res) => res.json(await web.emails())));
+/* My sessions, and who else is in the web admin right now. */
+router.get('/web/me/sessions', safe(async (req, res) => res.json(await web.mySessions(req.admin))));
+router.post('/web/me/sessions/:which/end', safe(async (req, res) => {
+  const out = await web.endMySessions(req.admin, req.params.which);
+  await auth.audit({ adminId: req.admin.id, action: 'admin_sessions_ended', ip: ipOf(req), detail: { which: req.params.which, ended: out.ended } });
+  res.json(out);
+}));
+router.post('/web/presence', safe(async (req, res) => { web.notePresence(req.admin, req.body || {}); res.json(web.admins()); }));
 router.put('/web/emails/:key', needs('settings'), safe(async (req, res) => {
   try {
     const out = await web.setEmail(req.params.key, req.body?.on === true);
@@ -1487,6 +1495,13 @@ router.get('/admins', needs('admins'), safe(async (_req, res) =>
 router.post('/admins', needs('admins'), safe(async (req, res) => {
   const { mobile, name, role } = req.body || {};
   if (!name) return res.status(400).json({ error: 'incomplete', message: 'A name is required.' });
+  /* Never lock the panel (2026-10-07): the last active owner cannot be demoted. */
+  const m10 = String(mobile || '').replace(/\D/g, '').slice(-10);
+  const was = await db.one(`SELECT id, role FROM admin_users WHERE mobile = $1`, [m10]);
+  if (was?.role === 'owner' && role !== 'owner') {
+    const owners = await db.one(`SELECT count(*)::int AS n FROM admin_users WHERE role = 'owner' AND is_active`);
+    if (owners.n <= 1) return res.status(400).json({ error: 'last_owner', message: 'This is the only owner — make someone else owner first.' });
+  }
   try {
     const user = await auth.addAdmin({ mobile, name, role });
     await auth.audit({ adminId: req.admin.id, action: 'admin_added', ip: ipOf(req), detail: { mobile, role } });
@@ -1497,6 +1512,16 @@ router.post('/admins', needs('admins'), safe(async (req, res) => {
 }));
 
 router.post('/admins/:id/active', needs('admins'), safe(async (req, res) => {
+  if (!req.body?.active) {
+    if (String(req.params.id) === String(req.admin.id)) {
+      return res.status(400).json({ error: 'self', message: 'You cannot switch yourself off.' });
+    }
+    const target = await db.one(`SELECT role FROM admin_users WHERE id = $1`, [req.params.id]);
+    const owners = await db.one(`SELECT count(*)::int AS n FROM admin_users WHERE role = 'owner' AND is_active`);
+    if (target?.role === 'owner' && owners.n <= 1) {
+      return res.status(400).json({ error: 'last_owner', message: 'This is the only owner — it cannot be switched off.' });
+    }
+  }
   const user = await auth.setAdminActive(req.params.id, Boolean(req.body?.active));
   if (!user) return res.status(404).json({ error: 'not_found', message: 'No such admin.' });
   await auth.audit({ adminId: req.admin.id, action: 'admin_active_changed', ip: ipOf(req),

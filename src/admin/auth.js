@@ -140,15 +140,27 @@ async function requestCode({ mobile, ip }) {
  * message will not deliver, so the code is logged for the operator to read from
  * the server — a stop-gap that the SMS sender replaces (see docs/TODO).
  */
+/*
+ * BY SMS FIRST (2026-10-07: WhatsApp is disabled, and a second admin must be able
+ * to sign in to webadmin.gaadipe.in). The same DLT-registered OTP template as
+ * the website's sign-in (util/sms.js), then WhatsApp as well while it is on.
+ * Returns whether any channel took it. The code itself is never logged.
+ */
 async function deliver(mobile, code, minutes) {
-  const send = require('../whatsapp/send');
-  const text = `GaadiPe admin sign-in code: *${code}*\n\nValid for ${minutes} minutes. `
-    + 'If you did not ask for this, ignore this message and tell the team.';
-  const sent = await send.text(mobile, text);
-  if (!sent.ok) {
-    console.warn('[admin] could not WhatsApp the code to %s (%s) — code is %s',
-      mobile, sent.error, code);
+  let ok = false;
+  try {
+    const sms = require('../util/sms');
+    const out = await sms.send(mobile, `${code} is your GaadiPe login code. It is valid for ${minutes} minutes. Do not share it with anyone.`,
+      { variables: { code, minutes: String(minutes) } });
+    if (out.ok) ok = true;
+    else console.warn('[admin] could not SMS the sign-in code to %s: %s', mobile, out.error);
+  } catch (e) { console.warn('[admin] SMS for the sign-in code failed: %s', e.message); }
+  if (config.whatsapp.enabled) {
+    const sent = await require('../whatsapp/send').text(mobile, `GaadiPe admin sign-in code: *${code}*\n\nValid for ${minutes} minutes. `
+      + 'If you did not ask for this, ignore this message and tell the team.').catch(() => ({ ok: false }));
+    if (sent.ok) ok = true;
   }
+  return ok;
 }
 
 /**

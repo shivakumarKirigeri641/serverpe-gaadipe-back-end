@@ -428,4 +428,38 @@ async function setEmail(key, on) {
   return { ok: true, key, on };
 }
 
-module.exports = { overview, visitors, trail, customers, freeChecks, log, emails, setEmail, _test: { rangeOf } };
+/* ─────────────────────────────────────────── the admin's own sessions ── */
+
+/* MY SESSIONS (spec §94): every place this admin is signed in, newest use first. */
+async function mySessions(admin) {
+  const { rows } = await db.query(
+    `SELECT id, ip, user_agent, created_at, last_used_at FROM admin_sessions
+      WHERE admin_id = $1 AND ended_at IS NULL ORDER BY last_used_at DESC LIMIT 50`, [admin.id]);
+  return { rows: rows.map((r) => ({ ...r, id: String(r.id), current: String(r.id) === String(admin.sessionId) })) };
+}
+/** End one of MY sessions, or every one but this ('others'). Returns how many ended. */
+async function endMySessions(admin, which) {
+  const { rowCount } = which === 'others'
+    ? await db.query(`UPDATE admin_sessions SET ended_at = now() WHERE admin_id = $1 AND ended_at IS NULL AND id <> $2`, [admin.id, admin.sessionId])
+    : await db.query(`UPDATE admin_sessions SET ended_at = now() WHERE admin_id = $1 AND ended_at IS NULL AND id = $2`, [admin.id, String(which).replace(/\D/g, '') || 0]);
+  return { ok: true, ended: rowCount };
+}
+
+/*
+ * ADMIN PRESENCE (spec §93): which admin is on which screen, so two admins do
+ * not work the same customer unknowingly. Each open web admin says where it is
+ * every 20 s; held in memory (one process), gone after 60 s without a word.
+ */
+const presence = new Map();
+function notePresence(admin, { screen = '', entity = '' } = {}) {
+  presence.set(`${admin.id}:${admin.sessionId}`, { admin_id: String(admin.id), name: admin.name, role: admin.role,
+    screen: String(screen).slice(0, 60), entity: String(entity).slice(0, 60), at: Date.now() });
+}
+function admins() {
+  const now = Date.now();
+  for (const [k, v] of presence) if (now - v.at > 60000) presence.delete(k);
+  return { rows: [...presence.values()].sort((a, b) => b.at - a.at).map((p) => ({ ...p, at: new Date(p.at).toISOString() })) };
+}
+
+module.exports = { overview, visitors, trail, customers, freeChecks, log, emails, setEmail,
+  mySessions, endMySessions, notePresence, admins, _test: { rangeOf } };
