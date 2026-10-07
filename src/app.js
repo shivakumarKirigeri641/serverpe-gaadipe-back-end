@@ -214,9 +214,9 @@ app.listen(config.port, () => {
   // The watch job sends alerts by WhatsApp template, so it needs WhatsApp set
   // up — but not the chat bot's replies: the evening alerts go out even while
   // the product is web-first.
-  if (config.whatsapp.phoneNumberId) {
-    watchJob.start(Number(process.env.WATCH_TICK_SECONDS) || 60);
-  }
+  // Always (2026-10-07): the evening alerts go by email to confirmed addresses
+  // as well, so they no longer depend on WhatsApp being set up.
+  watchJob.start(Number(process.env.WATCH_TICK_SECONDS) || 60);
   // A webhook is a delivery attempt, not a guarantee. This is what stops a
   // captured payment from silently delivering nothing — on the website too, so
   // it runs whether or not WhatsApp is on.

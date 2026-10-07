@@ -245,7 +245,8 @@ async function eveningDigest() {
   const today = istNow().toISOString().slice(0, 10);
   const { rows: people } = await db.query(
     `SELECT DISTINCT p.user_id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
-            u.preferred_language, u.is_paused
+            u.preferred_language, u.is_paused,
+            u.email, u.email_verified_at, u.email_unsubscribed_at, u.email_token
        FROM pending_alerts p JOIN users u ON u.id = p.user_id
       WHERE p.sent_at IS NULL AND NOT u.is_paused
         AND NOT EXISTS (SELECT 1 FROM event_log e
@@ -281,7 +282,25 @@ async function eveningDigest() {
       mobile: person.mobile, wa_profile_name: person.name, preferred_language: person.preferred_language,
       reg_no: regs.length === 1 ? regs[0] : `${regs[0]} +${regs.length - 1} more`,
     };
-    const r = await notify(w, ok, summary, byVehicle);
+    /*
+     * EMAIL FIRST (user, 2026-10-07). With the WhatsApp number disabled by Meta,
+     * a confirmed email is how the evening alert reaches anyone; WhatsApp is
+     * tried as well only while it is switched on. Either one delivered counts.
+     */
+    let r = { ok: false, error: 'no confirmed email, and WhatsApp is off' };
+    const errors = [];
+    if (person.email && person.email_verified_at && !person.email_unsubscribed_at) {
+      const C = require('../mail/customer');
+      const out = await C.deliver(person.email, alertMail(person, byVehicle), person.email_token);
+      if (out.ok) r = { ok: true, channel: 'email' };
+      else errors.push(out.skipped ? 'email held (test mode)' : `email: ${out.error}`);
+    }
+    if (require('../config').config.whatsapp.enabled) {
+      const wa = await notify(w, ok, summary, byVehicle);
+      if (wa?.ok) r = { ok: true, channel: r.ok ? 'email+whatsapp' : 'whatsapp' };
+      else errors.push(`whatsapp: ${wa?.error}`);
+    }
+    if (!r.ok && errors.length) r.error = errors.join('; ');
     if (!r?.ok) {
       // Nothing delivered: the findings stay queued for tomorrow evening, and
       // today is marked so this does not retry every minute.
@@ -306,6 +325,31 @@ async function eveningDigest() {
   }
   if (sent) console.log('[watch] evening digest sent to %d customer(s)', sent);
   return { sent };
+}
+
+/**
+ * The evening alert as an email: each vehicle with what was found, and a button
+ * into the GaadiPe chat, where the vehicle opens with its full record.
+ */
+function alertMail(person, byVehicle) {
+  const C = require('../mail/customer');
+  const T = require('../mail/templates');
+  const name = String(person.name || '').split(' ')[0] || 'there';
+  const regs = [...byVehicle.keys()];
+  const count = [...byVehicle.values()].reduce((n, l) => n + l.length, 0);
+  const out = T.layout({
+    tagline: 'Your vehicles today',
+    preheader: regs.map((r) => `${r}: ${byVehicle.get(r).map((i) => i.text).join(', ')}`).join(' · ').slice(0, 140),
+    badge: { text: count === 1 ? 'Something changed' : `${count} things changed`, tone: 'watch' },
+    title: regs.length === 1 ? `An update on ${regs[0]}` : `Updates on ${regs.length} of your vehicles`,
+    lead: `Hi ${name}, GaadiPe checked your vehicle${regs.length === 1 ? '' : 's'} against the Government records today. Here is what changed.`,
+    sections: regs.map((reg) => ({ heading: reg, rows: byVehicle.get(reg).map((i) => [i.label, i.text]) })),
+    cta: { label: regs.length === 1 ? `Open ${regs[0]} in GaadiPe` : 'Open GaadiPe', url: `${C.SITE()}/chat${regs.length === 1 ? `?reg=${encodeURIComponent(regs[0])}` : ''}` },
+    footer: 'You are receiving this because you asked GaadiPe to watch this vehicle.',
+    footerHtml: person.email_token
+      ? `<a href="${T.esc(`${C.API()}/email/unsubscribe/${person.email_token}`)}" style="color:#0f766e;">Unsubscribe</a>` : '',
+  });
+  return { subject: regs.length === 1 ? `🔔 ${regs[0]}: ${byVehicle.get(regs[0]).map((i) => i.label).join(', ')} — GaadiPe` : `🔔 Updates on ${regs.length} vehicles — GaadiPe`, ...out };
 }
 
 /**
@@ -592,4 +636,4 @@ function start(everySeconds = 60) {
   console.log(`  watch job: every ${everySeconds}s`);
 }
 
-module.exports = { start, runOnce, checkOne, findings, lifecycle, due, eveningDigest, dailyStatus, statusLine, notify };
+module.exports = { start, runOnce, checkOne, findings, lifecycle, due, eveningDigest, dailyStatus, statusLine, notify, alertMail };

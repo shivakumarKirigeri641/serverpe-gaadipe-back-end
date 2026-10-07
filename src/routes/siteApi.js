@@ -361,10 +361,19 @@ router.get('/me', safe(async (req, res) => {
 }));
 
 router.put('/me', safe(async (req, res) => {
-  const name = String(req.body?.name || '').trim().slice(0, 80) || null;
-  const email = String(req.body?.email || '').trim().slice(0, 160) || null;
-  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email)) {
-    return res.status(400).json({ error: 'bad_email', message: 'That email address does not look right.' });
+  /* CHECKED BEFORE SAVING (2026-10-07): a real name, and an address that can
+     receive mail (mail/customer.checkEmail — shape, common typos, a mail server).
+     The confirmation link that follows is the proof it is theirs. */
+  let name = null;
+  if (req.body?.name !== undefined && String(req.body.name).trim()) {
+    const n = customerMail.checkName(req.body.name);
+    if (!n.ok) return res.status(400).json({ error: n.error, message: n.message });
+    name = n.name;
+  }
+  const email = String(req.body?.email || '').trim().toLowerCase().slice(0, 160) || null;
+  if (email) {
+    const e = await customerMail.checkEmail(email);
+    if (!e.ok) return res.status(400).json({ error: e.error, message: e.message, suggestion: e.suggestion || null });
   }
   // The language alerts are sent in. Only the two Meta has templates for.
   const language = ['en', 'hi'].includes(req.body?.language) ? req.body.language : null;

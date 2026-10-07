@@ -49,6 +49,55 @@ const rupees = (paise) => `₹${Math.round(Number(paise || 0) / 100).toLocaleStr
 
 const validEmail = (e) => EMAIL_RE.test(String(e || '').trim());
 
+/*
+ * CAN THIS ADDRESS RECEIVE MAIL AT ALL? (user, 2026-10-07: "email validation").
+ * The confirmation link is the real proof the address is theirs; this catches
+ * the commonest mistakes before a link is sent into nowhere:
+ *   - the shape (one @, a dot after it, no spaces, no ".." )
+ *   - well-known domains mistyped: gmial.com, gmail.co, yaho.com, …
+ *   - a domain that has no mail server (MX, or an address to fall back to)
+ * A DNS lookup that times out or errors for another reason lets the address
+ * through: the resolver being slow must never stop a customer saving it.
+ * Returns { ok } or { ok: false, error, message, suggestion? }.
+ */
+const TYPOS = {
+  'gmial.com': 'gmail.com', 'gmai.com': 'gmail.com', 'gmal.com': 'gmail.com', 'gamil.com': 'gmail.com',
+  'gmail.co': 'gmail.com', 'gmail.con': 'gmail.com', 'gmail.cm': 'gmail.com', 'gmail.in': 'gmail.com',
+  'gnail.com': 'gmail.com', 'gmaill.com': 'gmail.com', 'yaho.com': 'yahoo.com', 'yahoo.co': 'yahoo.com',
+  'yahoo.con': 'yahoo.com', 'hotmal.com': 'hotmail.com', 'hotmail.co': 'hotmail.com', 'outlok.com': 'outlook.com',
+  'outlook.co': 'outlook.com', 'rediffmail.co': 'rediffmail.com', 'redifmail.com': 'rediffmail.com',
+};
+async function checkEmail(email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!validEmail(e) || e.length > 160 || /\.\.|^\.|\.@|@\./.test(e)) {
+    return { ok: false, error: 'bad_email', message: 'That email address does not look right. Please check it — like name@gmail.com.' };
+  }
+  const domain = e.split('@')[1];
+  if (TYPOS[domain]) {
+    const suggestion = `${e.split('@')[0]}@${TYPOS[domain]}`;
+    return { ok: false, error: 'email_typo', suggestion, message: `Did you mean ${suggestion}? Please check the spelling after the @.` };
+  }
+  const dns = require('dns').promises;
+  const within = (p) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(Object.assign(new Error('timeout'), { code: 'ETIMEOUT' })), 4000))]);
+  try {
+    const mx = await within(dns.resolveMx(domain));
+    if (mx.length) return { ok: true };
+  } catch (err) {
+    if (!['ENOTFOUND', 'ENODATA', 'ESERVFAIL'].includes(err.code)) return { ok: true };   // the resolver, not the address
+  }
+  try { if ((await within(dns.resolve4(domain))).length) return { ok: true }; } catch { /* no address either */ }
+  return { ok: false, error: 'email_domain', message: `${domain} cannot receive email. Please check the part after the @.` };
+}
+
+/* A name as people write it: letters (any script), spaces, dots, apostrophes and hyphens. */
+function checkName(name) {
+  const n = String(name || '').trim().replace(/\s+/g, ' ');
+  if (n.length < 2) return { ok: false, error: 'bad_name', message: 'Please write your name — at least two letters.' };
+  if (n.length > 60) return { ok: false, error: 'bad_name', message: 'That name is too long. Please keep it under 60 letters.' };
+  if (!/^[\p{L}\p{M}][\p{L}\p{M} .'-]*$/u.test(n)) return { ok: false, error: 'bad_name', message: 'A name can only have letters, spaces, dots and hyphens.' };
+  return { ok: true, name: n };
+}
+
 /**
  * Save a customer's address. A NEW address starts unconfirmed with a fresh
  * token, and a confirmation email is queued; the same address again changes
@@ -452,6 +501,6 @@ function announcementMail(user, { subject, body }) {
 }
 
 module.exports = {
-  setEmail, validEmail, onlyTo, deliver, storedRecord, queuePurchase,
+  setEmail, validEmail, checkEmail, checkName, onlyTo, deliver, storedRecord, queuePurchase,
   confirmMail, dailyMail, digestMail, rewardMail, purchaseMail, announcementMail, istDay, SITE, API,
 };
