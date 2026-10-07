@@ -77,6 +77,15 @@ async function touch({ kind, sessionId, visitorId, page, step, section, scroll, 
        typeof visible === 'boolean' ? visible : null, clip(action, 120), isAction, kind,
        clip(source, 60), clip(campaign, 120), clip(landing, 200), JSON.stringify(device || {}), JSON.stringify(place || {}),
        /^gp-[A-Za-z0-9-]{6,64}$/.test(String(deviceKey || '')) ? String(deviceKey) : null]);
+    /* A CUSTOMER ON THE WEBSITE IS A CUSTOMER SEEN (2026-10-07: "in Customers I
+       don't see who just came"). Only a WhatsApp message used to move
+       users.last_seen_at, so website customers sank in the list. At most once a
+       minute per customer. */
+    if (row?.user_id) {
+      await db.query(`UPDATE users SET last_seen_at = now()
+                       WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < now() - interval '1 minute')`, [row.user_id])
+        .catch(() => {});
+    }
     const off = await monitoringOff({ sessionId, visitorId, userId: row?.user_id });
     const scrollOn = String(await settings.get('web_track_scroll', 'on')).toLowerCase() !== 'off' && !off;
     return { userId: row?.user_id ? String(row.user_id) : null, monitoring: off ? 'off' : 'on', offBy: off, scroll: scrollOn, ended: row?.end_reason === 'terminated' };
