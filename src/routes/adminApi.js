@@ -860,6 +860,61 @@ router.get('/web/customers/:id', needs('customers.view'), safe(async (req, res) 
 }));
 router.get('/web/search', safe(async (req, res) => res.json(await control.search(req.query.q))));
 
+/*
+ * THE CONTROLS (src/admin/webControls.js; spec §70–71, §86–90, §97, §107): each
+ * one audited with the reason and the state before and after. Ending one visit
+ * or resending a link: tasks.manage; signing a customer out everywhere or of a
+ * device, and monitoring for a customer or a browser: 'block' (owner, admin,
+ * operations); monitoring everywhere — the emergency switch: owner only.
+ */
+const controls = require('../admin/webControls');
+const reasonOf = (req) => String(req.body?.reason || '').trim().slice(0, 300) || null;
+const auditCtl = (req, action, detail) => auth.audit({ adminId: req.admin.id, action, ip: ipOf(req), detail: { ...detail, reason: reasonOf(req) } });
+router.post('/web/sessions/:id/end', needs('tasks.manage'), safe(async (req, res) => {
+  const out = await controls.endVisit(String(req.params.id).slice(0, 64));
+  if (out.ok) await auditCtl(req, 'web_session_terminated', { session_id: req.params.id, user_id: out.user_id, before: out.before, after: out.after, sign_ins_ended: out.sign_ins_ended });
+  res.status(out.ok ? 200 : 404).json(out);
+}));
+router.post('/web/customers/:id/sign-out', needs('block'), safe(async (req, res) => {
+  const deviceKey = /^gp-[A-Za-z0-9-]{6,64}$/.test(String(req.body?.device_key || '')) ? req.body.device_key : null;
+  const out = await controls.signOut(req.params.id, { deviceKey });
+  await auditCtl(req, deviceKey ? 'customer_device_signed_out' : 'customer_signed_out_everywhere', { user_id: req.params.id, device_key: deviceKey, ...out });
+  res.json(out);
+}));
+router.get('/web/monitoring', safe(async (req, res) => res.json(await controls.monitoringState({
+  sessionId: req.query.session || null, userId: req.query.user || null, visitorId: req.query.visitor || null }))));
+router.post('/web/monitoring', safe(async (req, res) => {
+  const { scope, ref = '', off } = req.body || {};
+  const need = scope === 'global' ? 'admins' : scope === 'session' ? 'tasks.manage' : 'block';
+  if (!auth.can(req.admin.role, need)) return res.status(403).json({ error: 'not_allowed', message: scope === 'global' ? 'Only the owner can switch monitoring off everywhere.' : 'Your role may not change this.' });
+  if (scope === 'global' && off && !reasonOf(req)) return res.status(400).json({ error: 'reason', message: 'Say why monitoring is being switched off everywhere.' });
+  const out = await controls.setMonitoring({ scope, ref, off: off === true, reason: reasonOf(req) || '', adminId: req.admin.id });
+  if (out.ok) await auditCtl(req, off ? 'monitoring_disabled' : 'monitoring_enabled', { scope, ref: String(ref).slice(0, 64), before: out.before, after: out.after });
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.get('/web/customers/:id/flags', needs('customers.view'), safe(async (req, res) => res.json({ rows: await controls.flags(req.params.id), kinds: controls.FLAGS })));
+router.post('/web/customers/:id/flags', needs('tasks.manage'), safe(async (req, res) => {
+  const out = await controls.flag(req.params.id, { flag: req.body?.flag, reason: reasonOf(req) || '', adminId: req.admin.id });
+  if (out.ok) await auditCtl(req, 'customer_flagged', { user_id: req.params.id, flag: req.body?.flag });
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.post('/web/flags/:id/clear', needs('tasks.manage'), safe(async (req, res) => {
+  const out = await controls.unflag(req.params.id, req.admin.id);
+  if (out.ok) await auditCtl(req, 'customer_flag_cleared', { flag_id: req.params.id });
+  res.json(out);
+}));
+router.post('/web/customers/:id/resend-confirmation', needs('tasks.manage'), safe(async (req, res) => {
+  const out = await controls.resendConfirmation(req.params.id);
+  if (out.ok) await auditCtl(req, 'customer_confirmation_resent', { user_id: req.params.id });
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.get('/web/customers/:id/export', needs('customers.view'), safe(async (req, res) => {
+  const out = await controls.exportCustomer(req.params.id);
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'No such customer.' });
+  await auditCtl(req, 'customer_exported', { user_id: req.params.id, masked: !auth.can(req.admin.role, 'pii') });
+  res.json(out);
+}));
+
 /* Minute-by-minute analytics and the live funnel (src/admin/analytics.js). */
 const analytics = require('../admin/analytics');
 router.get('/web/analytics/series', needs('dashboard.view'), safe(async (req, res) => res.json(await analytics.series({ range: req.query.range }))));

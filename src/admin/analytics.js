@@ -186,9 +186,15 @@ async function funnelPeople({ range = 'today', stage = 'visited', stopped = fals
     started_at: v.started_at, source: v.source, reached_at: v.at[stage], last_stage: [...STAGES].reverse().find(([k]) => v.at[k])?.[1] })) };
 }
 
+/* RETENTION (spec §42): each kind of detail kept only as long as its setting says. */
 async function prune() {
-  const days = n(await require('../util/settings').num('analytics_minute_retention_days', 35)) || 35;
+  const s = require('../util/settings');
+  const days = n(await s.num('analytics_minute_retention_days', 35)) || 35;
   await db.query(`DELETE FROM analytics_minute WHERE bucket < now() - make_interval(days => $1)`, [days]);
+  const visits = n(await s.num('web_session_retention_days', 180)) || 180;
+  await db.query(`DELETE FROM web_sessions WHERE last_seen_at < now() - make_interval(days => $1)`, [visits]);
+  const taps = n(await s.num('web_interaction_retention_days', 90)) || 90;
+  await db.query(`DELETE FROM events WHERE name = 'interaction' AND occurred_at < now() - make_interval(days => $1)`, [taps]);
 }
 
 module.exports = { rollup, series, summary, funnel, funnelPeople, prune, METRICS, STAGES };

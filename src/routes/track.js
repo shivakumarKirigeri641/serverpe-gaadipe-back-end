@@ -151,11 +151,11 @@ router.post('/hb', express.json({ limit: '2kb' }), async (req, res) => {
     const where = device.locate(req.ip);
     const live = await presence.touch({
       kind: 'heartbeat', sessionId: b.session_id, visitorId: b.visitor_id, page: clip(b.page, 300),
-      step: clip(b.step, 40) || null, section: clip(b.section, 80) || null, scroll: b.scroll, visible: b.visible !== false,
+      step: clip(b.step, 40) || null, section: clip(b.section, 80) || null, scroll: b.scroll, visible: b.visible !== false, deviceKey: b.device_key,
       device: { device_type: ua2.device_type, os: ua2.os, browser: ua2.browser },
       place: { country: where.country, region: where.region, city: where.city },
     });
-    res.json({ m: live.monitoring, end: live.ended || undefined });
+    res.json({ m: live.monitoring, s: live.scroll ? 1 : 0, end: live.ended || undefined });
   } catch (e) {
     console.error('[track] hb %s', e.message);
     res.json({ m: 'on' });

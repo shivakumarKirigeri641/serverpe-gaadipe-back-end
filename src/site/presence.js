@@ -43,7 +43,7 @@ async function monitoringOff({ sessionId, visitorId, userId } = {}) {
  * One visit's row brought up to date. `kind` is heartbeat | page | interaction | start.
  * Returns { userId, monitoring: 'on' | 'off', ended } — ended when an admin ended the visit.
  */
-async function touch({ kind, sessionId, visitorId, page, step, section, scroll, visible, action, source, campaign, landing, device, place }) {
+async function touch({ kind, sessionId, visitorId, page, step, section, scroll, visible, action, source, campaign, landing, device, place, deviceKey }) {
   try {
     const isAction = kind === 'interaction';
     const row = await db.one(
@@ -69,14 +69,17 @@ async function touch({ kind, sessionId, visitorId, page, step, section, scroll, 
          campaign       = coalesce(w.campaign, EXCLUDED.campaign),
          landing        = coalesce(w.landing, EXCLUDED.landing),
          device         = CASE WHEN w.device = '{}'::jsonb THEN EXCLUDED.device ELSE w.device END,
-         place          = CASE WHEN w.place = '{}'::jsonb THEN EXCLUDED.place ELSE w.place END
+         place          = CASE WHEN w.place = '{}'::jsonb THEN EXCLUDED.place ELSE w.place END,
+         device_key     = coalesce($16, w.device_key)
        RETURNING user_id, ended_at, end_reason`,
       [clip(sessionId, 64), clip(visitorId, 64), clip(page, 300), clip(step, 40), clip(section, 80),
        Number.isFinite(Number(scroll)) && scroll !== null && scroll !== '' ? Math.max(0, Math.min(100, Math.round(Number(scroll)))) : null,
        typeof visible === 'boolean' ? visible : null, clip(action, 120), isAction, kind,
-       clip(source, 60), clip(campaign, 120), clip(landing, 200), JSON.stringify(device || {}), JSON.stringify(place || {})]);
+       clip(source, 60), clip(campaign, 120), clip(landing, 200), JSON.stringify(device || {}), JSON.stringify(place || {}),
+       /^gp-[A-Za-z0-9-]{6,64}$/.test(String(deviceKey || '')) ? String(deviceKey) : null]);
     const off = await monitoringOff({ sessionId, visitorId, userId: row?.user_id });
-    return { userId: row?.user_id ? String(row.user_id) : null, monitoring: off ? 'off' : 'on', offBy: off, ended: row?.end_reason === 'terminated' };
+    const scrollOn = String(await settings.get('web_track_scroll', 'on')).toLowerCase() !== 'off' && !off;
+    return { userId: row?.user_id ? String(row.user_id) : null, monitoring: off ? 'off' : 'on', offBy: off, scroll: scrollOn, ended: row?.end_reason === 'terminated' };
   } catch (e) {
     console.error('[presence] %s', e.message);
     return { userId: null, monitoring: 'on', ended: false };
