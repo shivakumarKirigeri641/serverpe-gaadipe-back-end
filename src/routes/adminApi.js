@@ -843,6 +843,8 @@ router.get('/web/free-checks', needs('dashboard.view'), safe(async (req, res) =>
 router.get('/web/log', needs('customers.view'), safe(async (req, res) => res.json(await web.log({
   range: req.query.range, kind: req.query.kind, q: req.query.q, pages: req.query.pages === '1', limit: req.query.limit }))));
 router.get('/web/emails', needs('dashboard.view'), safe(async (_req, res) => res.json(await web.emails())));
+/* Who is on the website now — the live stream's snapshot, for a browser that cannot stream. */
+router.get('/web/live', needs('customers.view'), safe(async (_req, res) => res.json(await require('../admin/stream').presence())));
 /* My sessions, and who else is in the web admin right now. */
 router.get('/web/me/sessions', safe(async (req, res) => res.json(await web.mySessions(req.admin))));
 router.post('/web/me/sessions/:which/end', safe(async (req, res) => {

@@ -126,8 +126,24 @@ async function required() {
  * `exempt(req)` names plain paths still allowed when encryption is required
  * (file downloads, which are PDFs rather than JSON).
  */
-function tunnel(surface, { exempt = () => false } = {}) {
+function tunnel(surface, { exempt = () => false, stream = null } = {}) {
   return async (req, res, next) => {
+    /*
+     * 1b · a LIVE STREAM (2026-10-07, the web admin): POST /_s with the same key
+     * token and a sealed { t, n } — checked exactly as a call — then the answer
+     * stays open and every event is written as "d: <sealed JSON>" + blank line,
+     * sealed with this browser's own key. The Network tab shows ciphertext only.
+     */
+    if (req.method === 'POST' && req.path === '/_s' && stream) {
+      const tok = readToken(req.get('x-gp-k'));
+      if (!tok || !crypto.timingSafeEqual(tok.fp, fingerprint(req))) return res.status(401).json({ error: 'rekey' });
+      let env;
+      try { env = open(tok.key, req.body?.d); } catch { return res.status(400).json({ error: 'rekey' }); }
+      const nonceKey = `${String(req.get('x-gp-k')).slice(0, 24)}:${env.n}`;
+      if (!env.n || Math.abs(Date.now() - Number(env.t || 0)) > MAX_SKEW_MS || seen.has(nonceKey)) return res.status(400).json({ error: 'rekey' });
+      seen.set(nonceKey, Date.now() + MAX_SKEW_MS * 2);
+      return stream(req, res, (obj) => { try { res.write(`d: ${seal(tok.key, obj)}\n\n`); return true; } catch { return false; } });
+    }
     /* 1 · handshake */
     if (req.method === 'POST' && req.path === '/_hs') {
       try {

@@ -79,7 +79,8 @@ const { tunnel } = require('./security/tunnel');
 // invoice PDFs, the backup, and the CSV exports (command center phase 3).
 const fileRoute = (req) => /^\/((reports|invoices)\/[^/]+\/file|reports\/[^/]+\/admin-view|owner-photos\/\d+\/photo|maintenance\/backup|export\/[a-z_]+(\.csv)?|exports\/\d+\/file|fleets\/\d+\/excel)$/.test(req.path);
 
-app.use('/admin/api', cors(config.admin.origins), gate('admin'), tunnel('admin', { exempt: fileRoute }),
+app.use('/admin/api', cors(config.admin.origins), gate('admin'),
+  tunnel('admin', { exempt: fileRoute, stream: (req, res, write) => require('./admin/stream').handle(req, res, write) }),
   loopGuard('admin'), adminRoutes);
 
 /* ------------------------------------------------------------- the website */
