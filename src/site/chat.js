@@ -69,6 +69,13 @@ async function anonCheck(req) {
   // Free sources only: an anonymous visitor never costs an IDSPay call.
   // The same rule as every free check (rc_backup_paid_only): ULIP, eChallan.app, and IDSPay only if switched on for free checks.
   const data = await gateway.full(parsed.regNo, await require('../vehicle/rcBackup').freeOpts());
+  /* KEPT LIKE EVERY OTHER CHECK (2026-10-07: "the mail said make & model '-'"). A
+     free check never saved the vehicle, so the admin email, the Vehicle Explorer
+     and the API cost knew nothing of it. Saved before the event, which the email reads. */
+  if (data?.success) {
+    await require('../vehicle/store').record(null, data)
+      .catch((e) => console.error('[chat] could not save %s: %s', parsed.regNo, e.message));
+  }
   await db.query(`INSERT INTO event_log (kind, detail) VALUES ('chat_anon_check', $1)`,
     [JSON.stringify({ device, ip, reg_no: parsed.regNo, found: data?.success === true, ...(data?.success ? {} : { error: data?.error || 'failed' }) })]).catch(() => {});
 
