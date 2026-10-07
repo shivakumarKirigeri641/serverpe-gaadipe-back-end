@@ -95,14 +95,18 @@ function gate(surface) {
       /* The admin panels poll several live panels at once (2026-10-07: the web
          admin), so their own, higher ceiling; the public site keeps its 150. */
       const limit = isHandshake
-        ? await settings.num('rate_limit_handshakes_per_minute_ip', 20)
+        ? await settings.num('rate_limit_handshakes_per_minute_ip', 120)
         : surface === 'admin'
           ? await settings.num('rate_limit_admin_per_minute_ip', 600)
-          : await settings.num('rate_limit_per_minute_ip', 150);
+          : await settings.num('rate_limit_per_minute_ip', 600);
       const n = hit(`${surface}:${isHandshake ? 'hs' : 'all'}:${req.ip}`, 60 * 1000);
       if (n > limit) {
         await record('rate_limit', req, { surface, detail: { per_minute: n, limit, handshake: isHandshake } });
-        if (n > limit * 3) {                           // a flood, not a burst
+        /* NEVER BLOCK A CUSTOMER'S IP (2026-10-07: ad visitors saw "could not reach
+           GaadiPe"). Indian mobile networks put many phones behind one address, so
+           blocking it for 30 minutes shut out everyone on that network. The site
+           only slows a burst down; the admin surface still blocks a flood. */
+        if (surface !== 'site' && n > limit * 3) {     // a flood, not a burst
           await blockIp(req);
           await record('blocked_ip', req, { surface, severity: 'high', detail: { per_minute: n } });
         }
@@ -124,7 +128,13 @@ function loopGuard(surface) {
   return async (req, res, next) => {
     try {
       if (req.method === 'GET' && /\/(session|me|pricing)$/.test(req.path)) return next();   // harmless polling
-      const who = req.get('authorization') ? crypto.createHash('sha1').update(req.get('authorization')).digest('hex').slice(0, 12) : req.ip;
+      // A customer's page reading something (notice, prices, terms) is not a loop (2026-10-07).
+      if (surface === 'site' && req.method === 'GET') return next();
+      // Signed out, a visitor is their browser (the tunnel's device key), not their IP —
+      // many phones share one address on Indian mobile networks.
+      const who = req.get('authorization')
+        ? crypto.createHash('sha1').update(req.get('authorization')).digest('hex').slice(0, 12)
+        : `${req.ip}:${String(req.get('x-gp-d') || '').slice(0, 64)}`;
       const bodyHash = crypto.createHash('sha1').update(JSON.stringify(req.body || {})).digest('hex').slice(0, 12);
       const limit = await settings.num('loop_limit_same_call_30s', 15);
       const n = hit(`${surface}:loop:${who}:${req.method}:${req.path}:${bodyHash}`, 30 * 1000);
