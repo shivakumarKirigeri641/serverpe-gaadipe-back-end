@@ -51,9 +51,9 @@ async function feed() {
                 FROM event_log e LEFT JOIN users u ON u.id = e.user_id
                WHERE e.id > $1 AND e.kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat', 'full_view')
                ORDER BY e.id LIMIT 200`, [cur.el]),
-    db.query(`SELECT p.id, p.created_at AS at, p.amount_paise, p.status, p.raw->>'channel' AS ch, p.raw->>'reg_no' AS reg_no, p.user_id, u.mobile
+    db.query(`SELECT p.id, p.created_at AS at, p.amount_paise, p.status, p.raw->>'channel' AS ch, coalesce(p.raw->>'reg_no', (SELECT v.reg_no FROM vehicles v WHERE v.id = nullif(p.raw->>'vehicle_id', '')::bigint)) AS reg_no, p.user_id, u.mobile
                 FROM payments p LEFT JOIN users u ON u.id = p.user_id WHERE p.id > $1 ORDER BY p.id LIMIT 100`, [cur.pay]),
-    db.query(`SELECT p.id, p.paid_at AS at, p.amount_paise, p.raw->>'channel' AS ch, p.raw->>'reg_no' AS reg_no, p.user_id, u.mobile
+    db.query(`SELECT p.id, p.paid_at AS at, p.amount_paise, p.raw->>'channel' AS ch, coalesce(p.raw->>'reg_no', (SELECT v.reg_no FROM vehicles v WHERE v.id = nullif(p.raw->>'vehicle_id', '')::bigint)) AS reg_no, p.user_id, u.mobile
                 FROM payments p LEFT JOIN users u ON u.id = p.user_id
                WHERE p.status = 'paid' AND p.paid_at > $1 AND p.paid_at <= $2 ORDER BY p.paid_at LIMIT 100`, [since, now]),
     db.query(`SELECT id, created_at AS at, dataset, reg_no, ok, cache_hit, duration_ms, outcome, coalesce(error_message, error_code) AS err

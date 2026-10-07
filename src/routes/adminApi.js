@@ -843,6 +843,23 @@ router.get('/web/free-checks', needs('dashboard.view'), safe(async (req, res) =>
 router.get('/web/log', needs('customers.view'), safe(async (req, res) => res.json(await web.log({
   range: req.query.range, kind: req.query.kind, q: req.query.q, pages: req.query.pages === '1', limit: req.query.limit }))));
 router.get('/web/emails', needs('dashboard.view'), safe(async (_req, res) => res.json(await web.emails())));
+/* The control room (src/admin/control.js): visits, one visit, one customer, search everything. */
+const control = require('../admin/control');
+router.get('/web/sessions', needs('customers.view'), safe(async (req, res) => res.json(await control.sessions({
+  range: req.query.range, status: req.query.status, q: req.query.q, userId: /^\d+$/.test(String(req.query.user || '')) ? req.query.user : null,
+  limit: req.query.limit, offset: req.query.offset }))));
+router.get('/web/sessions/:id', needs('customers.view'), safe(async (req, res) => {
+  const out = await control.session(req.params.id);
+  if (!refreshing(req)) await auth.audit({ adminId: req.admin.id, action: 'view_session', ip: ipOf(req), detail: { session_id: String(req.params.id).slice(0, 64) } });
+  res.json(out);
+}));
+router.get('/web/customers/:id', needs('customers.view'), safe(async (req, res) => {
+  const out = await control.customer(req.params.id);
+  if (!refreshing(req)) await auth.audit({ adminId: req.admin.id, action: 'view_customer', ip: ipOf(req), detail: { user_id: String(req.params.id).slice(0, 20) } });
+  res.json(out);
+}));
+router.get('/web/search', safe(async (req, res) => res.json(await control.search(req.query.q))));
+
 /* Who is on the website now — the live stream's snapshot, for a browser that cannot stream. */
 router.get('/web/live', needs('customers.view'), safe(async (_req, res) => res.json(await require('../admin/stream').presence())));
 /* My sessions, and who else is in the web admin right now. */
