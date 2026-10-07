@@ -161,15 +161,36 @@ async function requestCodeInner({ mobile, ip }) {
  * A customer row is created here if there is none: somebody may reach the site
  * before they ever message WhatsApp, and being new is not an error.
  */
-async function verifyCode({ mobile, code, ip, userAgent, ctx = {}, quizpeConsent = false }) {
-  const out = await verifyCodeInner({ mobile, code, ip: ip || ctx.ip, userAgent: userAgent || ctx.user_agent, ctx, quizpeConsent });
+/*
+ * TIPS AND OFFERS (user, 2026-10-07) — the opt-in for PROMOTIONAL messages on
+ * any channel (SMS, WhatsApp, email). Separate from the Terms, OPTIONAL, never
+ * pre-ticked, withdrawable in Profile (DPDP). Service messages need no tick:
+ * the Terms cover them.
+ */
+const PROMO_CONSENT = 'Send me vehicle tips, new features and GaadiPe offers by SMS, WhatsApp or email. I can stop this any time in my Profile or by replying STOP.';
+
+async function setPromoConsent(userId, agree, { ip = null, userAgent = null, channel = 'web' } = {}) {
+  const row = await db.one(agree
+    ? `UPDATE users SET promo_consent_at = coalesce(promo_consent_at, now()), promo_consent_text = $2,
+              promo_consent_withdrawn_at = NULL, modified_at = now() WHERE id = $1 RETURNING *`
+    : `UPDATE users SET promo_consent_withdrawn_at = CASE WHEN promo_consent_at IS NOT NULL THEN now() ELSE promo_consent_withdrawn_at END,
+              promo_consent_at = NULL, modified_at = now() WHERE id = $1 RETURNING *`,
+  agree ? [userId, PROMO_CONSENT] : [userId]);
+  await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, $2, $3)`,
+    [userId, agree ? 'promo_consent_given' : 'promo_consent_withdrawn',
+     JSON.stringify({ text: PROMO_CONSENT, channel, ip, user_agent: userAgent })]);
+  return row;
+}
+
+async function verifyCode({ mobile, code, ip, userAgent, ctx = {}, quizpeConsent = false, promoConsent = false }) {
+  const out = await verifyCodeInner({ mobile, code, ip: ip || ctx.ip, userAgent: userAgent || ctx.user_agent, ctx, quizpeConsent, promoConsent });
   if (!out.ok) {
     await track('sign_in_failed', { mobile: localMobile(mobile) || null, ctx, outcome: out.error });
   }
   return out;
 }
 
-async function verifyCodeInner({ mobile, code, ip, userAgent, ctx, quizpeConsent = false }) {
+async function verifyCodeInner({ mobile, code, ip, userAgent, ctx, quizpeConsent = false, promoConsent = false }) {
   const m = localMobile(mobile);
 
   if (!allowedForTesting(m)) {
@@ -267,7 +288,13 @@ async function verifyCodeInner({ mobile, code, ip, userAgent, ctx, quizpeConsent
       [user.id, JSON.stringify({ text, via: 'sign_in', ip: ip || null, user_agent: userAgent || null })]);
   }
 
-  return { ok: true, token, user: publicUser({ ...user, deactivated_at: null, quizpe_consent_at: quizpe }) };
+  // Tips and offers: ticked at sign-in gives it; unticked never withdraws one given before (Profile does that).
+  let promo = user.promo_consent_at || null;
+  if (promoConsent === true && !promo) {
+    promo = (await setPromoConsent(user.id, true, { ip, userAgent })).promo_consent_at;
+  }
+
+  return { ok: true, token, user: publicUser({ ...user, deactivated_at: null, quizpe_consent_at: quizpe, promo_consent_at: promo }) };
 }
 
 const publicUser = (u) => ({
@@ -278,6 +305,7 @@ const publicUser = (u) => ({
   email_verified: Boolean(u.email && u.email_verified_at),
   email_unsubscribed: Boolean(u.email_unsubscribed_at),
   quizpe_consent: Boolean(u.quizpe_consent_at),
+  promo_consent: Boolean(u.promo_consent_at),
   language: u.preferred_language || 'en',
   state_code: u.state_code || null,
   joined_at: u.created_at,
@@ -346,4 +374,4 @@ async function deactivate(userId, { reason } = {}) {
   return { ok: true };
 }
 
-module.exports = { requestCode, verifyCode, sessionFor, signOut, deactivate, publicUser, localMobile };
+module.exports = { requestCode, verifyCode, sessionFor, signOut, deactivate, publicUser, localMobile, setPromoConsent, PROMO_CONSENT };

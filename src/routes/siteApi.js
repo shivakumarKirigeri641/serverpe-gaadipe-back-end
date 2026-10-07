@@ -254,6 +254,7 @@ router.post('/session/verify', safe(async (req, res) => {
   const out = await auth.verifyCode({
     mobile: req.body?.mobile, code: req.body?.code, ctx: device.contextOf(req),
     quizpeConsent: req.body?.quizpe_consent === true,  // optional tick on the sign-in page
+    promoConsent: req.body?.promo_consent === true,    // tips and offers — optional, never pre-ticked
   });
   if (!out.ok) return res.status(401).json(out);
   /*
@@ -455,6 +456,13 @@ router.put('/me/consents', safe(async (req, res) => {
 router.get('/me/consents', safe(async (req, res) => {
   const u = await db.one(`SELECT quizpe_consent_at FROM users WHERE id = $1`, [req.user.id]);
   res.json({ quizpe: Boolean(u?.quizpe_consent_at), quizpe_at: u?.quizpe_consent_at || null, text: QUIZPE_CONSENT });
+}));
+
+/* Tips and offers on any channel — its own switch, so it never touches the QuizPe consent (2026-10-07). */
+router.put('/me/promo-consent', safe(async (req, res) => {
+  const row = await auth.setPromoConsent(req.user.id, req.body?.agree === true,
+    { ip: req.ip, userAgent: req.get('user-agent') || null });
+  res.json({ ok: true, user: auth.publicUser(row), text: auth.PROMO_CONSENT });
 }));
 
 /* The confirmation link again, for an address not yet confirmed. At most one every two minutes. */
