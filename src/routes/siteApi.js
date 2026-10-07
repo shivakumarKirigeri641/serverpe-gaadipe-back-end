@@ -256,6 +256,18 @@ router.post('/session/verify', safe(async (req, res) => {
     quizpeConsent: req.body?.quizpe_consent === true,  // optional tick on the sign-in page
   });
   if (!out.ok) return res.status(401).json(out);
+  /*
+   * WHERE THIS CUSTOMER CAME FROM (user, 2026-10-07: "new customers from web
+   * sign-in, I don't know how"). The anonymous visit — its first source,
+   * referrer, landing page and UTM — is joined to the person who just signed
+   * in, as the WhatsApp code used to do. Only an unclaimed visitor is joined.
+   */
+  const vid = String(req.body?.client?.visitor_id || '').slice(0, 64);
+  if (/^v_[a-z0-9]{8,40}$/.test(vid) && out.user?.id) {
+    require('../db').query(
+      `UPDATE visitors SET user_id = $2, mobile = $3 WHERE visitor_id = $1 AND user_id IS NULL`,
+      [vid, out.user.id, String(out.user.mobile || '').slice(-10) || null]).catch(() => {});
+  }
   res.json(out);
 }));
 
