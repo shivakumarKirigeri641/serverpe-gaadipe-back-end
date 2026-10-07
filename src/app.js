@@ -111,10 +111,10 @@ app.use('/serverpe/platform/gaadipe/v1/public/users', publicRoutes);
 // Website events for the command center: anonymous, narrow, rate-limited.
 app.use('/serverpe/platform/gaadipe/v1/public/users', require('./routes/track'));
 
-// Meta's webhook, on the same public prefix as the policies — the shape the
-// other ServerPe products already use. No API key: the caller is Meta, and it
-// authenticates itself by signing the body with the app secret.
-app.use('/serverpe/platform/gaadipe/v1/public/users', whatsappRoutes);
+// Meta's webhook — RETIRED (user, 2026-10-07: "there is no more WhatsApp now").
+// Not mounted: nothing from WhatsApp is read or answered. routes/whatsapp.js
+// stays in the code; mount it again here only if WhatsApp ever returns.
+void whatsappRoutes;
 
 // Razorpay's webhook. Also unauthenticated, and for the same reason: the caller
 // is Razorpay, and it proves itself by signing the body with the webhook secret.
@@ -237,8 +237,8 @@ app.listen(config.port, () => {
   require('./jobs/expiryWatch').start(Number(process.env.EXPIRY_TICK_SECONDS) || 3600);
   // Three days before monitoring ends, once per subscription.
   require('./jobs/renewal').start(Number(process.env.RENEWAL_TICK_SECONDS) || 6 * 3600);
-  // Broadcasts the panel has queued, a few template messages a minute.
-  require('./jobs/broadcast').start(Number(process.env.BROADCAST_TICK_SECONDS) || 60);
+  // WhatsApp is retired (2026-10-07): its broadcasts, reminders and waitlist no longer run.
+  // require('./jobs/broadcast').start(Number(process.env.BROADCAST_TICK_SECONDS) || 60);
   // The command center's alert rules (records API, WhatsApp, payments, jobs…).
   require('./jobs/alerts').start(Number(process.env.ALERTS_TICK_SECONDS) || 60);
   // Payments against Razorpay, once a day after 03:00 IST (operations module).
@@ -246,13 +246,13 @@ app.listen(config.port, () => {
   // Scheduled backup (when switched on) and job-history trimming (operations module).
   require('./jobs/maintenance').start(Number(process.env.MAINTENANCE_TICK_SECONDS) || 3600);
   // One free reminder inside the 24-hour window: terms not agreed, link not paid.
-  require('./jobs/nudge').start(Number(process.env.NUDGE_TICK_SECONDS) || 300);
+  // (retired with WhatsApp) require('./jobs/nudge').start(Number(process.env.NUDGE_TICK_SECONDS) || 300);
   // Fleets: daily checks, the 7 pm Excel email, renewal links and expiry.
   require('./jobs/fleet').start(Number(process.env.FLEET_TICK_SECONDS) || 300);
   // A paid report issued while e-Challan was down: completed when it answers.
   require('./jobs/challanFollowup').start(Number(process.env.CHALLAN_FOLLOWUP_TICK_SECONDS) || 300);
   // Numbers sent while vehicle records were down: checked and sent once they are back.
-  require('./jobs/waitlist').start(Number(process.env.WAITLIST_TICK_SECONDS) || 300);
+  // (retired with WhatsApp) require('./jobs/waitlist').start(Number(process.env.WAITLIST_TICK_SECONDS) || 300);
   // The WhatsApp account as Meta sees it — limit tier, quality — read hourly.
   // WhatsApp is retired (2026-10-07): Meta's account status is no longer polled or emailed.
   // require('./jobs/metaStatus').start(Number(process.env.META_STATUS_TICK_SECONDS) || 3600);
