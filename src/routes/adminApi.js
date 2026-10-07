@@ -860,6 +860,14 @@ router.get('/web/customers/:id', needs('customers.view'), safe(async (req, res) 
 }));
 router.get('/web/search', safe(async (req, res) => res.json(await control.search(req.query.q))));
 
+/* Minute-by-minute analytics and the live funnel (src/admin/analytics.js). */
+const analytics = require('../admin/analytics');
+router.get('/web/analytics/series', needs('dashboard.view'), safe(async (req, res) => res.json(await analytics.series({ range: req.query.range }))));
+router.get('/web/analytics/summary', needs('dashboard.view'), safe(async (req, res) => res.json(await analytics.summary({ range: req.query.range }))));
+router.get('/web/funnel', needs('dashboard.view'), safe(async (req, res) => res.json(await analytics.funnel({ range: req.query.range }))));
+router.get('/web/funnel/people', needs('customers.view'), safe(async (req, res) => res.json(await analytics.funnelPeople({
+  range: req.query.range, stage: req.query.stage, stopped: req.query.stopped === '1' }))));
+
 /* Who is on the website now — the live stream's snapshot, for a browser that cannot stream. */
 router.get('/web/live', needs('customers.view'), safe(async (_req, res) => res.json(await require('../admin/stream').presence())));
 /* My sessions, and who else is in the web admin right now. */
