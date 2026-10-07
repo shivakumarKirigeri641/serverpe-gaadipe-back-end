@@ -114,6 +114,25 @@ router.get('/policies', async (_req, res) => {
   }
 });
 
+/*
+ * THE SITE NOTICE (user, 2026-10-07: WhatsApp account disabled). One line at
+ * the top of every page of gaadipe.in, in the visitor's language, switched and
+ * worded from admin Configuration (site_notice_on / _en / _hi) — no rebuild to
+ * put it up or take it down.
+ */
+router.get('/notice', async (_req, res) => {
+  try {
+    const settings = require('../util/settings');
+    const on = await settings.bool('site_notice_on', false);
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(on
+      ? { on: true, en: String(await settings.get('site_notice_en', '')), hi: String(await settings.get('site_notice_hi', '')) }
+      : { on: false });
+  } catch {
+    res.json({ on: false });
+  }
+});
+
 /** Drop the cache after editing policy text, without a restart. */
 router.post('/policies/refresh', (_req, res) => {
   cached = null;

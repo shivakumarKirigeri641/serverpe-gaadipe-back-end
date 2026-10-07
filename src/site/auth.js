@@ -34,16 +34,22 @@ const SAME_ANSWER = {
 };
 
 /**
- * THE TESTING GUARD, shared with WhatsApp.
+ * THE TESTING GUARD.
  *
- * While WHATSAPP_ALLOWED_RECEPIENTS is set, the site signs in ONLY those
- * numbers. Without this, any number typed into the login box creates a real
- * customer row with real vehicles and payments against it — test rubbish that
- * then has to be picked out of the database by hand. Empty list means everyone,
- * which is what production runs.
+ * While SITE_ALLOWED_MOBILES is set, the site signs in ONLY those numbers.
+ * Without this, any number typed into the login box creates a real customer
+ * row with real vehicles and payments against it — test rubbish that then has
+ * to be picked out of the database by hand. Empty list means everyone, which
+ * is what production runs.
+ *
+ * NOT SHARED WITH WHATSAPP ANY MORE (2026-10-07). It used to read
+ * WHATSAPP_ALLOWED_RECEPIENTS — so when the WhatsApp account was disabled and
+ * that list was set to 0000000000 to stop every WhatsApp send, the website,
+ * the one way customers still had, refused every sign-in too.
  */
-const allowedForTesting = (m) => !config.whatsapp.allowedRecipients.length
-  || config.whatsapp.allowedRecipients.includes(m);
+const SITE_ALLOWED = String(process.env.SITE_ALLOWED_MOBILES || '')
+  .split(/[,\s]+/).map((x) => x.replace(/\D/g, '').slice(-10)).filter((x) => x.length === 10);
+const allowedForTesting = (m) => !SITE_ALLOWED.length || SITE_ALLOWED.includes(m);
 
 /*
  * EVERY STEP IS WRITTEN DOWN (user, 2026-09-18): each code asked for, each
@@ -89,7 +95,7 @@ async function requestCodeInner({ mobile, ip }) {
   if (!allowedForTesting(m)) {
     // Answered exactly like any other number, so the guard does not tell a
     // stranger which numbers are special.
-    console.warn('[site] sign-in requested by %s — not in WHATSAPP_ALLOWED_RECEPIENTS', m);
+    console.warn('[site] sign-in requested by %s — not in SITE_ALLOWED_MOBILES', m);
     return { ...SAME_ANSWER, tracked: 'not_allowed' };
   }
 

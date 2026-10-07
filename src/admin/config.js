@@ -45,6 +45,10 @@ const GROUPS = [
   // WhatsApp limits, the outage waiting list and the summary on your own WhatsApp (user, 2026-10-01).
   ['WhatsApp & outages', [
     ['whatsapp_messaging_limit', 'Meta messaging limit (people per 24 h)', 'As shown in WhatsApp Manager — 250, then 2,000 once upgraded.'],
+    // The notice at the top of gaadipe.in (user, 2026-10-07).
+    ['site_notice_on', 'Website notice: show it (true / false)', 'A line at the top of every page of gaadipe.in — e.g. while WhatsApp is unavailable.'],
+    ['site_notice_en', 'Website notice: English text', ''],
+    ['site_notice_hi', 'Website notice: Hindi text', ''],
     // Broadcast room (user, 2026-10-06): the suggested daily batch.
     ['broadcast_room_buffer', 'Broadcast room: keep free (people)', 'Left out of the suggested batch for alerts and live customers. 15 by default.'],
     ['broadcast_room_gap_days', 'Broadcast room: rest days between broadcasts', 'Someone who got a broadcast this many days ago or less is not suggested again. 7 by default.'],
