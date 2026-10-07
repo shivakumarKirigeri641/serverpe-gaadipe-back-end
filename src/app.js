@@ -201,6 +201,14 @@ app.listen(config.port, () => {
   console.log(`  ULIP: ${config.ulip.baseUrl}  (primary VAHAN/${config.ulip.vahanPrimary})`);
   console.log(`  cache: ${config.cache.enabled ? `rc ${config.cache.rcMinutes}m · challan ${config.cache.challanMinutes}m · fastag ${config.cache.fastagMinutes}m` : 'disabled'}`);
   console.log(`  api keys configured: ${config.apiKeys.length}`);
+  /* JOBS_OFF=1 (2026-10-07): serve pages and APIs only — no job sends mail,
+     checks vehicles or reads an inbox. For trying screens locally; unset on
+     the server. */
+  if (/^(1|true|yes)$/i.test(String(process.env.JOBS_OFF || ''))) {
+    console.log('  jobs: OFF (JOBS_OFF) — no emails, alerts, lookups or inbox reads');
+    checkMigrations();
+    return;
+  }
   // The watch job only runs where WhatsApp is configured: a gateway-only
   // deployment has no one to notify.
   // The watch job sends alerts by WhatsApp template, so it needs WhatsApp set

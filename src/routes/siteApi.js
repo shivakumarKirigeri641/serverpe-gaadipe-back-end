@@ -150,6 +150,15 @@ router.post('/feedback', safe(async (req, res) => {
   res.json({ ok: true });
 }));
 
+/*
+ * THE CHAT'S FREE CHECK, NO SIGN-IN (user, 2026-10-07; src/site/chat.js):
+ * free sources only, a few a day per device, the basic view.
+ */
+router.post('/chat/check', safe(async (req, res) => {
+  const out = await require('../site/chat').anonCheck(req);
+  res.status(out.status).json(out.body);
+}));
+
 /* ────────────────────────────────────────── how a full report is unlocked ── */
 
 /** How much the free view gives away: labels | count | none (migration 050). */
@@ -457,6 +466,12 @@ router.get('/me/consents', safe(async (req, res) => {
   const u = await db.one(`SELECT quizpe_consent_at FROM users WHERE id = $1`, [req.user.id]);
   res.json({ quizpe: Boolean(u?.quizpe_consent_at), quizpe_at: u?.quizpe_consent_at || null, text: QUIZPE_CONSENT });
 }));
+
+/* The chat (2026-10-07): "welcome back" and their WhatsApp conversation — the signed-in owner of the number only. */
+router.get('/chat/summary', safe(async (req, res) => res.json(await require('../site/chat').summary(req.user))));
+router.get('/chat/history', safe(async (req, res) => res.json(await require('../site/chat').history(req.user, {
+  before: /^\d+$/.test(String(req.query.before || '')) ? req.query.before : null, limit: req.query.limit,
+}))));
 
 /* Tips and offers on any channel — its own switch, so it never touches the QuizPe consent (2026-10-07). */
 router.put('/me/promo-consent', safe(async (req, res) => {
