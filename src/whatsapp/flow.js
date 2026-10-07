@@ -333,7 +333,9 @@ const OWNER_TERMS =
   // "Reply STOP anytime" is no longer repeated here (user, 2026-10-05): the
   // Terms they agree to already say it (migration 062), and the line was
   // prompting people to reply STOP straight away.
-  `Please agree to our Terms (${SITE}/terms), Privacy (${SITE}/privacy) and Refund (${SITE}/refund) policies to continue.`;
+  `Please agree to our Terms (${SITE}/terms), Privacy (${SITE}/privacy) and Refund (${SITE}/refund) policies to continue.`
+  // One account, any channel (Terms 4.1, 2026-10-07).
+  + ' You also agree to receive messages about your account, checks and reports on WhatsApp, SMS or email — the same account works on gaadipe.in.';
 
 const PARTNER_TERMS =
   'Good to have you! 🤝 Please read the partner terms first:\n\n'

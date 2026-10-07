@@ -14,8 +14,16 @@ const settings = require('../util/settings');
 const C = require('../mail/customer');
 const mailer = require('../mail/mailer');
 
-const MAILABLE = `u.email IS NOT NULL AND u.email_verified_at IS NOT NULL
+/*
+ * STOP ON ONE CHANNEL STOPS PROMOTIONS ON ALL (Terms 4.1, 2026-10-07): someone
+ * who replied STOP on WhatsApp gets no announcement email either. A message to
+ * one named customer ('one') is about their own account and still goes.
+ */
+const NOT_STOPPED = `NOT EXISTS (SELECT 1 FROM whatsapp_sessions ws WHERE ws.mobile = u.mobile AND ws.wa_opt_out_at IS NOT NULL)`;
+const MAILABLE_ANY = `u.email IS NOT NULL AND u.email_verified_at IS NOT NULL
   AND u.email_unsubscribed_at IS NULL AND u.deactivated_at IS NULL`;
+const MAILABLE = MAILABLE_ANY;          // the "how many have a confirmed address" count
+const mailableFor = (audience) => (audience === 'one' ? MAILABLE_ANY : `${MAILABLE_ANY} AND ${NOT_STOPPED}`);
 const PAYING = `EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id = u.id AND s.is_active AND s.ends_on >= CURRENT_DATE)`;
 
 const AUDIENCES = {
@@ -41,6 +49,7 @@ function audienceWhere(audience, mobile) {
 async function preview({ audience, mobile, subject, body }) {
   const w = audienceWhere(audience, mobile);
   if (!w) return { ok: false, error: 'audience', message: 'Choose who to send to.' };
+  const MAILABLE = mailableFor(audience);
   const all = await db.one(`SELECT count(*)::int AS n FROM users u WHERE ${w.sql}`, w.params);
   const ok = await db.one(`SELECT count(*)::int AS n FROM users u WHERE ${w.sql} AND ${MAILABLE}`, w.params);
   const only = await C.onlyTo();
@@ -76,6 +85,7 @@ async function queue({ audience, mobile, subject, body }, adminId) {
   }
   const w = audienceWhere(audience, mobile);
   if (!w) return { ok: false, error: 'audience', message: 'Choose who to send to.' };
+  const MAILABLE = mailableFor(audience);
   const subj = String(subject || '').trim().slice(0, 150);
   const text = String(body || '').trim().slice(0, 10000);
   if (subj.length < 3) return { ok: false, error: 'subject', message: 'Please write a subject.' };
