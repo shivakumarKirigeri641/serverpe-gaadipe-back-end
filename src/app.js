@@ -254,7 +254,8 @@ app.listen(config.port, () => {
   // Numbers sent while vehicle records were down: checked and sent once they are back.
   require('./jobs/waitlist').start(Number(process.env.WAITLIST_TICK_SECONDS) || 300);
   // The WhatsApp account as Meta sees it — limit tier, quality — read hourly.
-  require('./jobs/metaStatus').start(Number(process.env.META_STATUS_TICK_SECONDS) || 3600);
+  // WhatsApp is retired (2026-10-07): Meta's account status is no longer polled or emailed.
+  // require('./jobs/metaStatus').start(Number(process.env.META_STATUS_TICK_SECONDS) || 3600);
   // ULIP's VAHAN, asked every 15 minutes (free): "VAHAN is back" the moment it is.
   require('./jobs/vahanWatch').start(Number(process.env.VAHAN_WATCH_TICK_SECONDS) || 900);
   // Mail to support@gaadipe.in, announced as it arrives (2026-10-04).

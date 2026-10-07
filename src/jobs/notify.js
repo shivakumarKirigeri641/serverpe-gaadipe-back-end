@@ -296,6 +296,7 @@ async function payments() {
     `SELECT p.id FROM payments p
       WHERE p.status = 'paid' AND p.paid_at > now() - interval '1 day'
         AND p.gateway <> 'free'  -- a free report (referral / owner grant) is not a payment
+        AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'  -- website payments only (2026-10-07)
         AND (EXISTS (SELECT 1 FROM invoices i WHERE i.payment_id = p.id) OR p.paid_at < now() - interval '3 minutes')
         AND ${notDone('payment', 'p.id::text')}
       ORDER BY p.id LIMIT 10`);
@@ -761,6 +762,7 @@ async function alertMails() {
   const { rows } = await db.query(
     `SELECT a.* FROM admin_alerts a
       WHERE a.severity IN ('critical', 'warning') AND a.created_at > now() - interval '2 hours'
+        AND coalesce(a.source, '') <> 'whatsapp'  -- WhatsApp is retired: its alerts are not mailed (2026-10-07)
         AND ${notDone('alert', 'a.id::text')}
       ORDER BY a.id LIMIT 20`);
   let n = 0;
@@ -1025,8 +1027,12 @@ async function dailySummary() {
 async function runOnce() {
   if (!mailer.configured()) return { skipped: 'mail not configured' };
   const out = {};
-  for (const [k, fn] of Object.entries({ signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waChecks, waOptOut,
-                                            leftAtPayment, alertMails, security, dailySummary, weeklyMoney, whatsappSummary, weeklyDigest })) {
+  /* NO EMAIL FROM WHATSAPP ACTIVITY (user, 2026-10-07: "stop all mails triggering
+     from WhatsApp"). WhatsApp is retired: "said hi", WhatsApp checks, STOP and its
+     reason, left at the WhatsApp payment link and the WhatsApp summary no longer
+     run; payments and alerts below mail only the website's. */
+  for (const [k, fn] of Object.entries({ signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback,
+                                            alertMails, security, dailySummary, weeklyMoney, weeklyDigest })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
   const total = Object.values(out).reduce((t, v) => t + (Number(v) || 0), 0);
