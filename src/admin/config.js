@@ -49,6 +49,10 @@ const GROUPS = [
     ['site_notice_on', 'Website notice: show it (true / false)', 'A line at the top of every page of gaadipe.in — e.g. while WhatsApp is unavailable.'],
     ['site_notice_en', 'Website notice: English text', ''],
     ['site_notice_hi', 'Website notice: Hindi text', ''],
+    // The line before a vehicle check in the chat (user, 2026-10-07).
+    ['check_notice_mode', 'Check notice: on / auto / off', 'Before a visitor’s first check, and when a check fails: “Government services may be down…”. auto = only while VAHAN is down.'],
+    ['check_notice_en', 'Check notice: English text', 'Empty = the built-in wording.'],
+    ['check_notice_hi', 'Check notice: Hindi text', 'Empty = the built-in wording.'],
     // Broadcast room (user, 2026-10-06): the suggested daily batch.
     ['broadcast_room_buffer', 'Broadcast room: keep free (people)', 'Left out of the suggested batch for alerts and live customers. 15 by default.'],
     ['broadcast_room_gap_days', 'Broadcast room: rest days between broadcasts', 'Someone who got a broadcast this many days ago or less is not suggested again. 7 by default.'],

@@ -125,13 +125,38 @@ router.get('/notice', async (_req, res) => {
     const settings = require('../util/settings');
     const on = await settings.bool('site_notice_on', false);
     res.set('Cache-Control', 'public, max-age=60');
-    res.json(on
-      ? { on: true, en: String(await settings.get('site_notice_en', '')), hi: String(await settings.get('site_notice_hi', '')) }
-      : { on: false });
+    res.json({
+      ...(on
+        ? { on: true, en: String(await settings.get('site_notice_en', '')), hi: String(await settings.get('site_notice_hi', '')) }
+        : { on: false }),
+      check: await checkNotice(settings),
+    });
   } catch {
     res.json({ on: false });
   }
 });
+
+/*
+ * BEFORE A VEHICLE CHECK (user, 2026-10-07: "mention that dependent servers are
+ * down and vehicle details may fail to fetch"). check_notice_mode:
+ *   on    always shown (the default while the Government services are unreliable)
+ *   auto  only while the VAHAN watch (jobs/vahanWatch.js) says VAHAN is down
+ *   off   never
+ * Worded from Configuration (check_notice_en / _hi). The chat shows it before a
+ * visitor's first check and again if a check fails.
+ */
+async function checkNotice(settings) {
+  const mode = String(await settings.get('check_notice_mode', 'on')).toLowerCase();
+  if (mode === 'off') return null;
+  if (mode === 'auto') {
+    const w = JSON.parse(await settings.get('vahan_watch', 'null') || 'null');
+    if (w?.state !== 'down') return null;
+  }
+  return {
+    en: String(await settings.get('check_notice_en', '') || '') || 'Heads up: the Government services we depend on (VAHAN / e-Challan) are down at times right now, so vehicle details may fail to fetch. If a check fails, please try again in a few minutes.',
+    hi: String(await settings.get('check_notice_hi', '') || '') || 'ध्यान दें: हम जिन सरकारी सेवाओं (VAHAN / e-Challan) पर निर्भर हैं, वे अभी कभी-कभी बंद रहती हैं, इसलिए गाड़ी की जानकारी लाने में दिक्कत हो सकती है। अगर जाँच न हो पाए, तो कुछ मिनट बाद फिर कोशिश करें।',
+  };
+}
 
 /** Drop the cache after editing policy text, without a restart. */
 router.post('/policies/refresh', (_req, res) => {
