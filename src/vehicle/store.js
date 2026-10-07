@@ -37,7 +37,7 @@ const date = (v) => {
  * keeps the founder's own constant testing out of customer analytics, and
  * exempts it from every check limit.
  */
-async function upsertUser(mobile, { name, waId } = {}) {
+async function upsertUser(mobile, { name, waId, channel = 'web' } = {}) {
   const internal = String(await settings.get('internal_mobiles', ''))
     .split(',').map(s => s.trim()).filter(Boolean)
     .includes(String(mobile));
@@ -55,7 +55,7 @@ async function upsertUser(mobile, { name, waId } = {}) {
 
   const { rows } = await db.query(
     `INSERT INTO users (mobile, wa_profile_name, wa_id, signup_channel, is_internal)
-          VALUES ($1, $2, $3, 'whatsapp', $4)
+          VALUES ($1, $2, $3, $5, $4)
      ON CONFLICT (mobile) DO UPDATE
             SET last_seen_at     = now(),
                 modified_at      = now(),
@@ -63,7 +63,7 @@ async function upsertUser(mobile, { name, waId } = {}) {
                 wa_id            = COALESCE(EXCLUDED.wa_id, users.wa_id),
                 is_internal      = EXCLUDED.is_internal
       RETURNING *`,
-    [mobile, profileName, waId || null, internal]);
+    [mobile, profileName, waId || null, internal, channel === 'whatsapp' ? 'whatsapp' : 'web']);
   return rows[0];
 }
 

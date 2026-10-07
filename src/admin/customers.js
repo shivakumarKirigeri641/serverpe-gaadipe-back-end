@@ -189,7 +189,7 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
               SELECT 1 FROM subscriptions s WHERE s.user_id = u.id AND s.is_active
                  AND s.ends_on >= CURRENT_DATE))
         AND (${SEGMENTS[segment] || 'true'})
-        AND ($1 <> '' OR ${segment === 'stopped' ? 'true' : 'ws.wa_opt_out_at IS NULL'})
+        -- Everyone is listed (2026-10-07): WhatsApp is retired, so a WhatsApp STOP no longer hides anyone.
       ORDER BY ${order}
       LIMIT $6 OFFSET $7`,
     [term, digits, plate, blocked, paying, Math.min(200, limit), offset]);
@@ -200,24 +200,27 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
   // whole day. Joined: users created. Active: people who did anything (a
   // message, a check, a payment) — from events, because last_seen_at only
   // keeps the latest visit and could not say who was active yesterday.
+  /* THE COMPARISONS ARE THE WEBSITE'S (user, 2026-10-07: "all increases,
+     decreases and percentages must compare with the website — the ads"). Today
+     against yesterday counts website customers, website activity, website
+     reports and website checks only, so the WhatsApp days do not distort them;
+     the all-time totals still count everyone. */
+  const WEB_PAID = `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
+  const WEB_CHECK = `detail->>'channel' = 'web'`;
   const today = await db.one(
     `WITH b AS (SELECT date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' AS d)
-     SELECT (SELECT count(*) FROM users, b WHERE created_at >= b.d)::int AS joined,
+     SELECT (SELECT count(*) FROM users, b WHERE created_at >= b.d AND signup_channel = 'web')::int AS joined,
             (SELECT count(*) FROM users, b WHERE created_at >= b.d - interval '1 day'
-                                              AND created_at <  now() - interval '1 day')::int AS joined_yesterday,
+                                              AND created_at <  now() - interval '1 day' AND signup_channel = 'web')::int AS joined_yesterday,
             (SELECT count(DISTINCT coalesce(user_id::text, mobile)) FROM events, b
-              WHERE occurred_at >= b.d AND coalesce(user_id::text, mobile) IS NOT NULL)::int AS active,
+              WHERE occurred_at >= b.d AND channel = 'web' AND coalesce(user_id::text, mobile) IS NOT NULL)::int AS active,
             (SELECT count(DISTINCT coalesce(user_id::text, mobile)) FROM events, b
-              WHERE occurred_at >= b.d - interval '1 day' AND occurred_at < now() - interval '1 day'
+              WHERE occurred_at >= b.d - interval '1 day' AND occurred_at < now() - interval '1 day' AND channel = 'web'
                 AND coalesce(user_id::text, mobile) IS NOT NULL)::int AS active_yesterday,
-            -- New customers today against the WHOLE of yesterday (user, 2026-09-30),
-            -- both without anyone who has said STOP, like the total itself.
-            (SELECT count(*) FROM users u, b WHERE u.created_at >= b.d
-                AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
-              WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL))::int AS customers_today,
+            -- New website customers today against the WHOLE of yesterday.
+            (SELECT count(*) FROM users u, b WHERE u.created_at >= b.d AND u.signup_channel = 'web')::int AS customers_today,
             (SELECT count(*) FROM users u, b WHERE u.created_at >= b.d - interval '1 day' AND u.created_at < b.d
-                AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
-              WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL))::int AS customers_yesterday_full,
+                AND u.signup_channel = 'web')::int AS customers_yesterday_full,
             -- Full reports bought, and vehicle checks (user, 2026-10-03): all time,
             -- today, and the whole of yesterday (IST). A report counts once paid; a
             -- check is a customer's lookup on WhatsApp or the website (util/quota.js),
@@ -225,20 +228,20 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
               WHERE p.status = 'paid' AND p.amount_paise > 0)::int AS reports_total,
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id, b
-              WHERE p.status = 'paid' AND p.amount_paise > 0 AND r.created_at >= b.d)::int AS reports_today,
+              WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${WEB_PAID} AND r.created_at >= b.d)::int AS reports_today,
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id, b
-              WHERE p.status = 'paid' AND p.amount_paise > 0
+              WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${WEB_PAID}
                 AND r.created_at >= b.d - interval '1 day' AND r.created_at < b.d)::int AS reports_yesterday_full,
             -- Every check, a repeat included (vehicle_check_repeat, 2026-10-03):
             -- distinct = different vehicles; repeated = the rest.
             (SELECT count(*) FROM event_log WHERE kind IN ('vehicle_check', 'vehicle_check_repeat'))::int AS checks_total,
             (SELECT count(DISTINCT detail->>'reg_no') FROM event_log WHERE kind IN ('vehicle_check', 'vehicle_check_repeat'))::int AS checks_distinct,
-            (SELECT count(*) FROM event_log, b WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND created_at >= b.d)::int AS checks_today,
+            (SELECT count(*) FROM event_log, b WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND ${WEB_CHECK} AND created_at >= b.d)::int AS checks_today,
             (SELECT count(DISTINCT detail->>'reg_no') FROM event_log, b
-              WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND created_at >= b.d)::int AS checks_today_distinct,
+              WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND ${WEB_CHECK} AND created_at >= b.d)::int AS checks_today_distinct,
             -- Repeats are recorded from the day that went live: the first one says when.
             (SELECT min(created_at) FROM event_log WHERE kind = 'vehicle_check_repeat') AS repeats_since,
-            (SELECT count(*) FROM event_log, b WHERE kind IN ('vehicle_check', 'vehicle_check_repeat')
+            (SELECT count(*) FROM event_log, b WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND ${WEB_CHECK}
                 AND created_at >= b.d - interval '1 day' AND created_at < b.d)::int AS checks_yesterday_full`);
   const where = await placesFor(rows);
   // The STOP reasons at a glance, for the "Said STOP" list (user, 2026-10-02):
