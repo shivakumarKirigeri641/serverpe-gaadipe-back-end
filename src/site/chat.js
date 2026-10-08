@@ -112,14 +112,23 @@ async function anonCheck(req) {
   const perIp = await settings.num('chat_anon_checks_per_day_ip', 1);
   const perHour = await settings.num('chat_anon_checks_per_hour', 60);
   const used = await db.one(
-    `SELECT count(*) FILTER (WHERE device_id = $1 AND created_at > ${TODAY})::int AS device,
-            count(*) FILTER (WHERE ip_key = $2 AND created_at > ${TODAY})::int AS ip,
-            count(*) FILTER (WHERE created_at > now() - interval '1 hour')::int AS hour
-       FROM anon_checks
-      WHERE outcome <> 'refused' AND created_at > now() - interval '1 day'`,
+    /* Only an answer uses up the free check: shown, or "no record". A lookup that
+       failed (ULIP down) gave the visitor nothing, so it does not count — but no
+       more than 3 failed tries an hour from one network, so retrying while ULIP is
+       down cannot hammer it (2026-10-08). */
+    `SELECT count(*) FILTER (WHERE answered AND device_id = $1 AND created_at > ${TODAY})::int AS device,
+            count(*) FILTER (WHERE answered AND ip_key = $2 AND created_at > ${TODAY})::int AS ip,
+            count(*) FILTER (WHERE answered AND created_at > now() - interval '1 hour')::int AS hour,
+            count(*) FILTER (WHERE outcome = 'failed' AND ip_key = $2 AND created_at > now() - interval '1 hour')::int AS failed_hour
+       FROM (SELECT *, outcome IN ('shown', 'not_found') AS answered FROM anon_checks
+              WHERE outcome <> 'refused' AND created_at > now() - interval '1 day') a`,
     [device, ipKey || '']);
   if (used.device >= perDevice) return refuse('daily_limit_device', 429, { error: 'sign_in_needed', message: SIGN_IN });
   if (used.ip >= perIp) return refuse('daily_limit_ip', 429, { error: 'sign_in_needed', message: SIGN_IN });
+  if (used.failed_hour >= 3) {
+    return refuse('retry_limit', 429, { error: 'records_busy',
+      message: 'The Government vehicle records server is slow right now. Please try again in a little while — or sign in to check this vehicle.' });
+  }
   if (used.hour >= perHour) {
     return refuse('hourly_site_cap', 429, { error: 'sign_in_needed',
       message: 'Free checks are busy right now. Sign in with your mobile number to check this vehicle — basic details free (make, model, variant, fuel, vehicle type), full report ₹19.' });
