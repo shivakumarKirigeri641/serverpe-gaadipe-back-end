@@ -125,6 +125,13 @@ const ROW = `
          ${SOURCE} AS source,
          (SELECT e.metadata->>'method' FROM events e WHERE e.name = 'payment_success' AND e.payment_id = p.id LIMIT 1) AS method,
          p.id IN (${FAILED}) AS had_failure,
+         -- Why it failed, in Razorpay's words (2026-10-08: "is it a time out?").
+         (SELECT jsonb_build_object('reason', w.detail->>'error_reason', 'code', w.detail->>'error_code',
+                                    'source', w.detail->>'error_source', 'step', w.detail->>'error_step',
+                                    'method', w.detail->>'method', 'description', w.detail->>'error_description', 'at', w.created_at)
+            FROM event_log w WHERE w.kind = 'razorpay_webhook' AND w.detail->>'event' = 'payment.failed'
+             AND w.detail->>'reference_id' LIKE 'gp-%'
+             AND nullif(split_part(w.detail->>'reference_id', '-', 2), '')::bigint = p.id ORDER BY w.id DESC LIMIT 1) AS failure,
          -- The records calls for this vehicle by this customer in the day before paying.
          (SELECT coalesce(sum(a.cost_paise), 0) FROM api_calls a
            WHERE a.user_id = p.user_id AND a.vehicle_id = v.id
