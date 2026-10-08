@@ -259,8 +259,9 @@ async function verifyCodeInner({ mobile, code, ip, userAgent, ctx, quizpeConsent
     [user.id, JSON.stringify({ mobile: m, ip: ip || null, user_agent: userAgent || null })]);
 
   /*
-   * The sign-in page says "by signing in you accept our Terms, Privacy policy
-   * and Refund policy". A sentence on a page is not a record; this is. Written
+   * Ticked before signing in (the chat's "I agree", required by /session/verify
+   * since 2026-10-08): the Terms, Privacy policy and Refund policy. A tick on a
+   * page is not a record; this is. Written
    * on every sign-in, with the versions in force, so the agreement a purchase
    * was made under can always be named.
    */

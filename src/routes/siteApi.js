@@ -260,6 +260,13 @@ router.post('/session/otp', safe(async (req, res) => {
 }));
 
 router.post('/session/verify', safe(async (req, res) => {
+  /* AGREED FIRST (user, 2026-10-08): the Terms, Privacy and Refund policies are
+     ticked before signing in — checked before the code, so a refused sign-in
+     does not use it up. The agreement is then recorded (consent_accepted). */
+  if (req.body?.terms_accepted !== true) {
+    return res.status(400).json({ ok: false, error: 'terms_required',
+      message: 'Please tick “I agree” to the Terms of use, Privacy policy and Refund policy to sign in.' });
+  }
   const out = await auth.verifyCode({
     mobile: req.body?.mobile, code: req.body?.code, ctx: device.contextOf(req),
     quizpeConsent: req.body?.quizpe_consent === true,  // optional tick on the sign-in page
@@ -836,6 +843,11 @@ router.post('/buy', safe(async (req, res) => {
   if (req.body?.declared !== true) {
     return res.status(400).json({ error: 'declaration_required',
       message: 'Please confirm that this vehicle is yours or that its owner is known to you.' });
+  }
+  // The policies, ticked at checkout too (user, 2026-10-08).
+  if (req.body?.terms_accepted !== true) {
+    return res.status(400).json({ error: 'terms_required',
+      message: 'Please tick “I agree” to the Terms of use, Refund policy and Privacy policy to pay.' });
   }
   // Referral-only mode: reports are unlocked by referring, not by paying —
   // except a report at the reduced price, which is itself a referral reward.

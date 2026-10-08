@@ -134,11 +134,13 @@ async function webChecks() {
       const who = u?.name || T.mobile(u?.mobile);
       const outcome = d.found === false ? 'Not found, or the records service failed' : 'Found';
       return {
-        subject: `${d.found === false ? '⚠️' : '🔎'} ${d.reg_no || 'Vehicle'} checked on the website · ${who} · ${kindOf}`,
+        // Vehicle number and mobile in the subject and at the top (user, 2026-10-08).
+        subject: `${d.found === false ? '⚠️' : '🔎'} ${d.reg_no || 'Vehicle'} · ${T.mobile(u?.mobile)}${u?.name ? ` · ${u.name}` : ''} · ${kindOf}`,
         ...T.layout({
           badge: { text: `Website check · ${kindOf}`, tone: d.found === false ? 'watch' : bought ? 'good' : 'info' },
           title: `${who} checked ${d.reg_no || 'a vehicle'} on gaadipe.in`,
           lead: `${T.ist(e.created_at)} · ${outcome}.`,
+          stats: [['Vehicle', d.reg_no || '—'], ['Mobile', T.mobile(u?.mobile)]],
           sections: [
             { heading: 'Vehicle', rows: [
               ['Number', d.reg_no], ['RTO', d.reg_no ? await rtoLine(d.reg_no) : null],
@@ -380,11 +382,12 @@ async function payments() {
       }
       const who = p.shown_name || T.mobile(p.mobile);
       return {
-        subject: `✅ Payment received · ${T.rupees(p.amount_paise)} · ${veh?.reg_no || p.plan_name || 'GaadiPe'} · ${who}`,
+        // Vehicle number and mobile in the subject (user, 2026-10-08).
+        subject: `✅ Payment received · ${T.rupees(p.amount_paise)} · ${veh?.reg_no || p.plan_name || 'GaadiPe'} · ${T.mobile(p.mobile)}${p.shown_name ? ` · ${p.shown_name}` : ''}`,
         attachments,
         ...T.layout({
           badge: { text: 'Payment successful', tone: 'good' },
-          title: `${T.rupees(p.amount_paise)} received from ${who}`,
+          title: `${T.rupees(p.amount_paise)} received${veh?.reg_no ? ` for ${veh.reg_no}` : ''} · ${T.mobile(p.mobile)}${p.shown_name ? ` (${p.shown_name})` : ''}`,
           lead: `${p.plan_name || 'Full vehicle report'}${veh?.reg_no ? ` for ${veh.reg_no}` : ''}, paid ${T.ist(p.paid_at)} on the ${channel.toLowerCase()}.`
             + (attachments.length ? ' The tax invoice is attached.' : ''),
           stats: [['Amount', T.rupees(p.amount_paise)], ['Take-home', T.rupees(split.take_home_paise)],
