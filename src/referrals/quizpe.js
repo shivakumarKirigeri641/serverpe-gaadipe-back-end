@@ -135,7 +135,16 @@ async function summaryFor(user) {
 const AVAILABLE = `used_at IS NULL AND revoked_at IS NULL AND expires_at > now()`;
 
 /** Free full reports this customer can use now. */
+/*
+ * REFERRAL REWARDS HIDDEN (user, 2026-10-08: "currently hide"). While
+ * referral_rewards_enabled is off, no reward is offered or spent: no free
+ * report, no reduced-price report — everyone pays the plan price (₹19). The
+ * rewards already earned stay as they are and come back when it is switched on.
+ */
+const rewardsOn = () => settings.bool('referral_rewards_enabled', false);
+
 async function availableCredits(userId) {
+  if (!await rewardsOn()) return 0;
   const r = await db.one(
     `SELECT count(*)::int AS n FROM report_credits
       WHERE user_id = $1 AND reward <> 'report_at_price' AND ${AVAILABLE}`, [userId]);
@@ -147,6 +156,7 @@ async function availableCredits(userId) {
  * the soonest-expiring one, as { id, price_paise }, or null.
  */
 async function reducedPriceCredit(userId) {
+  if (!await rewardsOn()) return null;
   return db.one(
     `SELECT id, price_paise, expires_at FROM report_credits
       WHERE user_id = $1 AND reward = 'report_at_price' AND price_paise IS NOT NULL AND ${AVAILABLE}
@@ -355,6 +365,7 @@ async function notifyReward(referrerId, credits) {
 /* ─────────────────────────────────────────────────────────── use a credit ── */
 
 async function useCredit(user, regNo, { declaration, ctx }) {
+  if (!await rewardsOn()) return { ok: false, error: 'no_credit', message: 'Free reports are not available right now.' };
   const credit = (await db.query(
     `UPDATE report_credits SET used_at = now(), used_reg_no = $2
       WHERE id = (SELECT id FROM report_credits
