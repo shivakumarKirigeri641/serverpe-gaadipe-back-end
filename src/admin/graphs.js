@@ -195,28 +195,48 @@ async function customersOf({ days, source }) {
 
 const REG = `upper(regexp_replace(detail->>'reg_no', '[^A-Za-z0-9]', '', 'g'))`;
 
-async function vehicles({ days }) {
-  const n = span(days);
-  const [states, kinds, expiring] = await Promise.all([
+/*
+ * ALL VEHICLES, FROM DAY ONE (user, 2026-10-08: "take full from day one to
+ * today — that's OK if users from WhatsApp, vehicles important"). Unlike the
+ * other pages this one is not the website's period: every vehicle GaadiPe has
+ * ever checked, on any channel, with its checks — signed-in checks (WhatsApp
+ * and website, user_vehicles.check_count) plus the website's free checks
+ * before sign-in (event_log chat_anon_check). The period picker does not apply.
+ */
+const ANON_REG = `upper(regexp_replace(detail->>'reg_no', '[^A-Za-z0-9]', '', 'g'))`;
+const PER_VEHICLE = `
+  chk AS (SELECT vehicle_id, sum(coalesce(check_count, 1))::int AS n, max(last_checked_at) AS last FROM user_vehicles GROUP BY 1),
+  anon AS (SELECT ${ANON_REG} AS reg, count(*)::int AS n, max(created_at) AS last FROM event_log WHERE kind = 'chat_anon_check' GROUP BY 1),
+  pv AS (SELECT v.id, v.reg_no, v.first_seen_at,
+                greatest(1, coalesce(chk.n, 0) + coalesce(anon.n, 0)) AS checks,
+                greatest(chk.last, anon.last, v.last_seen_at) AS last
+           FROM vehicles v LEFT JOIN chk ON chk.vehicle_id = v.id LEFT JOIN anon ON anon.reg = v.reg_no)`;
+
+async function vehicles() {
+  const [states, kinds, expiring, growth] = await Promise.all([
     db.query(
-      `SELECT substring(${REG} from 1 for 2) AS code, count(*)::int AS checks, count(DISTINCT ${REG})::int AS vehicles
-         FROM event_log WHERE ${CHECKS} AND ${since('created_at')} GROUP BY 1 ORDER BY 2 DESC`, [n]),
+      `WITH ${PER_VEHICLE}
+       SELECT substring(reg_no from 1 for 2) AS code, sum(checks)::int AS checks, count(*)::int AS vehicles
+         FROM pv GROUP BY 1 ORDER BY 2 DESC`),
     db.query(
-      `WITH v AS (SELECT DISTINCT ${REG} AS reg FROM event_log WHERE ${CHECKS} AND ${since('created_at')})
-       SELECT coalesce(nullif(s.data->>'vehicle_class', ''), 'Not known') AS class,
-              coalesce(nullif(s.data->>'fuel', ''), 'Not known') AS fuel,
-              coalesce(nullif(initcap(split_part(s.data->>'maker', ' ', 1)), ''), 'Not known') AS maker, count(*)::int AS n
-         FROM v JOIN vehicles ve ON ve.reg_no = v.reg JOIN vehicle_snapshots s ON s.vehicle_id = ve.id AND s.dataset = 'rc'
-        GROUP BY 1, 2, 3`, [n]),
+      `SELECT coalesce(nullif(vehicle_class, ''), 'Not known') AS class,
+              coalesce(nullif(fuel, ''), 'Not known') AS fuel,
+              coalesce(nullif(initcap(split_part(maker, ' ', 1)), ''), 'Not known') AS maker, count(*)::int AS n
+         FROM vehicles GROUP BY 1, 2, 3`),
     db.query(
       `WITH m AS (SELECT generate_series(date_trunc('month', now() ${IST}), date_trunc('month', now() ${IST}) + interval '11 months', interval '1 month')::date AS m),
             docs AS (
-              SELECT date_trunc('month', (s.data->>k.f)::date)::date AS m, k.label
-                FROM vehicle_snapshots s
-                CROSS JOIN (VALUES ('insurance_upto', 'Insurance'), ('pucc_upto', 'PUC'), ('tax_upto', 'Road tax'), ('fitness_upto', 'Fitness')) AS k(f, label)
-               WHERE s.dataset = 'rc' AND s.data->>k.f ~ '^\\d{4}-\\d{2}-\\d{2}$')
+              SELECT date_trunc('month', k.d)::date AS m, k.label
+                FROM vehicles v
+                CROSS JOIN LATERAL (VALUES (v.insurance_upto, 'Insurance'), (v.pucc_upto, 'PUC'), (v.tax_upto, 'Road tax'), (v.fitness_upto, 'Fitness')) AS k(d, label)
+               WHERE k.d IS NOT NULL)
        SELECT m.m, d.label, count(d.label)::int AS n FROM m LEFT JOIN docs d ON d.m = m.m GROUP BY 1, 2 ORDER BY 1`),
+    db.query(
+      `SELECT to_char(date_trunc('month', first_seen_at ${IST}), 'YYYY-MM') AS month, count(*)::int AS added
+         FROM vehicles WHERE first_seen_at IS NOT NULL GROUP BY 1 ORDER BY 1`),
   ]);
+  let total = 0;
+  const added = growth.rows.map((r) => { total += r.added; return { month: r.month, added: r.added, total }; });
   const months = {};
   for (const r of expiring.rows) {
     const key = iso(r.m).slice(0, 7);
@@ -226,32 +246,33 @@ async function vehicles({ days }) {
   const sum = (key) => Object.entries(kinds.rows.reduce((a, r) => ({ ...a, [r[key]]: (a[r[key]] || 0) + r.n }), {}))
     .map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   return {
-    days: n,
+    all_time: true,
+    since: added[0]?.month || null,
     states: states.rows.map((s) => ({ ...s, name: geo.STATES[s.code] || s.code })),
     classes: sum('class'), fuels: sum('fuel'), makers: sum('maker').slice(0, 15),
     expiring: Object.values(months),
+    added,
   };
 }
 
-/** A state's RTOs, or an RTO's vehicles. */
-async function vehiclesOf({ days, state, rto }) {
-  const n = span(days);
+/** A state's RTOs, or an RTO's vehicles — all time, every channel, like the page. */
+async function vehiclesOf({ state, rto }) {
   if (rto) {
     const { rows } = await db.query(
-      `SELECT ${REG} AS reg_no, count(*)::int AS checks, max(created_at) AS last
-         FROM event_log WHERE ${CHECKS} AND ${since('created_at')} AND ${REG} LIKE $2 || '%'
-        GROUP BY 1 ORDER BY 2 DESC, 3 DESC LIMIT 200`, [n, String(rto).toUpperCase()]);
+      `WITH ${PER_VEHICLE}
+       SELECT reg_no, checks, last FROM pv WHERE reg_no LIKE $1 || '%'
+        ORDER BY checks DESC, last DESC NULLS LAST LIMIT 200`, [String(rto).toUpperCase().replace(/[^A-Z0-9]/g, '')]);
     return { rto, vehicles: rows };
   }
   const st = String(state || '').toUpperCase().slice(0, 2);
   const { rows } = await db.query(
-    `SELECT ${REG} AS reg FROM event_log WHERE ${CHECKS} AND ${since('created_at')} AND ${REG} LIKE $2 || '%'`, [n, st]);
+    `WITH ${PER_VEHICLE} SELECT reg_no AS reg, checks FROM pv WHERE reg_no LIKE $1 || '%'`, [st]);
   const by = {};
   for (const r of rows) {
     const code = geo.rtoCode(r.reg);
     if (!code) continue;
     by[code] ??= { code, checks: 0, regs: new Set() };
-    by[code].checks += 1; by[code].regs.add(r.reg);
+    by[code].checks += r.checks; by[code].regs.add(r.reg);
   }
   const names = await geo.rtoNames(Object.keys(by));
   return {

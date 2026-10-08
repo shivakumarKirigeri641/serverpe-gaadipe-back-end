@@ -152,9 +152,25 @@ function mapJsonRaw(regNo, d) {
     fitness_upto: parseDate(d.rcFitUpto),
     tax_upto: parseDate(d.rcTaxUpto),
 
+    // Not in ULIP's VAHAN/04 or /01 (its spec has no permit fields); read when a
+    // source in VAHAN's names sends them (eChallan.app may).
     permit_number: blank(d.rcPermitNo),
     permit_upto: parseDate(d.rcPermitValidUpto),
     permit_type: blank(d.rcPermitType),
+
+    /* IN ULIP'S SPEC BUT NOT READ BEFORE (2026-10-08, the RC comparison):
+       worth having for a buyer, and none of it personal. The same names come
+       from eChallan.app (VAHAN's own); IDSPay has no equivalents, so they stay
+       empty for its answers. */
+    tax_mode: blank(d.rcTaxMode),                         // e.g. LTT (lifetime) / OTT / quarterly
+    vehicle_type: blank(d.rcVhType),                      // transport / non-transport
+    non_use: blank(d.rcNonUse),                           // declared off the road
+    surrendered_to_dealer: blank(d.rcVehicleSurrenderedToDealer),
+    goods_tax: blank(d.rcGoodsTax),
+    passenger_tax: blank(d.rcPassengerTax),
+    sleeper_capacity: int(d.rcSleeperCap),
+    standing_capacity: int(d.rcStandCap),
+    owner_history: blank(d.rcOwnerHistory),
   };
 }
 
@@ -188,6 +204,11 @@ function mapXml(regNo, xml) {
     rcInsuranceUpto: g('rc_insurance_upto'),
     rcPuccNo: g('rc_pucc_no'), rcPuccUpto: g('rc_pucc_upto'),
     rcFitUpto: g('rc_fit_upto'), rcTaxUpto: g('rc_tax_upto'),
+    rcTaxMode: g('rc_tax_mode'), rcVhType: g('rc_vh_type'), rcNonUse: g('rc_non_use'),
+    rcVehicleSurrenderedToDealer: g('rc_vehicle_surrendered_to_dealer'),
+    rcGoodsTax: g('rc_goods_tax'), rcPassengerTax: g('rc_passenger_tax'),
+    rcSleeperCap: g('rc_sleeper_cap'), rcStandCap: g('rc_stand_cap'),
+    rcOwnerHistory: g('rc_owner_history'),
   });
 }
 
@@ -323,7 +344,12 @@ async function backup(regNo, calls, opts, failure) {
    *   noBackup   no PAID backup — the free eChallan.app is still tried
    */
   if (opts.ulipOnly) return failure;
-  const free = await require('../vehicle/echallanApp').rc(regNo).catch((e) => {
+  /* eChallan.app MAY START CHARGING ₹1 A CALL (user, 2026-10-08; 10,000 credits
+     sponsored for now). echallan_app_paid_only (off) keeps it for paid reports
+     too — free checks and background jobs (noBackup) then stop at ULIP. Their
+     "pending verification" answers cost nothing either way. */
+  const skipFree = opts.noBackup && await require('../util/settings').bool('echallan_app_paid_only', false);
+  const free = skipFree ? null : await require('../vehicle/echallanApp').rc(regNo).catch((e) => {
     console.error('[vahan] eChallan.app threw:', e.message);
     return null;
   });

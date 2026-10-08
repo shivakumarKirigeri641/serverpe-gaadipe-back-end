@@ -69,6 +69,12 @@ const GROUPS = [
     ['rc_backup_cost_paise', 'Cost per call (paise)', '300 = ₹3. Used in the money reports.'],
     ['rc_backup_daily_limit', 'Most calls per day', 'Past it, ULIP’s failure stands until midnight. 200 calls = ₹600.'],
   ]],
+  // The free second source (2026-10-05); may start charging ₹1 a call (2026-10-08).
+  ['eChallan.app (second RC source)', [
+    ['echallan_app_enabled', 'Use eChallan.app when ULIP fails (true / false)', 'Tried after ULIP and before IDSPay. Its “pending verification” answers cost nothing.'],
+    ['echallan_app_paid_only', 'Only for paid reports (true / false)', 'Turn on when eChallan.app starts charging: free checks and background jobs then stop at ULIP. Off while the sponsored credits last.'],
+    ['echallan_app_low_credits', 'Warn when credits fall to', 'A ping when the remaining credits reach this number. 500 by default.'],
+  ]],
   // The Saturday money report (user, 2026-10-01).
   ['Weekly money report (Excel by email)', [
     ['finance_weekly_email', 'Send it (true / false)', 'Every week, the Excel of the week just ended.'],
