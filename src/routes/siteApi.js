@@ -350,7 +350,7 @@ router.delete('/session', safe(async (req, res) => {
 router.get('/me', safe(async (req, res) => {
   const totals = await db.one(
     `SELECT
-       (SELECT count(*) FROM user_vehicles WHERE user_id = $1)                      AS vehicles,
+       (SELECT count(*) FROM user_vehicles WHERE user_id = $1 AND hidden_at IS NULL) AS vehicles,
        (SELECT count(*) FROM vehicle_reports WHERE user_id = $1)                    AS reports,
        (SELECT count(*) FROM invoices WHERE user_id = $1)                           AS invoices,
        (SELECT coalesce(sum(amount_paise), 0) FROM payments
@@ -648,7 +648,7 @@ router.get('/vehicles', safe(async (req, res) => {
               WHERE r.user_id = uv.user_id AND r.reg_no = v.reg_no
                 AND r.valid_until > now() ORDER BY r.id DESC LIMIT 1) AS report_until
        FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
-      WHERE uv.user_id = $1
+      WHERE uv.user_id = $1 AND uv.hidden_at IS NULL
       ORDER BY uv.last_checked_at DESC NULLS LAST`, [req.user.id]);
 
   /*
@@ -733,7 +733,7 @@ router.get('/vehicles/:regNo/card', safe(async (req, res) => {
     `SELECT v.id, uv.check_count, uv.last_checked_at,
             EXISTS (SELECT 1 FROM watches w WHERE w.user_id = uv.user_id AND w.vehicle_id = v.id AND w.is_active) AS watched
        FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
-      WHERE uv.user_id = $1 AND v.reg_no = $2`, [req.user.id, parsed.regNo]);
+      WHERE uv.user_id = $1 AND v.reg_no = $2 AND uv.hidden_at IS NULL`, [req.user.id, parsed.regNo]);
   if (!mine) return res.status(404).json({ error: 'not_yours', message: 'This vehicle is not in your list.' });
 
   const data = await customerMail.storedRecord(mine.id);
@@ -760,6 +760,36 @@ router.get('/vehicles/:regNo/card', safe(async (req, res) => {
     mine: { check_count: Number(mine.check_count || 0), last_checked_at: mine.last_checked_at, watched: mine.watched },
     ...(await offerFor(req, plan, paid, parsed.regNo)),
   });
+}));
+
+/**
+ * REMOVE FROM MY VEHICLES (user, 2026-10-08: the bin button).
+ *
+ * For the customer it is gone; here nothing is deleted. Their link to the
+ * vehicle is marked hidden (migration 140) and its alerts stop — the watches
+ * for it are switched off, and do not come back by themselves. Reports and
+ * invoices stay, downloadable, because they were paid for. Checking the number
+ * again brings it back as a fresh entry (vehicle/store.js linkUserVehicle).
+ */
+router.delete('/vehicles/:regNo', safe(async (req, res) => {
+  const parsed = plate.parse(req.params.regNo);
+  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  const { rows } = await db.query(
+    `UPDATE user_vehicles uv SET hidden_at = now(), hidden_count = uv.hidden_count + 1
+       FROM vehicles v
+      WHERE v.id = uv.vehicle_id AND uv.user_id = $1 AND v.reg_no = $2 AND uv.hidden_at IS NULL
+      RETURNING uv.vehicle_id`, [req.user.id, parsed.regNo]);
+  if (!rows.length) return res.status(404).json({ error: 'not_yours', message: 'This vehicle is not in your list.' });
+  const vehicleId = rows[0].vehicle_id;
+  const stopped = await db.query(
+    `UPDATE watches SET is_active = false, modified_at = now()
+      WHERE user_id = $1 AND vehicle_id = $2 AND is_active`, [req.user.id, vehicleId]);
+  await db.query(`INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'vehicle_removed', $3)`,
+    [req.user.id, vehicleId, JSON.stringify({ reg_no: parsed.regNo, alerts_stopped: stopped.rowCount })]);
+  await activity.record(req, { action: 'remove_vehicle', regNo: parsed.regNo });
+  require('../util/activity').log('🗑', `Removed ${parsed.regNo} from My vehicles${stopped.rowCount ? ' · alerts stopped' : ''}`,
+    { who: require('../util/activity').who(req.user.display_name || req.user.name, req.user.mobile) });
+  res.json({ ok: true, alerts_stopped: stopped.rowCount });
 }));
 
 /**
@@ -973,15 +1003,19 @@ router.post('/buy', safe(async (req, res) => {
     { creditPaise: reducedCredit?.price_paise || null });
   const amountPaise = priced.paise;
 
-  // An unpaid order for the same vehicle AT THE SAME PRICE is reused rather than opened twice.
+  // The owner's own test purchases (razorpay.isTestBuyer): Razorpay TEST keys, ₹0 in the books.
+  const test = await razorpay.isTestBuyer(req.user);
+
+  // An unpaid order for the same vehicle AT THE SAME PRICE (and the same mode) is reused rather than opened twice.
   let row = await db.one(
     `SELECT * FROM payments
       WHERE user_id = $1 AND plan_id = $2 AND status = 'created'
         AND checkout_token IS NOT NULL
         AND (raw->>'vehicle_id')::bigint = $3
         AND amount_paise = $4
+        AND coalesce((raw->>'test_mode')::boolean, false) = $5
         AND created_at > now() - interval '1 hour'
-      ORDER BY id DESC LIMIT 1`, [req.user.id, plan.id, vehicle.id, amountPaise]);
+      ORDER BY id DESC LIMIT 1`, [req.user.id, plan.id, vehicle.id, amountPaise, test]);
 
   /*
    * RECORDED EVERY TIME, not only when a new order is opened. A customer who
@@ -1013,7 +1047,8 @@ router.post('/buy', safe(async (req, res) => {
         amountPaise,
         receipt: `gp-${pending.id}`,
         notes: { reference_id: `gp-${pending.id}`, reg_no: parsed.regNo,
-                 mobile: req.user.mobile, plan: plan.code, channel: 'web' },
+                 mobile: req.user.mobile, plan: plan.code, channel: 'web', ...(test ? { test_mode: 'owner' } : {}) },
+        test,
       });
       if (!order?.id) throw new Error('no order id returned');
     } catch (e) {
@@ -1027,7 +1062,8 @@ router.post('/buy', safe(async (req, res) => {
       `UPDATE payments SET order_id = $2, checkout_token = $3,
               raw = COALESCE(raw,'{}'::jsonb) || $4::jsonb
         WHERE id = $1 RETURNING *`,
-      [pending.id, order.id, token, JSON.stringify({ order_id: order.id, channel: 'web' })])).rows[0];
+      [pending.id, order.id, token, JSON.stringify({ order_id: order.id, channel: 'web', ...(test ? { test_mode: true } : {}) })])).rows[0];
+    if (test) console.log('[pay] TEST-mode order %s for the owner (payment row %d)', order.id, pending.id);
   }
 
   await consent(row.id);

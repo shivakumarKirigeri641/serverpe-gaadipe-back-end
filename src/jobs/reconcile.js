@@ -103,7 +103,7 @@ async function runOnce() {
 async function recoverOrder(row) {
   let list;
   try {
-    list = await rzp.getOrderPayments(row.order_id);
+    list = await rzp.getOrderPayments(row.order_id, { test: Boolean(row.raw?.test_mode) });
   } catch (e) {
     console.warn('[reconcile] could not read %s: %s', row.order_id, e.message);
     return false;

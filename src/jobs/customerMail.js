@@ -184,7 +184,7 @@ async function dailyFor(u, day) {
   const activeDays = await settings.num('customer_email_free_active_days', 90);
   const { rows: other } = await db.query(
     `SELECT uv.vehicle_id FROM user_vehicles uv
-      WHERE uv.user_id = $1 AND uv.last_checked_at > now() - ($2 || ' days')::interval
+      WHERE uv.user_id = $1 AND uv.hidden_at IS NULL AND uv.last_checked_at > now() - ($2 || ' days')::interval
         AND NOT (uv.vehicle_id = ANY($3::bigint[]))
       ORDER BY uv.last_checked_at DESC LIMIT 3`, [u.id, String(activeDays), paid.map((p) => p.vehicleId)]);
   const others = [];
@@ -229,7 +229,7 @@ async function digest(day, limit) {
   const { rows: people } = await db.query(
     `SELECT u.* FROM users u
       WHERE ${MAILABLE} AND NOT ${PAYING}
-        AND EXISTS (SELECT 1 FROM user_vehicles uv WHERE uv.user_id = u.id
+        AND EXISTS (SELECT 1 FROM user_vehicles uv WHERE uv.user_id = u.id AND uv.hidden_at IS NULL
                       AND uv.last_checked_at > now() - ($2 || ' days')::interval
                       AND uv.last_checked_at < now() - interval '2 hours')
         AND NOT EXISTS (SELECT 1 FROM customer_emails e WHERE e.user_id = u.id AND e.kind = 'digest'
@@ -243,7 +243,7 @@ async function digest(day, limit) {
     if (!row) continue;
     const { rows: vs } = await db.query(
       `SELECT uv.vehicle_id FROM user_vehicles uv
-        WHERE uv.user_id = $1 AND uv.last_checked_at > now() - ($2 || ' days')::interval
+        WHERE uv.user_id = $1 AND uv.hidden_at IS NULL AND uv.last_checked_at > now() - ($2 || ' days')::interval
         ORDER BY uv.last_checked_at DESC LIMIT 5`, [u.id, String(activeDays)]);
     const records = [];
     for (const v of vs) { const r = await C.storedRecord(v.vehicle_id); if (r) records.push(r); }

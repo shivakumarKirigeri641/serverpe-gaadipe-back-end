@@ -125,6 +125,11 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
     if (pay.status === 'paid') return { activated: false, reason: 'already_paid' };
 
     const vehicleId = pay.raw?.vehicle_id || null;
+    /* THE OWNER'S TEST PURCHASE (razorpay.isTestBuyer): everything happens — report,
+       watch, invoice marked TEST — but it is booked at ₹0, so no revenue figure
+       anywhere counts it. What the test charged is kept in raw.test_amount_paise. */
+    const test = Boolean(pay.raw?.test_mode);
+    if (test) pay.amount_paise = 0;
     const plan = (await c.query(`SELECT * FROM plans WHERE id = $1`, [pay.plan_id])).rows[0];
     const days = plan?.duration_days || 28;
 
@@ -162,9 +167,11 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
     await c.query(
       `UPDATE payments SET status = 'paid', payment_id = $2, order_id = $3,
               subscription_id = $4, paid_at = now(),
+              amount_paise = CASE WHEN $6 THEN 0 ELSE amount_paise END,
               raw = COALESCE(raw, '{}'::jsonb) || $5::jsonb
+                    || CASE WHEN $6 THEN jsonb_build_object('test_amount_paise', amount_paise) ELSE '{}'::jsonb END
         WHERE id = $1`,
-      [pay.id, razorpayPaymentId, orderId || null, sub.id, JSON.stringify({ gateway: raw || {} })]);
+      [pay.id, razorpayPaymentId, orderId || null, sub.id, JSON.stringify({ gateway: raw || {} }), test]);
 
     // The watch: a paid vehicle is checked until the subscription ends, not
     // until some separate date that could drift out of step with it.
@@ -231,7 +238,7 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
     try {
       const u = await db.one(`SELECT coalesce(display_name, wa_profile_name) AS name, mobile FROM users WHERE id = $1`, [result.payment.user_id]).catch(() => null);
       const act = require('../util/activity');
-      act.log('💰', `Payment received · ₹${(Number(result.payment.amount_paise || 0) / 100).toFixed(2)}${veh?.reg_no ? ` · ${veh.reg_no}` : ''}`,
+      act.log(result.payment.raw?.test_mode ? '🧪' : '💰', `${result.payment.raw?.test_mode ? 'TEST payment (owner, Razorpay test keys, booked at ₹0)' : 'Payment received'} · ₹${(Number(result.payment.amount_paise || 0) / 100).toFixed(2)}${veh?.reg_no ? ` · ${veh.reg_no}` : ''}`,
         { who: act.who(u?.name, u?.mobile), detail: [result.plan?.code || null, raw?.method ? `by ${raw.method}` : null] });
     } catch { /* never in the way of a payment */ }
   }

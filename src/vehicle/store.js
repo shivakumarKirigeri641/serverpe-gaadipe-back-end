@@ -136,7 +136,11 @@ async function linkUserVehicle(userId, vehicleId, relation = 'checked') {
     `INSERT INTO user_vehicles (user_id, vehicle_id, relation)
           VALUES ($1, $2, $3)
      ON CONFLICT (user_id, vehicle_id) DO UPDATE
-            SET check_count = user_vehicles.check_count + 1,
+            -- Removed by the customer earlier (migration 140): back as a fresh
+            -- entry for them — count 1, first checked now.
+            SET check_count = CASE WHEN user_vehicles.hidden_at IS NOT NULL THEN 1 ELSE user_vehicles.check_count + 1 END,
+                first_checked_at = CASE WHEN user_vehicles.hidden_at IS NOT NULL THEN now() ELSE user_vehicles.first_checked_at END,
+                hidden_at = NULL,
                 last_checked_at = now(),
                 -- A stated relation is an upgrade; 'checked' never overwrites
                 -- 'owned' just because they looked again.
@@ -179,7 +183,7 @@ async function checkedBy(userId, limit = 9) {
                        AND w.is_active) AS watched
        FROM user_vehicles uv
        JOIN vehicles v ON v.id = uv.vehicle_id
-      WHERE uv.user_id = $1
+      WHERE uv.user_id = $1 AND uv.hidden_at IS NULL
       ORDER BY uv.last_checked_at DESC
       LIMIT $2`, [userId, limit]);
   return rows;

@@ -354,7 +354,7 @@ async function detail(userId) {
         `SELECT v.id, v.reg_no, v.maker, v.model, v.fuel, v.vehicle_class,
                 v.insurance_upto, v.pucc_upto, v.fitness_upto, v.tax_upto, v.permit_upto,
                 v.financer, v.blacklist_status, v.rc_status, v.owner_serial,
-                uv.relation, uv.check_count, uv.last_checked_at,
+                uv.relation, uv.check_count, uv.last_checked_at, uv.hidden_at, uv.hidden_count,
                 EXISTS (SELECT 1 FROM watches w
                          WHERE w.user_id = uv.user_id AND w.vehicle_id = v.id AND w.is_active) AS watched,
                 EXISTS (SELECT 1 FROM blocks b

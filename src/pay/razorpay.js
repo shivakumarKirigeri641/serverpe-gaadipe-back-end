@@ -54,9 +54,31 @@ if (LIVE && !isLive) {
 if (!LIVE && isLive) {
   console.error('[pay] refusing to use live keys outside production');
 }
-const auth = () => 'Basic ' + Buffer.from(`${KEY}:${SECRET}`).toString('base64');
+/*
+ * TEST MODE FOR THE OWNER ONLY (user, 2026-10-08: "allow a full report for me by
+ * calling test mode Razorpay — only for me as admin"). A payment row marked
+ * raw.test_mode is created, opened, verified and reconciled with the TEST key
+ * pair, whatever mode the server runs in; every other payment uses the pair
+ * above. Who may pay in test mode is decided in one place: isTestBuyer().
+ */
+const TEST_KEY = process.env.RAZORPAY_TEST_KEY || '';
+const TEST_SECRET = process.env.RAZORPAY_TEST_SECRET || '';
+const pair = (test) => (test ? { key: TEST_KEY, secret: TEST_SECRET } : { key: KEY, secret: SECRET });
+const auth = (test) => { const p = pair(test); return 'Basic ' + Buffer.from(`${p.key}:${p.secret}`).toString('base64'); };
 
 const configured = () => Boolean(KEY && SECRET);
+const testConfigured = () => Boolean(TEST_KEY && TEST_SECRET);
+/** The checkout key for a payment row. */
+const keyFor = (payRow) => (payRow?.raw?.test_mode ? TEST_KEY : KEY);
+
+/** Is this customer allowed to pay in test mode? Mobile in pay_test_mobiles AND marked internal. */
+async function isTestBuyer(user) {
+  if (!user || !testConfigured()) return false;
+  const list = String(await require('../util/settings').get('pay_test_mobiles', '') || '')
+    .split(/[\s,]+/).map((m) => m.replace(/\D/g, '').slice(-10)).filter((m) => m.length === 10);
+  const mine = String(user.mobile || '').replace(/\D/g, '').slice(-10);
+  return list.includes(mine) && Boolean(user.is_internal);
+}
 
 /*
  * A failed Razorpay call is an admin alert (user, 2026-09-29): when orders or
@@ -71,14 +93,14 @@ const alertOn = (e, path) => require('../admin/alerts').raise({
   detail: { path, code: e.code || null, message: String(e.message).slice(0, 300) },
 }).catch(() => {});
 
-async function call(path, method = 'GET', body) {
+async function call(path, method = 'GET', body, test = false) {
   let res;
   const t0 = Date.now();
   const status = require('../util/providerStatus');
   try {
     res = await fetch(`https://api.razorpay.com/v1${path}`, {
       method,
-      headers: { Authorization: auth(), 'Content-Type': 'application/json' },
+      headers: { Authorization: auth(test), 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(20000),
     });
@@ -190,14 +212,14 @@ function verifyWebhook(rawBody, signature) {
  * verified and the subscription activated before the customer is even back in
  * WhatsApp.
  */
-async function createOrder({ amountPaise, receipt, notes = {} }) {
+async function createOrder({ amountPaise, receipt, notes = {}, test = false }) {
   return call('/orders', 'POST', {
     amount: amountPaise,
     currency: 'INR',
     receipt: String(receipt).slice(0, 40),
     notes,
     payment_capture: 1,
-  });
+  }, test);
 }
 
 /**
@@ -208,9 +230,9 @@ async function createOrder({ amountPaise, receipt, notes = {} }) {
  * of us know, so recomputing it is what separates a real payment from someone
  * calling our verify endpoint with made-up ids.
  */
-function verifyCheckout({ orderId, paymentId, signature }) {
+function verifyCheckout({ orderId, paymentId, signature, test = false }) {
   if (!orderId || !paymentId || !signature) return false;
-  const expected = crypto.createHmac('sha256', SECRET)
+  const expected = crypto.createHmac('sha256', pair(test).secret)
     .update(`${orderId}|${paymentId}`).digest('hex');
   const a = Buffer.from(String(signature), 'utf8');
   const b = Buffer.from(expected, 'utf8');
@@ -219,7 +241,7 @@ function verifyCheckout({ orderId, paymentId, signature }) {
 }
 
 /** Look a payment up directly — used when a webhook looks wrong or is missing. */
-const getPayment = (id) => call(`/payments/${id}`);
+const getPayment = (id, { test = false } = {}) => call(`/payments/${id}`, 'GET', undefined, test);
 const getLink = (id) => call(`/payment_links/${id}`);
 /**
  * Payments made in a window, newest first, 100 at a time (reconciliation,
@@ -228,7 +250,8 @@ const getLink = (id) => call(`/payment_links/${id}`);
 const listPayments = ({ from, to, skip = 0, count = 100 }) => call(
   `/payments?from=${Math.floor(from.getTime() / 1000)}&to=${Math.floor(to.getTime() / 1000)}&count=${count}&skip=${skip}`);
 /** Every payment attempted against an order — the reconciler looks for a captured one. */
-const getOrderPayments = (orderId) => call(`/orders/${orderId}/payments`);
+const getOrderPayments = (orderId, { test = false } = {}) => call(`/orders/${orderId}/payments`, 'GET', undefined, test);
 
 module.exports = { createLink, createFleetLink, createOrder, verifyWebhook, verifyCheckout,
-                   getPayment, getLink, getOrderPayments, listPayments, configured, isLive, KEY };
+                   getPayment, getLink, getOrderPayments, listPayments, configured, isLive, KEY,
+                   TEST_KEY, keyFor, isTestBuyer, testConfigured };

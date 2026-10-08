@@ -206,7 +206,11 @@ async function forPayment(paymentId) {
   const igst = interstate ? tax : 0;
 
   const row = await db.tx(async (c) => {
-    const number = await nextNumber(c);
+    /* The owner's TEST purchase (raw.test_mode) never takes a number from the
+       statutory series: TEST-<date>-<payment>, at ₹0 (billing.activate books it so). */
+    const number = pay.raw?.test_mode
+      ? `TEST-${new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, '')}-${pay.id}`
+      : await nextNumber(c);
     const token = crypto.randomBytes(16).toString('hex');
     const { rows } = await c.query(
       `INSERT INTO invoices

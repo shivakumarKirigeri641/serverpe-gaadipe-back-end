@@ -110,6 +110,7 @@ async function candidates(limit = 20) {
        JOIN vehicles v ON v.id = uv.vehicle_id
        JOIN users    u ON u.id = uv.user_id
       WHERE u.deactivated_at IS NULL AND NOT u.is_paused
+        AND uv.hidden_at IS NULL            -- removed from My vehicles (migration 140)
         -- Only while this vehicle is actually being monitored (plus any grace).
         AND EXISTS (SELECT 1 FROM subscriptions sb
                      WHERE sb.user_id = uv.user_id AND sb.vehicle_id = uv.vehicle_id

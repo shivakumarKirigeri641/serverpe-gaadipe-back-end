@@ -325,7 +325,10 @@ router.get('/pay/:token', safe(async (req, res) => {
        'Full details: financer, policy numbers',
        'GST invoice on WhatsApp'];
 
-  res.send(page('Checkout', `
+  res.send(page('Checkout', `${pay.raw?.test_mode ? `
+<div class="card" style="background:#fff4e0;border:2px dashed #e08700;color:#7a4a00;text-align:center;font-weight:700">
+  🧪 TEST MODE — owner only. Razorpay test keys: no real money moves. Use a Razorpay test card or test UPI (success@razorpay).
+</div>` : ''}
 <div id="done" class="card" style="display:none">
   <h1>Payment successful ✅</h1>
   <p class="muted" style="margin:0 0 14px">${backUrl
@@ -450,7 +453,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   };
   function openCheckout() {
     var rz = new Razorpay({
-      key: ${JSON.stringify(rzp.KEY)},
+      key: ${JSON.stringify(rzp.keyFor(pay))},
       order_id: ${JSON.stringify(pay.order_id)},
       amount: ${pay.amount_paise},
       currency: 'INR',
@@ -545,7 +548,7 @@ router.post('/pay/:token/verify', express.json(), safe(async (req, res) => {
 
   // The browser is not trusted. Only Razorpay's signature over
   // "order_id|payment_id" proves this happened.
-  if (!rzp.verifyCheckout({ orderId, paymentId, signature })) {
+  if (!rzp.verifyCheckout({ orderId, paymentId, signature, test: Boolean(pay.raw?.test_mode) })) {
     console.warn('[checkout] bad signature for payment %d', pay.id);
     return res.status(400).json({ ok: false, message: 'Could not verify the payment.' });
   }

@@ -435,7 +435,7 @@ async function profile(input, { admin, canSensitive, canApi } = {}) {
                              OR (a.visitor_id IS NOT NULL AND a.visitor_id = e.visitor_id))
                            AND e.occurred_at BETWEEN a.occurred_at - interval '2 hours' AND a.occurred_at + interval '2 hours'))
                ORDER BY e.occurred_at, e.id LIMIT 3000`, [reg, vid]),
-    db.query(`SELECT uv.user_id, u.mobile, uv.relation, uv.check_count, uv.first_checked_at, uv.last_checked_at,
+    db.query(`SELECT uv.user_id, u.mobile, uv.relation, uv.check_count, uv.first_checked_at, uv.last_checked_at, uv.hidden_at,
                      EXISTS (SELECT 1 FROM watches w WHERE w.user_id = uv.user_id AND w.vehicle_id = uv.vehicle_id AND w.is_active) AS watching,
                      (SELECT ws.id FROM whatsapp_sessions ws WHERE ws.user_id = uv.user_id ORDER BY ws.id DESC LIMIT 1) AS wa_session_id
                 FROM user_vehicles uv JOIN users u ON u.id = uv.user_id WHERE uv.vehicle_id = $1`, [v.id]),

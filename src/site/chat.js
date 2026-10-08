@@ -191,13 +191,13 @@ async function history(user, { before = null, limit = 50 } = {}) {
 /** "Welcome back": what this customer already has with GaadiPe. */
 async function summary(user) {
   const row = await db.one(
-    `SELECT (SELECT count(*) FROM user_vehicles WHERE user_id = $1)::int AS vehicles,
+    `SELECT (SELECT count(*) FROM user_vehicles WHERE user_id = $1 AND hidden_at IS NULL)::int AS vehicles,
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
               WHERE r.user_id = $1 AND p.status = 'paid')::int AS reports,
             (SELECT count(*) FROM whatsapp_messages WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $2
                 AND created_at >= $3::timestamptz - interval '5 minutes')::int AS wa_messages,
             (SELECT v.reg_no FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
-              WHERE uv.user_id = $1 ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 1) AS last_vehicle,
+              WHERE uv.user_id = $1 AND uv.hidden_at IS NULL ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 1) AS last_vehicle,
             (SELECT min(created_at) FROM whatsapp_messages WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $2
                 AND created_at >= $3::timestamptz - interval '5 minutes') AS wa_since`,
     [user.id, String(user.mobile).slice(-10), user.created_at || '1970-01-01']);
