@@ -135,7 +135,8 @@ async function webChecks() {
       const outcome = d.found === false ? 'Not found, or the records service failed' : 'Found';
       return {
         // Vehicle number and mobile in the subject and at the top (user, 2026-10-08).
-        subject: `${d.found === false ? '⚠️' : '🔎'} ${d.reg_no || 'Vehicle'} · ${T.mobile(u?.mobile)}${u?.name ? ` · ${u.name}` : ''} · ${kindOf}`,
+        // ✅ record found · ⚠️ not found or the records service failed (user, 2026-10-08).
+        subject: `${d.found === false ? '⚠️' : '✅'} ${d.reg_no || 'Vehicle'} · ${T.mobile(u?.mobile)}${u?.name ? ` · ${u.name}` : ''} · ${kindOf}`,
         ...T.layout({
           badge: { text: `Website check · ${kindOf}`, tone: d.found === false ? 'watch' : bought ? 'good' : 'info' },
           title: `${who} checked ${d.reg_no || 'a vehicle'} on gaadipe.in`,
@@ -246,9 +247,11 @@ async function chatChecks() {
         ? [s.maker, s.model ? `${s.model}${s.variant_hidden ? ' •••' : ''}` : null, s.fuel].filter(Boolean).join(' · ')
         : a.outcome === 'not_found' ? 'No Government record found' : `Failed (${a.refusal || 'records service'})`;
       return {
-        subject: `${a.outcome === 'shown' ? '🆓' : '⚠️'} Free check · ${a.reg_no || 'vehicle'} · ${shownLine} · ${p.city || place}`,
+        // ✅ found and shown · ⚠️ no record · ❌ every source failed (user, 2026-10-08).
+        subject: `${a.outcome === 'shown' ? '✅' : a.outcome === 'not_found' ? '⚠️' : '❌'} Free check · ${a.reg_no || 'vehicle'} · ${shownLine} · ${p.city || place}`,
         ...T.layout({
-          badge: { text: 'Free check before sign-in', tone: a.outcome === 'shown' ? 'info' : 'watch' },
+          badge: { text: `Free check before sign-in · ${a.outcome === 'shown' ? 'record found' : a.outcome === 'not_found' ? 'no record' : 'failed'}`,
+                   tone: a.outcome === 'shown' ? 'good' : a.outcome === 'not_found' ? 'watch' : 'wrong' },
           title: `A visitor checked ${a.reg_no || 'a vehicle'} without signing in`,
           lead: `${T.ist(a.created_at)} · from ${place} · ${a.source ? `came from ${sourceName(a.source)}` : 'came directly'}. They agreed to the Terms first.`,
           stats: [['Vehicle', a.reg_no || '—'], ['Shown', a.outcome === 'shown' ? 'Yes' : 'No'], ['Free checks today', String(day?.lookups ?? 0)], ['Refused today', String(day?.refused ?? 0)]],
