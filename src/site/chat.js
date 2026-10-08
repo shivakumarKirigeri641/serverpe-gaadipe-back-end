@@ -40,7 +40,7 @@ async function anonCheck(req) {
      free checks without signing in come back as before. */
   if (await settings.bool('check_sign_in_required', true)) {
     return { status: 403, body: { error: 'sign_in_needed',
-      message: 'Please sign in with your mobile number to check a vehicle — it takes a few seconds, and your checks are kept in your account.' } };
+      message: 'Please sign in with your mobile number to check a vehicle — basic details free (make, model, variant, fuel, vehicle type), full report ₹19. Your checks are kept in your account.' } };
   }
 
   /*
@@ -99,7 +99,7 @@ async function anonCheck(req) {
      touch?.source || null, touch?.campaign || null, consent ? JSON.stringify(consent) : null, ipKey || null])
     .then((r) => r.rows[0]?.id).catch((e) => { console.error('[chat] anon_checks:', e.message); return null; });
 
-  const SIGN_IN = 'You have used today’s free check. Sign in with your mobile number to check more vehicles — it is free and takes a few seconds.';
+  const SIGN_IN = 'You have used today’s free check. Sign in with your mobile number to check more vehicles — basic details free (make, model, variant, fuel, vehicle type), full report ₹19.';
   const refuse = async (refusal, status, body) => { await audit({ outcome: 'refused', refusal }); return { status, body }; };
 
   if (!consent) {
@@ -122,7 +122,7 @@ async function anonCheck(req) {
   if (used.ip >= perIp) return refuse('daily_limit_ip', 429, { error: 'sign_in_needed', message: SIGN_IN });
   if (used.hour >= perHour) {
     return refuse('hourly_site_cap', 429, { error: 'sign_in_needed',
-      message: 'Free checks are busy right now. Sign in with your mobile number to check this vehicle — it is free.' });
+      message: 'Free checks are busy right now. Sign in with your mobile number to check this vehicle — basic details free (make, model, variant, fuel, vehicle type), full report ₹19.' });
   }
 
   const scan = await require('../security/guard').noteVehicleCheck(req, parsed.regNo);
