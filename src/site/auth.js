@@ -173,7 +173,10 @@ async function requestCodeInner({ mobile, ip }) {
  * pre-ticked, withdrawable in Profile (DPDP). Service messages need no tick:
  * the Terms cover them.
  */
-const PROMO_CONSENT = 'Send me vehicle tips, new features and GaadiPe offers by SMS, WhatsApp or email. I can stop this any time in my Profile or by replying STOP.';
+/* The words beside the sign-in, kept with every agreement record (2026-10-08). */
+const SIGN_IN_NOTICE = 'By signing in, you agree to GaadiPe’s Terms of use, Privacy policy and Refund policy.';
+
+const PROMO_CONSENT ='Send me vehicle tips, new features and GaadiPe offers by SMS, WhatsApp or email. I can stop this any time in my Profile or by replying STOP.';
 
 async function setPromoConsent(userId, agree, { ip = null, userAgent = null, channel = 'web' } = {}) {
   const row = await db.one(agree
@@ -274,6 +277,10 @@ async function verifyCodeInner({ mobile, code, ip, userAgent, ctx, quizpeConsent
    * on every sign-in, with the versions in force, so the agreement a purchase
    * was made under can always be named.
    */
+  /* AGREED BY SIGNING IN (user, 2026-10-08: "no need to tick — record as before
+     that the user agreed by signing in"). The chat shows, under its welcome:
+     "By signing in, you agree to GaadiPe's Terms of use, Privacy policy and
+     Refund policy" (with links). The record now says how and in what words. */
   const { policyVersions } = require('../pay/consent');
   const v = await policyVersions();
   await db.query(
@@ -281,6 +288,7 @@ async function verifyCodeInner({ mobile, code, ip, userAgent, ctx, quizpeConsent
     [user.id, JSON.stringify({ mobile: m, role: 'customer', channel: 'web',
       documents: ['terms', 'privacy', 'refund'], policy_version: v.terms,
       versions: v, ip: ip || null, user_agent: userAgent || null,
+      method: 'sign_in', notice: SIGN_IN_NOTICE,
       at: new Date().toISOString() })]);
 
   /*

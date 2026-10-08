@@ -88,7 +88,10 @@ function fillFromReg(data, regNo) {
  * A FOUND answer that left out fields every vehicle has (2026-10-07): names
  * only, never values — enough to spot a source whose field names changed.
  */
-const ALWAYS = ['maker', 'model', 'vehicle_class', 'fuel', 'reg_date', 'owner_serial', 'registered_at'];
+/* owner_serial is not here (2026-10-08): ULIP often leaves the owner count
+   out of a perfectly good answer (KA31N8147, HR26…), so naming it every time
+   was noise in the log, not a sign that the field names changed. */
+const ALWAYS = ['maker', 'model', 'vehicle_class', 'fuel', 'reg_date', 'registered_at'];
 function noteGaps(source, regNo, data) {
   const gaps = ALWAYS.filter((k) => data?.[k] == null || data[k] === '');
   if (gaps.length) console.warn('[rc-map] %s answer for %s…: empty %s', source, String(regNo || '').slice(0, 4), gaps.join(', '));

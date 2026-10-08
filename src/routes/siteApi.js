@@ -260,12 +260,13 @@ router.post('/session/otp', safe(async (req, res) => {
 }));
 
 router.post('/session/verify', safe(async (req, res) => {
-  /* AGREED FIRST (user, 2026-10-08): the Terms, Privacy and Refund policies are
-     ticked before signing in — checked before the code, so a refused sign-in
-     does not use it up. The agreement is then recorded (consent_accepted). */
+  /* AGREED BY SIGNING IN (2026-10-08): the chat says "By signing in, you agree
+     to…" under its welcome and sends terms_accepted with the code — no tick.
+     Still required here, so a sign-in from anywhere that did not show the
+     notice is refused. The agreement is recorded (consent_accepted, method sign_in). */
   if (req.body?.terms_accepted !== true) {
     return res.status(400).json({ ok: false, error: 'terms_required',
-      message: 'Please tick “I agree” to the Terms of use, Privacy policy and Refund policy to sign in.' });
+      message: 'By signing in you agree to the Terms of use, Privacy policy and Refund policy. Please try again from the chat.' });
   }
   const out = await auth.verifyCode({
     mobile: req.body?.mobile, code: req.body?.code, ctx: device.contextOf(req),
