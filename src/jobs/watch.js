@@ -172,7 +172,8 @@ async function checkOne(w) {
   const items = findings(data, before);
 
   // Store AFTER diffing — the comparison needs the old snapshot.
-  await store.record(w.user_id, data).catch(e => console.error('[watch] store:', e.message));
+  // GaadiPe's own re-check: saved and costed to the customer, but not counted as their check.
+  await store.record(w.user_id, data, { link: false }).catch(e => console.error('[watch] store:', e.message));
 
   // Each dataset is rescheduled on its own clock. Challans are the only thing
   // that genuinely changes week to week; an RC's expiry dates do not move

@@ -293,7 +293,13 @@ function guardRc(rc, regNo) {
   return out;
 }
 
-async function record(userId, data) {
+/*
+ * `link: false` — saved, but NOT counted as this customer checking it
+ * (user, 2026-10-08): the alert job's daily re-check is GaadiPe's own, and
+ * counting it made a vehicle "checked 12 times today" by someone who never
+ * opened the site, and showed in "vehicles checked" as a person.
+ */
+async function record(userId, data, { link = true } = {}) {
   data = { ...data, rc: guardRc(data.rc, data.vehicle_number) };
   const vehicle = await upsertVehicle(data.vehicle_number, data.rc || {});
   await saveSnapshot(vehicle.id, 'rc', data.rc || {},
@@ -305,7 +311,7 @@ async function record(userId, data) {
   if (data.fastag) {
     await saveSnapshot(vehicle.id, 'fastag', data.fastag, { ttlMinutes: 60 * 24 * 7 });
   }
-  if (userId) await linkUserVehicle(userId, vehicle.id);
+  if (userId && link) await linkUserVehicle(userId, vehicle.id);
   // Cost last: it must never be the reason a lookup appears to have failed.
   await recordCalls(userId, vehicle.id, data)
     .catch(e => console.error('[store] api_calls:', e.message));
