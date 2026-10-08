@@ -122,6 +122,13 @@ router.post('/t', express.json({ limit: '4kb' }), async (req, res) => {
         ip_hash: ipKey,
       },
     });
+    // A new visit, in plain words (2026-10-08) — once per visit.
+    if (isNew && b.name === 'session_started') {
+      require('../util/activity').log('👀', `New visit on gaadipe.in · ${clip(b.landing || b.page, 60) || '/'}`, {
+        detail: [src && src !== 'direct' ? `from ${String(src).replace(/_/g, ' ')}` : 'came directly',
+                 [ua2.device_type, ua2.os, ua2.browser].filter(Boolean).join(' · '), device.placeOf(where)],
+      });
+    }
     // Counted only when the event is new, so a resent event counts once.
     if (isNew && (b.name === 'page_view' || b.name === 'whatsapp_cta_clicked')) {
       await track.countVisitor(b.visitor_id, b.name === 'page_view' ? 'page_views' : 'wa_clicks');

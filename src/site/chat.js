@@ -86,6 +86,8 @@ async function anonCheck(req) {
   }
   await db.query(`INSERT INTO event_log (kind, detail) VALUES ('chat_anon_check', $1)`,
     [JSON.stringify({ device, ip, reg_no: parsed.regNo, found: data?.success === true, ...(data?.success ? {} : { error: data?.error || 'failed' }) })]).catch(() => {});
+  require('../util/activity').log('🔍', `Vehicle checked before sign-in · ${parsed.regNo} · ${data?.success ? 'found' : `not shown (${String(data?.error || 'failed').replace(/_/g, ' ')})`}`,
+    { who: 'a visitor (not signed in)' });
 
   if (!data?.success) {
     return { status: data?.error === 'vehicle_not_found' ? 404 : 503, body: {

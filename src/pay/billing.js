@@ -228,6 +228,12 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
       meta: { razorpay_payment_id: razorpayPaymentId, order_id: orderId, plan: result.plan?.code || null,
               method: raw?.method || null, bank: raw?.bank || null, wallet: raw?.wallet || null },
     });
+    try {
+      const u = await db.one(`SELECT coalesce(display_name, wa_profile_name) AS name, mobile FROM users WHERE id = $1`, [result.payment.user_id]).catch(() => null);
+      const act = require('../util/activity');
+      act.log('💰', `Payment received · ₹${(Number(result.payment.amount_paise || 0) / 100).toFixed(2)}${veh?.reg_no ? ` · ${veh.reg_no}` : ''}`,
+        { who: act.who(u?.name, u?.mobile), detail: [result.plan?.code || null, raw?.method ? `by ${raw.method}` : null] });
+    } catch { /* never in the way of a payment */ }
   }
 
   if (result.activated) {

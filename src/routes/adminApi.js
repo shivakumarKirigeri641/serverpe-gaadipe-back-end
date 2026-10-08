@@ -874,6 +874,8 @@ router.get('/web/sessions/:id', needs('customers.view'), safe(async (req, res) =
   if (!refreshing(req)) await auth.audit({ adminId: req.admin.id, action: 'view_session', ip: ipOf(req), detail: { session_id: String(req.params.id).slice(0, 64) } });
   res.json(out);
 }));
+// Up or down, and by how much — every key number against yesterday, last week and last month (src/admin/compare.js).
+router.get('/web/compare', needs('dashboard.view'), safe(async (req, res) => res.json(await require('../admin/compare').all())));
 // What the visitor sees right now — the chat, as on their phone (src/site/mirror.js).
 router.get('/web/sessions/:id/screen', needs('customers.view'), safe(async (req, res) => {
   res.json({ screen: require('../site/mirror').get(String(req.params.id).slice(0, 64)) });
@@ -1914,6 +1916,12 @@ router.get('/customer-emails', safe(async (req, res) => {
     write_enabled: String(await require('../util/settings').get('admin_customer_email_enabled', 'true')).toLowerCase() !== 'false',
   });
 }));
+/* Who is confirmed, unconfirmed or unsubscribed — the lists behind the counts (2026-10-08). */
+router.get('/customer-emails/lists', needs('customers.view'), safe(async (req, res) => {
+  const out = await customerEmails.lists({ which: req.query.which, q: req.query.q, limit: req.query.limit });
+  if (!refreshing(req)) await auth.audit({ adminId: req.admin.id, action: 'view_email_list', ip: ipOf(req), detail: { which: out.which, rows: out.rows.length } });
+  res.json(out);
+}));
 router.post('/customer-emails/ask-to-confirm', needs('settings'), safe(async (req, res) => {
   const out = await customerEmails.askToConfirm();
   await auth.audit({ adminId: req.admin.id, action: 'customer_emails_confirm_asked', ip: ipOf(req), detail: out });
@@ -1938,6 +1946,8 @@ router.post('/customer-emails/send', needs('settings'), safe(async (req, res) =>
   await auth.audit({ adminId: req.admin.id, action: 'customer_email_queued', ip: ipOf(req),
     detail: { campaign_id: out.campaign.id, audience: req.body.audience, mobile: req.body.mobile || null,
               subject: out.campaign.subject, recipients: out.campaign.recipients } });
+  require('../util/activity').log('📣', `Broadcast queued · "${String(out.campaign.subject || '').slice(0, 60)}" · ${out.campaign.recipients} recipient${out.campaign.recipients === 1 ? '' : 's'}`,
+    { who: `${req.admin.name || 'admin'} (admin)`, detail: [`to ${String(req.body.audience || '').replace(/_/g, ' ')}`, req.body.category || 'service', `campaign #${out.campaign.id}`] });
   res.json(out);
 }));
 

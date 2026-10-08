@@ -78,16 +78,16 @@ function maskName(name) {
   const clean = String(name || '').trim();
   if (!clean) return null;
 
-  // ULIP already masks owner names at source — "T***L P***R C**********S".
-  // Masking that again produces "T*••• P*•••", which is noise on top of noise
-  // and looks like a bug. If the source has already done it, pass it through.
-  if ((clean.match(/\*/g) || []).length >= 2) return clean;
-
-  // A full name (the RC backup's, kept whole in the cache since 2026-10-05) is
-  // masked the way ULIP and Parivahan mask it — first and last letter of each
-  // word, stars between: "RAMESH KUMAR" -> "R****H K***R".
+  /* Word by word (user, 2026-10-08: "make sure of masking the personal
+     details" — ULIP has started sending some fields unmasked). A word ULIP
+     already starred ("T***L") passes through as it is — masking it again only
+     adds noise; any word that arrives WHOLE is masked the way ULIP and Parivahan
+     mask: first and last letter, stars between ("RAMESH" -> "R****H"). The old
+     rule passed a whole name through if any two stars appeared anywhere in it,
+     so "RAMESH K***R" kept RAMESH. */
   return clean.split(/\s+/)
-    .map(w => (w.length <= 1 ? w : w.length === 2 ? `${w[0]}*` : `${w[0]}${'*'.repeat(w.length - 2)}${w[w.length - 1]}`))
+    .map((w) => (/\*/.test(w) || w.length <= 1 ? w
+      : w.length === 2 ? `${w[0]}*` : `${w[0]}${'*'.repeat(w.length - 2)}${w[w.length - 1]}`))
     .join(' ');
 }
 

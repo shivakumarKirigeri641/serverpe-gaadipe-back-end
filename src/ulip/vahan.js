@@ -95,7 +95,29 @@ function noteGaps(source, regNo, data) {
 }
 
 function mapJson(regNo, d) {
-  return fillFromReg(mapJsonRaw(regNo, d), regNo);
+  return fillGaps(fillFromReg(mapJsonRaw(regNo, d), regNo));
+}
+
+/*
+ * WHAT A REAL ANSWER LEFT OUT (2026-10-08, KA31N8147 side by side):
+ *   - rcVhType comes as a code, "N" / "T" — said in words.
+ *   - rcRegnUpto was missing altogether, so the report lost its Registration
+ *     row. For a NON-TRANSPORT vehicle VAHAN's fitness date IS the registration
+ *     validity (15 years from registration: 13-Sep-2021 → 12-Sep-2036), so it
+ *     stands in — never for a transport vehicle, whose fitness is yearly.
+ */
+function fillGaps(data) {
+  if (!data) return data;
+  const vt = String(data.vehicle_type || '').trim().toUpperCase();
+  if (vt === 'N') data.vehicle_type = 'Non-transport';
+  else if (vt === 'T') data.vehicle_type = 'Transport';
+  const transport = /^TRANSPORT$/i.test(String(data.vehicle_type || ''))
+    || /TRANSPORT|GOODS|PASSENGER|TAXI|BUS|TRUCK|LORRY|MAXI|TRAILER|CAB/i.test(`${data.vehicle_category || ''} ${data.vehicle_class || ''}`.replace(/NON[- ]?TRANSPORT/ig, ''));
+  if (!data.reg_upto && data.fitness_upto && !transport) {
+    data.reg_upto = data.fitness_upto;
+    data.reg_upto_from = 'fitness';
+  }
+  return data;
 }
 
 function mapJsonRaw(regNo, d) {

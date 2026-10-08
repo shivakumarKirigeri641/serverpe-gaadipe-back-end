@@ -190,4 +190,33 @@ async function askToConfirm() {
   return { ok: true, queued: r.rowCount };
 }
 
-module.exports = { AUDIENCES, CATEGORIES, preview, testSend, queue, cancel, campaigns, log, reach, askToConfirm };
+/*
+ * THE LISTS BEHIND THE COUNTS (user, 2026-10-08: "can I see the list of
+ * confirmed and unconfirmed mails as well"). Who is in each, with what the
+ * Broadcast page needs to decide: when they confirmed, whether they took offers,
+ * when they were last asked to confirm, and where they signed up.
+ *   confirmed     confirmed, not unsubscribed, not deactivated — a broadcast reaches them
+ *   unconfirmed   gave an address, never confirmed it (not deactivated)
+ *   unsubscribed  said no to emails
+ */
+const LISTS = {
+  confirmed: `u.email IS NOT NULL AND u.email_verified_at IS NOT NULL AND u.email_unsubscribed_at IS NULL AND u.deactivated_at IS NULL`,
+  unconfirmed: `u.email IS NOT NULL AND u.email_verified_at IS NULL AND u.deactivated_at IS NULL`,
+  unsubscribed: `u.email_unsubscribed_at IS NOT NULL`,
+};
+async function lists({ which = 'confirmed', q = '', limit = 500 } = {}) {
+  const where = LISTS[which] || LISTS.confirmed;
+  const term = String(q || '').trim().toLowerCase();
+  const { rows } = await db.query(
+    `SELECT u.id, coalesce(u.display_name, u.wa_profile_name) AS name, u.mobile, u.email,
+            u.email_verified_at, u.email_unsubscribed_at, u.promo_consent_at, u.signup_channel, u.created_at,
+            (SELECT max(e.created_at) FROM customer_emails e WHERE e.user_id = u.id AND e.kind = 'confirm') AS last_asked,
+            (SELECT count(*)::int FROM customer_emails e WHERE e.user_id = u.id AND e.status = 'sent') AS emails_sent
+       FROM users u
+      WHERE ${where}
+        AND ($1 = '' OR lower(u.email) LIKE '%' || $1 || '%' OR u.mobile LIKE '%' || $1 || '%' OR lower(coalesce(u.display_name, '')) LIKE '%' || $1 || '%')
+      ORDER BY coalesce(u.email_verified_at, u.created_at) DESC LIMIT $2`, [term, Math.min(2000, Number(limit) || 500)]);
+  return { which: LISTS[which] ? which : 'confirmed', rows: rows.map((r) => ({ ...r, id: String(r.id) })) };
+}
+
+module.exports = { AUDIENCES, CATEGORIES, preview, testSend, queue, cancel, campaigns, log, reach, askToConfirm, lists };

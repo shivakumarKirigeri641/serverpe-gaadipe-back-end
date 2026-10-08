@@ -287,13 +287,24 @@ async function announcements(limit) {
     const out = await C.deliver(r.email, C.announcementMail(r, { subject: r.subject, body: r.body }), r.email_token);
     await settle(emailId, out);
     if (out.ok) sent += 1;
+    // Every broadcast email, in plain words (2026-10-08).
+    const act = require('../util/activity');
+    act.log(out.ok ? '📧' : '⚠️', `${out.ok ? 'Broadcast email sent' : 'Broadcast email failed'} · "${String(r.subject || '').slice(0, 60)}"`,
+      { who: act.who(r.display_name || r.wa_profile_name, r.mobile), detail: [`campaign #${r.campaign_id}`, out.ok ? null : String(out.error || '').slice(0, 80)] });
   }
   // A campaign with nothing left to send is finished.
-  await db.query(
+  const done = await db.query(
     `UPDATE admin_email_campaigns c SET status = 'sent', finished_at = now()
       WHERE c.status = 'queued'
         AND NOT EXISTS (SELECT 1 FROM customer_emails e WHERE e.campaign_id = c.id
-                          AND e.status IN ('pending', 'failed') AND e.attempts < ${MAX_ATTEMPTS})`);
+                          AND e.status IN ('pending', 'failed') AND e.attempts < ${MAX_ATTEMPTS})
+      RETURNING c.id, c.subject,
+        (SELECT count(*) FILTER (WHERE e.status = 'sent') FROM customer_emails e WHERE e.campaign_id = c.id)::int AS sent,
+        (SELECT count(*) FILTER (WHERE e.status <> 'sent') FROM customer_emails e WHERE e.campaign_id = c.id)::int AS not_sent`);
+  for (const c of done.rows) {
+    require('../util/activity').log('📣', `Broadcast finished · "${String(c.subject || '').slice(0, 60)}" · ${c.sent} sent${c.not_sent ? `, ${c.not_sent} not sent` : ''}`,
+      { detail: `campaign #${c.id}` });
+  }
   return sent;
 }
 
@@ -317,6 +328,11 @@ async function runOnce({ force = false } = {}) {
   const digestSent = await digest(day, limit);
   if (confirmSent || dailySent || digestSent) {
     console.log('[customer-mail] confirm %d · daily %d · digest %d', confirmSent, dailySent, digestSent);
+  }
+  if (confirmSent || bought || dailySent || digestSent) {
+    require('../util/activity').log('📬', 'Customer emails sent this round',
+      { detail: [confirmSent ? `${confirmSent} confirm-your-email` : null, bought ? `${bought} purchase (report + invoice)` : null,
+                 dailySent ? `${dailySent} daily alert` : null, digestSent ? `${digestSent} digest` : null] });
   }
   return { confirm: confirmSent, purchase: bought, daily: dailySent, digest: digestSent };
 }

@@ -123,6 +123,12 @@ async function record(userId, regNo, { repeat = false, found = true, channel = n
   await db.query(
     `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, $2, $3)`,
     [userId, repeat ? 'vehicle_check_repeat' : 'vehicle_check', JSON.stringify({ reg_no: regNo, found, ...(channel ? { channel } : {}) })]);
+  // The plain-words activity log (2026-10-08).
+  try {
+    const u = userId ? await db.one(`SELECT coalesce(display_name, wa_profile_name) AS name, mobile FROM users WHERE id = $1`, [userId]) : null;
+    require('./activity').log('🔍', `Vehicle checked${repeat ? ' again' : ''} · ${regNo} · ${found ? 'found' : 'not found'}`,
+      { who: require('./activity').who(u?.name, u?.mobile), detail: channel ? `on ${channel === 'web' ? 'the website' : channel}` : null });
+  } catch { /* the log never stops a check */ }
 }
 
 module.exports = { check, record, tierOf };

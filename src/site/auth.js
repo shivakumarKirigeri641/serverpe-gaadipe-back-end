@@ -23,6 +23,7 @@ const settings = require('../util/settings');
 const sms = require('../util/sms');
 const blocks = require('../admin/blocks');
 const { config } = require('../config');
+const activity = require('../util/activity');
 
 const localMobile = (m) => String(m || '').replace(/\D/g, '').slice(-10);
 const sha256 = (v) => crypto.createHash('sha256').update(String(v)).digest('hex');
@@ -84,6 +85,9 @@ async function requestCode({ mobile, ip, ctx = {} }) {
   await track(out.ok ? 'code_requested' : 'code_refused', {
     mobile: m || null, ctx, outcome: out.ok ? (out.tracked || null) : out.error,
   });
+  // The plain-words activity log (util/activity.js, 2026-10-08).
+  activity.log(out.ok ? '📲' : '⛔', out.ok ? 'Sign-in code asked for' : `Sign-in code refused (${out.error})`,
+    { who: activity.who(null, m), detail: out.tracked && out.tracked !== true ? String(out.tracked).replace(/_/g, ' ') : null });
   delete out.tracked;
   return out;
 }
@@ -188,6 +192,11 @@ async function verifyCode({ mobile, code, ip, userAgent, ctx = {}, quizpeConsent
   const out = await verifyCodeInner({ mobile, code, ip: ip || ctx.ip, userAgent: userAgent || ctx.user_agent, ctx, quizpeConsent, promoConsent });
   if (!out.ok) {
     await track('sign_in_failed', { mobile: localMobile(mobile) || null, ctx, outcome: out.error });
+    activity.log('⚠️', `Sign-in failed (${String(out.error || '').replace(/_/g, ' ')})`, { who: activity.who(null, localMobile(mobile)) });
+  } else {
+    const isNew = out.user?.joined_at && Date.now() - new Date(out.user.joined_at).getTime() < 120000;
+    activity.log('✅', isNew ? 'Signed in — NEW customer' : 'Signed in',
+      { who: activity.who(out.user?.name, out.user?.mobile || localMobile(mobile)), detail: ['terms accepted', ctx?.device || null] });
   }
   return out;
 }
@@ -348,6 +357,7 @@ async function signOut(token, ctx = {}) {
   if (!s) return;
   await db.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'signed_out',
           current_action = 'signed_out', current_at = now() WHERE id = $1`, [s.sessionId]);
+  activity.log('👋', 'Signed out', { who: activity.who(s.user?.display_name || s.user?.wa_profile_name, s.user?.mobile) });
   await db.query(
     `INSERT INTO site_activity (session_id, user_id, kind, action, ip) VALUES ($1, $2, 'action', 'signed_out', $3)`,
     [s.sessionId, s.user.id, ctx.ip || null]).catch(() => {});
@@ -371,6 +381,7 @@ async function signOut(token, ctx = {}) {
  * the last ten digits finds the old and the new account together.
  */
 async function deactivate(userId, { reason } = {}) {
+  activity.log('🗑', 'Account deactivated by the customer', { who: `customer #${userId}`, detail: reason ? `reason: ${String(reason).slice(0, 120)}` : null });
   await db.tx(async (c) => {
     await c.query(
       `UPDATE users SET deactivated_at = now(), deactivated_reason = $2,

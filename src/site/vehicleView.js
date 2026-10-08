@@ -141,7 +141,8 @@ function full(data) {
       // Every tag on record, active first — one vehicle often has an old closed
       // tag and a live one, and showing only one misleads either way.
       tags: (data.fastag?.tags || []).map((t) => ({
-        tag_id: t.tag_id || t.tid || null,
+        // The tag's number is an identifier: last four only (2026-10-08).
+        tag_id: maskNumber(t.tag_id || t.tid || null),
         status: t.status || t.tag_status || null,
         active: t.is_active === true || /^A/i.test(t.status || t.tag_status || ''),
         issued_on: t.issue_date || null,

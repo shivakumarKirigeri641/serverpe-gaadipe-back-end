@@ -993,6 +993,11 @@ router.post('/buy', safe(async (req, res) => {
     await db.query(`UPDATE report_credits SET payment_id = $2 WHERE id = $1 AND used_at IS NULL`, [reducedCredit.id, row.id]);
   }
 
+  {
+    const plain = require('../util/activity');
+    plain.log('🛒', `Checkout opened · ₹${(Number(row.amount_paise || 0) / 100).toFixed(2)}${req.body?.reg_no ? ` · ${String(req.body.reg_no).toUpperCase()}` : ''}`,
+      { who: plain.who(req.user.display_name || req.user.wa_profile_name || req.user.name, req.user.mobile), detail: `payment GP-T-${row.id}` });
+  }
   res.json({ ok: true, pay_path: `/pay/${row.checkout_token}`,
              pay_url: base ? `${base}/pay/${row.checkout_token}` : null,
              amount_paise: row.amount_paise });
@@ -1049,6 +1054,11 @@ const sendPdf = ({ table, column, mustBeValid }) => safe(async (req, res) => {
   await activity.record(req, {
     action: `${req.query.download === '1' ? 'download' : 'view'}_${table === 'invoices' ? 'invoice' : 'report'}`,
     detail: { number: row.number } });
+  {
+    const plain = require('../util/activity');
+    plain.log(table === 'invoices' ? '🧾' : '📄', `${req.query.download === '1' ? 'Downloaded' : 'Opened'} ${table === 'invoices' ? 'invoice' : 'full report'} ${row.number}`,
+      { who: plain.who(req.user.display_name || req.user.wa_profile_name || req.user.name, req.user.mobile) });
+  }
 
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition',

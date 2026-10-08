@@ -98,6 +98,8 @@ async function handle(body) {
       meta: { method: payment.method || null, reason: payment.error_reason || null, source: payment.error_source || null,
               step: payment.error_step || null, description: payment.error_description ? String(payment.error_description).slice(0, 200) : null },
     });
+    require('../util/activity').log('❌', `Payment try failed · ₹${(Number(payment.amount || 0) / 100).toFixed(2)} · ${String(payment.error_reason || 'failed').replace(/_/g, ' ')}`,
+      { who: payment.contact ? require('../util/activity').who(null, payment.contact) : null, detail: [payment.method ? `by ${payment.method}` : null, rowId ? `payment GP-T-${rowId}` : null] });
   }
 
   if (!ACTED.has(event)) {

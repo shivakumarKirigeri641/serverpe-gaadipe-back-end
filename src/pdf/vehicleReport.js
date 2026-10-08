@@ -202,7 +202,10 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       .map(d => [
         d.name || d.label,
         fmt(d.date),
-        d.days < 0 ? `Expired ${human(d.days)}` : `Valid, expires ${human(d.days)}`,
+        /* Green tick: valid; orange: ends within 30 days; red: expired (user, 2026-10-08). */
+        d.days < 0 ? { icon: 'bad', text: `Expired ${human(d.days)}` }
+          : d.days <= 30 ? { icon: 'warn', text: `Expires soon — ${human(d.days)}` }
+          : { icon: 'ok', text: `Valid, expires ${human(d.days)}` },
         d.label === 'Insurance'
           ? [titleCase(rc.insurance_company), mNumber(rc.insurance_policy)].filter(Boolean).join(' · ')
           : d.label === 'PUC' ? (mNumber(rc.pucc_number) || '—')
@@ -219,6 +222,18 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     y = T.ensureSpace(doc, y, 100);
     y = T.sectionTitle(doc, 'Traffic Challans', y,
       noAnswer ? T.BRAND.muted : (c.pending_count || 0) > 0 ? T.BRAND.red || T.BRAND.brand : T.BRAND.green);
+    /* The verdict in one line, with its mark (2026-10-08): red cross — challans
+       to pay; green tick — none pending; orange — not checked yet. */
+    {
+      const pendingN = Number(c.pending_count || 0);
+      const [kind, words] = noAnswer ? ['warn', 'Not checked yet — the e-Challan service did not answer']
+        : pendingN > 0 ? ['bad', `${pendingN} pending challan${pendingN === 1 ? '' : 's'} · ${rupees(c.pending_amount_paise)} to pay`]
+        : ['ok', 'No pending challans'];
+      T.statusIcon(doc, kind, T.M, y, 12);
+      doc.font(doc._F.bold).fontSize(9.5).fillColor(kind === 'bad' ? T.BRAND.red : kind === 'warn' ? '#E07B00' : T.BRAND.green)
+         .text(words, T.M + 17, y + 1, { width: W - 17, lineBreak: false });
+      y += 20;
+    }
     y = T.kvCard(doc, noAnswer ? [
       ['Pending challans', 'Checking — update coming'],
       ['Why', 'e-Challan service did not answer'],
@@ -233,7 +248,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
          .text('The Government e-Challan service did not respond when this report was made, so challans could not be checked yet — '
            + 'this does not mean there are none. GaadiPe keeps checking every 30 minutes over the next 24 hours. As soon as the '
            + 'service answers, this report is updated with the full challan details (same report number, same download link) '
-           + 'and we message you on WhatsApp with them. You do not need to do anything.', T.M, y + 4, { width: W });
+           + 'and we let you know by email and notification. You do not need to do anything.', T.M, y + 4, { width: W });
       y = doc.y + 8;
     }
 
@@ -266,18 +281,19 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     const newestFirst = (list) => [...(list || [])]
       .sort((a, b) => String(b.challan_date || '').localeCompare(String(a.challan_date || '')));
     const challanCols = [
-      { label: 'Date', width: W * 0.13, nowrap: true },
-      { label: 'Challan number', width: W * 0.28, nowrap: true },
-      { label: 'Offence · place', width: W * 0.45 },
+      { label: 'Date', width: W * 0.16, nowrap: true },
+      { label: 'Challan number', width: W * 0.27, nowrap: true },
+      { label: 'Offence · place', width: W * 0.43 },
       { label: 'Amount', width: W * 0.14, align: 'right', nowrap: true },
     ];
-    const challanRow = (p) => {
+    // Pending: red mark; paid or disposed: green tick — beside the date (2026-10-08).
+    const challanRow = (p, kind) => {
       const offence = clip(p.offence || (p.offences || []).map(o => o.name).join('; '), 44) || '—';
       const where = [clip(p.place, 34),
                      p.sent_to_court || p.sent_to_virtual_court ? 'In court' : null]
         .filter(Boolean).join(' · ');
       return [
-        fmt(p.challan_date),
+        { icon: kind, text: fmt(p.challan_date) },
         p.challan_no || '—',
         where ? `${offence}\n${where}` : offence,
         rupees(p.amount_paise),
@@ -294,7 +310,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       y = T.ensureSpace(doc, y, 90);
       y = T.sectionTitle(doc, `Pending challans (${c.pending_count ?? pending.length})`, y,
         T.BRAND.red || T.BRAND.brand);
-      y = T.table(doc, challanCols, pending.map(challanRow), y, { rowH: 15, maxRows: Infinity });
+      y = T.table(doc, challanCols, pending.map((p) => challanRow(p, 'bad')), y, { rowH: 15, maxRows: Infinity });
       note((c.pending_count || 0) > pending.length
         ? `${pending.length} of ${c.pending_count} pending challans were returned by the e-Challan service at the time of this report. `
           + 'Every challan number is complete and can be searched on the e-Challan portal.'
@@ -306,7 +322,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       y = T.ensureSpace(doc, y, 90);
       y = T.sectionTitle(doc, `Paid / disposed challans (${c.disposed_count ?? disposed.length})`, y,
         T.BRAND.green || T.BRAND.brand);
-      y = T.table(doc, challanCols, disposed.map(challanRow), y, { rowH: 15, maxRows: Infinity });
+      y = T.table(doc, challanCols, disposed.map((p) => challanRow(p, 'ok')), y, { rowH: 15, maxRows: Infinity });
       if ((c.disposed_count || 0) > disposed.length) {
         note(`${disposed.length} of ${c.disposed_count} paid or disposed challans were returned by the e-Challan service at the time of this report.`);
       }

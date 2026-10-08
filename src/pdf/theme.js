@@ -189,6 +189,29 @@ const iconCheck = (doc, x, y, s, color = BRAND.green) => {
      .moveTo(x + s * 0.22, y + s * 0.54).lineTo(x + s * 0.42, y + s * 0.72)
      .lineTo(x + s * 0.78, y + s * 0.28).stroke().restore();
 };
+/*
+ * STATUS MARKS (user, 2026-10-08: "a green tick if all good, orange if expiry
+ * is near, red if expired"). Drawn, not typed — PDF fonts have no emoji.
+ *   ok    green disc with a white tick
+ *   warn  amber disc with a white "!"
+ *   bad   red disc with a white cross
+ */
+const statusIcon = (doc, kind, x, y, s = 10) => {
+  const color = kind === "bad" ? BRAND.red : kind === "warn" ? "#E07B00" : BRAND.green;
+  const r = s / 2;
+  doc.save().circle(x + r, y + r, r).fill(color);
+  doc.lineWidth(s * 0.14).strokeColor("#FFFFFF").lineCap("round").lineJoin("round");
+  if (kind === "ok") {
+    doc.moveTo(x + s * 0.27, y + s * 0.52).lineTo(x + s * 0.44, y + s * 0.69).lineTo(x + s * 0.74, y + s * 0.33).stroke();
+  } else if (kind === "bad") {
+    doc.moveTo(x + s * 0.32, y + s * 0.32).lineTo(x + s * 0.68, y + s * 0.68).stroke()
+       .moveTo(x + s * 0.68, y + s * 0.32).lineTo(x + s * 0.32, y + s * 0.68).stroke();
+  } else {
+    doc.moveTo(x + r, y + s * 0.24).lineTo(x + r, y + s * 0.58).stroke();
+    doc.circle(x + r, y + s * 0.76, s * 0.07).fill("#FFFFFF");
+  }
+  doc.restore();
+};
 const iconLock = (doc, x, y, s, color = BRAND.muted) => {
   doc.save().lineWidth(s * 0.1).strokeColor(color)
      .roundedRect(x + s * 0.22, y + s * 0.45, s * 0.56, s * 0.42, s * 0.08).stroke()
@@ -252,14 +275,20 @@ const table = (doc, cols, rows, y, { rowH = 17, maxRows = 100 } = {}) => {
      grows to fit its tallest cell, so nothing is hidden behind "…". Columns
      opt out with `nowrap` where a value must stay on one line (an amount, a
      date), and the rest wrap. */
-  const cellText = (v) => (v === null || v === undefined ? "—" : String(v));
+  /* A cell may be { text, icon: 'ok' | 'warn' | 'bad' } — a status mark drawn
+     before the text (2026-10-08: green tick / orange / red in Documents and
+     Challans). */
+  const ICON_W = 13;
+  const cellText = (v) => (v === null || v === undefined ? "—"
+    : typeof v === "object" ? String(v.text ?? "—") : String(v));
+  const cellIcon = (v) => (v && typeof v === "object" ? v.icon || null : null);
 
   const heightOf = (row) => {
     doc.font(doc._F.regular).fontSize(8);
     let tallest = rowH;
     cols.forEach((c, ci) => {
       if (c.nowrap) return;
-      const h = doc.heightOfString(cellText(row[ci]), { width: c.width - 14 }) + 9;
+      const h = doc.heightOfString(cellText(row[ci]), { width: c.width - 14 - (cellIcon(row[ci]) ? ICON_W : 0) }) + 9;
       if (h > tallest) tallest = h;
     });
     return tallest;
@@ -277,14 +306,22 @@ const table = (doc, cols, rows, y, { rowH = 17, maxRows = 100 } = {}) => {
     doc.font(doc._F.regular).fontSize(8).fillColor(BRAND.body);
     cols.forEach((c, ci) => {
       const text = cellText(row[ci]);
+      const icon = cellIcon(row[ci]);
+      const ix = icon ? ICON_W : 0;
+      if (icon) {
+        statusIcon(doc, icon, x + 6, (c.nowrap ? y + h / 2 - 5 : y + 3.5), 10);
+        doc.font(doc._F.regular).fontSize(8).fillColor(
+          icon === "bad" ? BRAND.red : icon === "warn" ? BRAND.amber : icon === "ok" ? BRAND.green : BRAND.body);
+      }
       if (c.nowrap) {
-        doc.text(text, x + 7, y + h / 2 - 4,
-                 { width: c.width - 14, height: 11, align: c.align || "left",
+        doc.text(text, x + 7 + ix, y + h / 2 - 4,
+                 { width: c.width - 14 - ix, height: 11, align: c.align || "left",
                    lineBreak: false, ellipsis: true });
       } else {
-        doc.text(text, x + 7, y + 5,
-                 { width: c.width - 14, align: c.align || "left" });
+        doc.text(text, x + 7 + ix, y + 5,
+                 { width: c.width - 14 - ix, align: c.align || "left" });
       }
+      if (icon) doc.fillColor(BRAND.body);
       x += c.width;
     });
     y += h;
@@ -389,5 +426,5 @@ module.exports = {
   BRAND, M, init, money, money0, fmtDate, fmtDateTime, titleCase, daysUntil, logoMark,
   card, label, kv, kvCard, sectionTitle, statCards, chip, table, header, pageFurniture,
   ensureSpace, safeBottom, watermark, personalMark,
-  iconCheck, iconLock,
+  iconCheck, iconLock, statusIcon,
 };

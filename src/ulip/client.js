@@ -207,6 +207,15 @@ function classify(httpStatus, body) {
   return { outcome: OUTCOME.FOUND, code: '200', message: null, payload: entry.response };
 }
 
+/** Did ULIP turn the call away because of the token — however it says so? */
+function tokenRefused(httpStatus, body, text = '') {
+  if (httpStatus === 401 || httpStatus === 403) return true;
+  const code = String(body?.code ?? '');
+  if (/^(401|403)\b/.test(code)) return true;
+  const msg = `${body?.message || ''} ${typeof body?.response === 'string' ? body.response : ''} ${!body ? String(text).slice(0, 300) : ''}`;
+  return /(token|jwt|session)[^.]{0,40}(expired|invalid|not valid)|unauthori[sz]ed|unauthenticated|invalid (access )?token/i.test(msg);
+}
+
 /**
  * POST to a ULIP dataset.
  * Returns { outcome, code, message, payload, httpStatus, durationMs, path }.
@@ -230,17 +239,34 @@ async function post(path, body) {
   try {
     let token = await getToken();
     let res = await send(token);
-
-    if (res.status === 401 || res.status === 403) {
-      token = await getToken({ force: true });     // expired mid-flight
-      res = await send(token);
-    }
-
-    const text = await res.text();
-    const durationMs = Date.now() - started;
-
+    let text = await res.text();
     let parsed = null;
     try { parsed = JSON.parse(text); } catch { /* handled below */ }
+
+    /*
+     * THE TOKEN RUNS OUT AFTER ~30 MINUTES (user, 2026-10-08; ULIP spec §1.10:
+     * "if no request comes for 30 minutes the session expires"). It is renewed
+     * at 25 minutes (ULIP_TOKEN_TTL_MS), and a call it still fails on is sent
+     * once more with a new one — whether ULIP says so with HTTP 401/403 or
+     * inside a 200 envelope (code 401/403, "token expired", "unauthorized").
+     * Only the FIRST caller to see the old token logs in again: one that finds
+     * a newer token already in place just uses it, so a burst of checks at the
+     * moment of expiry costs one login, not one each.
+     */
+    if (tokenRefused(res.status, parsed, text)) {
+      if (state.token === token) {
+        console.warn('[ulip] the access token was refused (expired after ~30 min) — logging in again once');
+        state.token = null;
+      }
+      token = await getToken();
+      res = await send(token);
+      text = await res.text();
+      parsed = null;
+      try { parsed = JSON.parse(text); } catch { /* handled below */ }
+      if (tokenRefused(res.status, parsed, text)) console.error('[ulip] a fresh token was refused too — %s', String(parsed?.message || res.status).slice(0, 120));
+    }
+
+    const durationMs = Date.now() - started;
     if (!parsed) {
       return { outcome: OUTCOME.RETRY, code: 'BAD_JSON', message: text.slice(0, 200), payload: null, httpStatus: res.status, durationMs, path };
     }
@@ -264,4 +290,4 @@ async function post(path, body) {
   }
 }
 
-module.exports = { post, getToken, classify, OUTCOME, NOT_FOUND_CODES };
+module.exports = { post, getToken, classify, OUTCOME, NOT_FOUND_CODES, _test: { tokenRefused, state } };

@@ -309,6 +309,36 @@ async function audit({ adminId, action, detail = {}, ip = null }) {
   } catch (e) {
     console.error('[admin] audit failed for %s: %s', action, e.message);
   }
+  activityOf(adminId, action, detail).catch(() => {});
+}
+
+/*
+ * EVERY ADMIN ACTION, IN PLAIN WORDS (user, 2026-10-08: "proper logs for every
+ * activity, understandable"): the audit row above is the record; this is the
+ * line a person reads in the Server log / logs/activity-*.log.
+ */
+const ACTION_WORDS = {
+  sign_in: 'signed in to the admin panel', sign_out: 'signed out of the admin panel',
+  view_customer: 'opened a customer', view_session: 'opened a visit', view_email_list: 'opened an email list',
+  customer_email_queued: 'queued a broadcast email', customer_email_cancelled: 'stopped a broadcast email',
+  customer_emails_confirm_asked: 'asked unconfirmed customers to confirm their email',
+  settings_changed: 'changed settings', settings_saved: 'changed settings', customer_exported: 'exported a customer',
+  testimonial_approved: 'approved a testimonial', testimonial_removed: 'removed a testimonial',
+};
+const adminNames = new Map();
+async function activityOf(adminId, action, detail) {
+  let name = adminNames.get(String(adminId));
+  if (name === undefined && adminId) {
+    const r = await db.one(`SELECT name FROM admin_users WHERE id = $1`, [adminId]).catch(() => null);
+    name = r?.name || `admin #${adminId}`;
+    adminNames.set(String(adminId), name);
+  }
+  const words = ACTION_WORDS[action] || String(action).replace(/_/g, ' ');
+  // A few short facts from the detail; never long text, never whole numbers (activity.js trims mobiles).
+  const facts = Object.entries(detail || {})
+    .filter(([k, v]) => v != null && v !== '' && typeof v !== 'object' && !/token|password|code|secret|body/i.test(k))
+    .slice(0, 5).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${String(v).slice(0, 60)}`);
+  require('../util/activity').log('🛡', `Admin ${name || 'system'} ${words}`, { detail: facts });
 }
 
 /* ------------------------------------------------------------ the people */
