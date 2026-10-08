@@ -1383,6 +1383,23 @@ const sendPdf = (table, column) => safe(async (req, res) => {
 });
 
 router.get('/reports/:id/file', sendPdf('vehicle_reports', 'report_number'));
+/* THE REPORT AS A FLIP CARD (user, 2026-10-08): the vehicle summary card the
+   customer sees, from the report's own snapshot — the data as it was the day
+   the report was made, never a new lookup — masked as in the customer's copy. */
+router.get('/reports/:id/card', safe(async (req, res) => {
+  const row = await db.one(
+    `SELECT r.id, r.report_number, r.reg_no, r.created_at, r.valid_until, r.snapshot, u.mobile
+       FROM vehicle_reports r LEFT JOIN users u ON u.id = r.user_id WHERE r.id = $1`, [req.params.id]);
+  if (!row) return res.status(404).json({ error: 'not_found', message: 'No such report.' });
+  await auth.audit({ adminId: req.admin.id, action: 'view_report_card', ip: ipOf(req),
+                     detail: { number: row.report_number, reg_no: row.reg_no } });
+  res.json({
+    report: { id: String(row.id), number: row.report_number, reg_no: row.reg_no,
+              created_at: row.created_at, valid_until: row.valid_until,
+              mobile: row.mobile ? `…${String(row.mobile).slice(-4)}` : null },
+    vehicle: require('../site/vehicleView').full({ vehicle_number: row.reg_no, ...(row.snapshot || {}) }),
+  });
+}));
 /* ADMIN VIEW of a report (user, 2026-10-04): every field as stored, without
    the report's masking, rendered in memory for this request only — never
    written to disk, never the customer's copy — and audited. */
