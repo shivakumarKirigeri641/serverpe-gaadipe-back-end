@@ -257,8 +257,7 @@ async function feed(since, adminId = null) {
       `SELECT e.id, e.occurred_at AS at, e.amount_paise, e.reg_no, coalesce(e.mobile, u.mobile) AS mobile,
               coalesce(u.display_name, u.wa_profile_name) AS person_name, e.metadata->>'method' AS method,
               coalesce((SELECT vi.first_touch->>'source' FROM visitors vi WHERE vi.mobile = u.mobile ORDER BY vi.first_seen_at LIMIT 1),
-                       (SELECT CASE WHEN ws.attribution->>'channel' = 'whatsapp_ad' THEN 'meta_ads' END FROM whatsapp_sessions ws WHERE ws.mobile = u.mobile),
-                       'whatsapp_direct') AS source
+                       'website') AS source
          FROM events e LEFT JOIN users u ON u.id = e.user_id
         WHERE e.name = 'payment_success' AND e.occurred_at > $1 ORDER BY e.occurred_at LIMIT 20`, [from]),
     // Meta's account news is not a passing pop-up: the panel shows it as a
@@ -268,17 +267,25 @@ async function feed(since, adminId = null) {
     db.query(`SELECT id, resolved_at AS at, severity, source, title FROM admin_alerts
                WHERE resolved_at > $1 AND resolved_by IS NULL AND resolution = 'Cleared by itself'
                ORDER BY resolved_at LIMIT 20`, [from]),
-    // Someone said hi, or checked a vehicle (user, 2026-09-29): a pop-up
-    // that comes and goes. Internal accounts are left out.
+    // Activity pop-ups that come and go (user, 2026-09-29), from the WEBSITE
+    // now that WhatsApp is retired (2026-10-08: "not getting any pop-ups"):
+    // a new visit, a sign-in, a vehicle check. Internal accounts are left out.
     db.query(
-      `SELECT e.id, e.occurred_at AS at, e.name, e.reg_no, coalesce(e.mobile, u.mobile) AS mobile,
-              coalesce(u.display_name, u.wa_profile_name,
-                       (SELECT ws.profile_name FROM whatsapp_sessions ws WHERE ws.mobile = e.mobile)) AS person_name,
-              (SELECT ws.attribution->>'channel' FROM whatsapp_sessions ws WHERE ws.mobile = coalesce(e.mobile, u.mobile)) AS came_from
-         FROM events e LEFT JOIN users u ON u.id = e.user_id OR (e.user_id IS NULL AND u.mobile = e.mobile)
-        WHERE e.name IN ('whatsapp_greeting', 'vehicle_search_success') AND e.occurred_at > $1
-          AND NOT coalesce(u.is_internal, false)
-        ORDER BY e.occurred_at LIMIT 20`, [from]),
+      `SELECT * FROM (
+         SELECT 'visit' AS what, e.event_key AS id, e.occurred_at AS at, NULL::text AS reg_no, NULL::text AS mobile,
+                NULL::text AS person_name, e.page, e.source, e.metadata->>'device' AS device, e.metadata->>'place' AS place,
+                NULL::boolean AS found
+           FROM events e
+          WHERE e.name = 'session_started' AND e.channel = 'web' AND e.occurred_at > $1
+         UNION ALL
+         SELECT CASE WHEN l.kind = 'site_sign_in' THEN 'signin' ELSE 'check' END, l.id::text, l.created_at,
+                l.detail->>'reg_no', coalesce(u.mobile, l.detail->>'mobile'),
+                coalesce(u.display_name, u.wa_profile_name), NULL, NULL, NULL, NULL,
+                (l.detail->>'found')::boolean
+           FROM event_log l LEFT JOIN users u ON u.id = l.user_id
+          WHERE l.kind IN ('site_sign_in', 'vehicle_check', 'chat_anon_check') AND l.created_at > $1
+            AND NOT coalesce(u.is_internal, false)
+       ) x ORDER BY at LIMIT 30`, [from]),
   ]);
   const who = (r) => [r.person_name, r.mobile ? `…${String(r.mobile).slice(-4)}` : null].filter(Boolean).join(' · ');
   const items = [
@@ -290,11 +297,15 @@ async function feed(since, adminId = null) {
       severity: a.severity, title: a.title, text: a.description })),
     ...recovered.rows.map((a) => ({ kind: 'recovered', id: `ok:${a.id}`, at: a.at, tone: 'good',
       title: `Recovered: ${a.title}`, text: 'The condition cleared by itself.' })),
-    ...activity.rows.map((r) => (r.name === 'whatsapp_greeting'
-      ? { kind: 'hi', id: `hi:${r.id}`, at: r.at, tone: 'info', title: '👋 Someone said hi',
-          text: [who(r), r.came_from === 'whatsapp_ad' ? 'from your ad' : null].filter(Boolean).join(' · '), mobile: r.mobile }
-      : { kind: 'check', id: `chk:${r.id}`, at: r.at, tone: 'info', title: `🔍 Vehicle checked${r.reg_no ? ` · ${r.reg_no}` : ''}`,
-          text: who(r), mobile: r.mobile, reg_no: r.reg_no })),
+    // 'hi' and 'check' keep the panel's quiet chime and its mute switch.
+    ...activity.rows.map((r) => (r.what === 'visit'
+      ? { kind: 'hi', id: `visit:${r.id}`, at: r.at, tone: 'info', title: '👋 Someone is on gaadipe.in',
+          text: [r.page, r.source && r.source !== 'direct' ? `from ${String(r.source).replace(/_/g, ' ')}` : null, r.device, r.place].filter(Boolean).join(' · ') }
+      : r.what === 'signin'
+        ? { kind: 'hi', id: `signin:${r.id}`, at: r.at, tone: 'good', title: '🔐 Signed in on gaadipe.in', text: who(r), mobile: r.mobile }
+        : { kind: 'check', id: `chk:${r.id}`, at: r.at, tone: 'info',
+            title: `🔍 Vehicle checked${r.reg_no ? ` · ${r.reg_no}` : ''}${r.found === false ? ' (not found)' : ''}`,
+            text: who(r) || 'Not signed in', mobile: r.mobile, reg_no: r.reg_no })),
     ...(await milestones(adminId)),
     ...(await newFeedback(from)),
   ].sort((a, b) => new Date(a.at) - new Date(b.at));

@@ -12,3 +12,4 @@ server-docs/
 
 # Scheduled database backups (src/admin/backups.js) — never committed.
 /backups/
+src/DB_BACKUP
