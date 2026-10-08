@@ -39,6 +39,14 @@ async function anonCheck(req) {
   const parsed = plate.parse(req.body?.reg_no);
   if (!parsed.ok) return { status: 400, body: { error: 'bad_plate', message: parsed.error } };
 
+  /* SIGN IN FOR EVERY CHECK (user, 2026-10-08: "make sign-in mandatory for any
+     vehicle check"). Switch: check_sign_in_required (migration 137, on). Off, the
+     free checks without signing in come back as before. */
+  if (await settings.bool('check_sign_in_required', true)) {
+    return { status: 403, body: { error: 'sign_in_needed',
+      message: 'Please sign in with your mobile number to check a vehicle — it takes a few seconds, and your checks are kept in your account.' } };
+  }
+
   const device = String(req.body?.client?.device_id || req.get('x-gp-device') || '').slice(0, 64);
   const ip = hash(req.ip);
   const perDevice = await settings.num('chat_anon_checks_per_day', 3);

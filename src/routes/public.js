@@ -130,6 +130,8 @@ router.get('/notice', async (_req, res) => {
         ? { on: true, en: String(await settings.get('site_notice_en', '')), hi: String(await settings.get('site_notice_hi', '')) }
         : { on: false }),
       check: await checkNotice(settings),
+      // The chat asks for sign-in before a check when this is on (2026-10-08).
+      sign_in_required: await settings.bool('check_sign_in_required', true),
     });
   } catch {
     res.json({ on: false });

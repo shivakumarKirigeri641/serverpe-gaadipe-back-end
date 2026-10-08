@@ -49,6 +49,8 @@ const GROUPS = [
     ['site_notice_on', 'Website notice: show it (true / false)', 'A line at the top of every page of gaadipe.in — e.g. while WhatsApp is unavailable.'],
     ['site_notice_en', 'Website notice: English text', ''],
     ['site_notice_hi', 'Website notice: Hindi text', ''],
+    // Sign in for every check (user, 2026-10-08).
+    ['check_sign_in_required', 'Sign-in required for every vehicle check (true / false)', 'true: a visitor signs in with their mobile before any check. false: a few free checks a day without signing in (chat_anon_checks_per_day).'],
     // The line before a vehicle check in the chat (user, 2026-10-07).
     ['check_notice_mode', 'Check notice: on / auto / off', 'Before a visitor’s first check, and when a check fails: “Government services may be down…”. auto = only while VAHAN is down.'],
     ['check_notice_en', 'Check notice: English text', 'Empty = the built-in wording.'],
