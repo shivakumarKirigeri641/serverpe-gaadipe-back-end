@@ -9,7 +9,7 @@
  *
  * THE ANONYMOUS CHECK (2026-10-08, migration 142) costs nothing and gives little away:
  *   - "Agree & check" first; every attempt recorded in anon_checks
- *   - the saved record or ULIP's RC only — no challans, no paid sources
+ *   - the full lookup, stored (ULIP → eChallan.app → paid RC backup, capped a day)
  *   - make, model name (variant hidden) and fuel only (site/vehicleView.identity)
  *   - the scraping guard, the block list and owner-hidden vehicles, as /check
  *   - 1 per browser and 1 per network address a day, and an hourly site cap
@@ -50,8 +50,8 @@ async function anonCheck(req) {
    *   device      a browser without its id is refused (simple bots have none)
    *   limits      1 per browser AND 1 per network address a day, and a cap for
    *               the whole site per hour; the scraping guard; blocked vehicles
-   *   data        the saved record or ULIP's RC only (ulip_only=1): no challan
-   *               call, no paid backup, no eChallan.app
+   *   data        the full lookup, stored: RC, challans, FASTag — ULIP, then
+   *               eChallan.app, then the paid RC backup (capped a day for free checks)
    *   shown       make, model name without its variant, fuel (vehicleView.identity)
    *   recorded    every attempt, refused ones too, in anon_checks: device, IP,
    *               session, user agent, place, source, consent words and versions
@@ -145,8 +145,17 @@ async function anonCheck(req) {
       message: 'This vehicle cannot be checked here. If it is yours, please write to support@gaadipe.in.' });
   }
 
+  /* THE FULL SEQUENCE, STORED (user, 2026-10-08: "allow the sequence before sign-in
+     too — we store RC, challans and FASTag anyway: ULIP, down? eChallan.app, not
+     available? IDSPay"). Everything is saved for when they sign in or buy; the
+     visitor still sees only make, model name and fuel. The paid backup (IDSPay) is
+     capped for free checks: free_check_backup_per_day (30) — past it, free checks
+     stop at eChallan.app. Paid reports are never capped by this. */
+  const backupCap = await settings.num('free_check_backup_per_day', 30);
+  const backupsToday = await db.one(
+    `SELECT count(*)::int AS n FROM anon_checks WHERE data_source = 'RC backup (paid)' AND created_at > ${TODAY}`);
   const started = Date.now();
-  const data = await gateway.rc(parsed.regNo, { ulip_only: 1 });
+  const data = await gateway.full(parsed.regNo, (backupsToday?.n || 0) >= backupCap ? { backup: 0 } : {});
   const latency = Date.now() - started;
   // Kept like every other check, so the admin email and the Vehicle Explorer know the vehicle.
   if (data?.success) {
@@ -154,7 +163,10 @@ async function anonCheck(req) {
       .catch((e) => console.error('[chat] could not save %s: %s', parsed.regNo, e.message));
   }
   const shown = data?.success ? view.identity(data) : null;
-  const dataSource = data?.success ? (data.cached ? 'saved record' : 'ULIP') : null;
+  const SOURCE = { ECHALLANAPP: 'eChallan.app', RCBACKUP: 'RC backup (paid)' };
+  const dataSource = data?.success
+    ? (data.cached ? 'saved record' : SOURCE[String(data.source || '').toUpperCase()] || 'ULIP')
+    : null;
   await audit({ outcome: data?.success ? 'shown' : data?.error === 'vehicle_not_found' ? 'not_found' : 'failed',
     refusal: data?.success ? null : String(data?.error || 'failed').slice(0, 80),
     data_source: dataSource, latency_ms: latency, shown: shown?.identity || null });

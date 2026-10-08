@@ -52,7 +52,12 @@ const GROUPS = [
     // Referral rewards (user, 2026-10-08: hidden for now).
     ['referral_rewards_enabled', 'Referral rewards: offer and use them (true / false)', 'false: no free report and no reduced-price report — everyone pays the plan price. Rewards already earned are kept for when it is switched on.'],
     // Sign in for every check (user, 2026-10-08).
-    ['check_sign_in_required', 'Sign-in required for every vehicle check (true / false)', 'true: a visitor signs in with their mobile before any check. false: a few free checks a day without signing in (chat_anon_checks_per_day).'],
+    ['check_sign_in_required', 'Sign-in required for every vehicle check (true / false)', 'true: a visitor signs in with their mobile before any check. false: one free check a day without signing in — make, model name and fuel, after “Agree & check”.'],
+    // The free check before sign-in (migrations 142–143).
+    ['chat_anon_checks_per_day', 'Free check before sign-in: per browser, per day', 'How many vehicles one browser may check without signing in each day (1).'],
+    ['chat_anon_checks_per_day_ip', 'Free check before sign-in: per network, per day', 'How many free checks one network address may make a day. Homes and offices share one address on Wi-Fi — 3 lets a family each try once.'],
+    ['chat_anon_checks_per_hour', 'Free check before sign-in: whole site, per hour', 'A flood of free checks stops here (60).'],
+    ['free_check_backup_per_day', 'Free check before sign-in: paid RC backup calls a day', 'When ULIP and eChallan.app cannot answer, a free check may use the paid RC backup (IDSPay) up to this many times a day; after that it stops at eChallan.app. 0 = never. Paid reports are not affected.'],
     // The line before a vehicle check in the chat (user, 2026-10-07).
     ['check_notice_mode', 'Check notice: on / auto / off', 'Before a visitor’s first check, and when a check fails: “Government services may be down…”. auto = only while VAHAN is down.'],
     ['check_notice_en', 'Check notice: English text', 'Empty = the built-in wording.'],
