@@ -23,6 +23,7 @@
  */
 
 const db = require('../db');
+const notMe = require('./notMe');
 
 const RANGES = { today: 0, '7d': 6, '30d': 29 };
 const rangeOf = (r) => (Object.prototype.hasOwnProperty.call(RANGES, r) ? r : 'today');
@@ -36,33 +37,34 @@ async function overview({ range } = {}) {
   const r = rangeOf(range);
   const days = RANGES[r];
 
+  // Your own visits and sign-ins are left out (admin/notMe.js, 2026-10-08).
   const t = await db.one(
     `WITH seen AS (
        SELECT DISTINCT visitor_id FROM events
-        WHERE channel = 'web' AND visitor_id IS NOT NULL AND occurred_at >= ${FROM})
+        WHERE channel = 'web' AND visitor_id IS NOT NULL AND occurred_at >= ${FROM} AND ${notMe.visitor('visitor_id')})
      SELECT
        (SELECT count(*) FROM seen)                                                              AS visitors,
-       (SELECT count(*) FROM visitors WHERE first_seen_at >= ${FROM})                          AS new_visitors,
+       (SELECT count(*) FROM visitors WHERE first_seen_at >= ${FROM} AND ${notMe.visitor('visitor_id')}) AS new_visitors,
        (SELECT count(DISTINCT visitor_id) FROM events
-         WHERE channel = 'web' AND name = 'page_view' AND page LIKE '/chat%' AND occurred_at >= ${FROM}) AS chat_visitors,
-       (SELECT count(*) FROM event_log WHERE kind = 'chat_anon_check' AND created_at >= ${FROM}) AS free_checks,
+         WHERE channel = 'web' AND name = 'page_view' AND page LIKE '/chat%' AND occurred_at >= ${FROM} AND ${notMe.visitor('visitor_id')}) AS chat_visitors,
+       (SELECT count(*) FROM event_log WHERE kind = 'chat_anon_check' AND created_at >= ${FROM} AND ${notMe.device(`detail->>'device'`)}) AS free_checks,
        (SELECT count(*) FROM event_log WHERE kind = 'chat_anon_check' AND created_at >= ${FROM}
-                                         AND (detail->>'found')::boolean)                       AS free_found,
+                                         AND (detail->>'found')::boolean AND ${notMe.device(`detail->>'device'`)}) AS free_found,
        (SELECT count(DISTINCT coalesce(nullif(detail->>'device', ''), detail->>'ip')) FROM event_log
-         WHERE kind = 'chat_anon_check' AND created_at >= ${FROM})                              AS free_checkers,
-       (SELECT count(*) FROM site_sign_ins WHERE event = 'code_requested' AND created_at >= ${FROM}) AS codes_requested,
-       (SELECT count(*) FROM site_sign_ins WHERE event = 'signed_in' AND created_at >= ${FROM})  AS sign_ins,
-       (SELECT count(DISTINCT user_id) FROM site_sign_ins WHERE event = 'signed_in' AND created_at >= ${FROM}) AS signed_in_customers,
+         WHERE kind = 'chat_anon_check' AND created_at >= ${FROM} AND ${notMe.device(`detail->>'device'`)}) AS free_checkers,
+       (SELECT count(*) FROM site_sign_ins WHERE event = 'code_requested' AND created_at >= ${FROM} AND ${notMe.mobile('mobile')}) AS codes_requested,
+       (SELECT count(*) FROM site_sign_ins WHERE event = 'signed_in' AND created_at >= ${FROM} AND ${notMe.user('user_id')})  AS sign_ins,
+       (SELECT count(DISTINCT user_id) FROM site_sign_ins WHERE event = 'signed_in' AND created_at >= ${FROM} AND ${notMe.user('user_id')}) AS signed_in_customers,
        (SELECT count(*) FROM (SELECT user_id, min(created_at) AS first FROM site_sign_ins
-                               WHERE event = 'signed_in' AND user_id IS NOT NULL GROUP BY user_id) f
+                               WHERE event = 'signed_in' AND user_id IS NOT NULL AND ${notMe.user('user_id')} GROUP BY user_id) f
          WHERE f.first >= ${FROM})                                                              AS new_customers,
        (SELECT count(*) FROM event_log WHERE kind IN ('vehicle_check', 'vehicle_check_repeat')
-                                         AND detail->>'channel' = 'web' AND created_at >= ${FROM}) AS web_checks,
+                                         AND detail->>'channel' = 'web' AND created_at >= ${FROM} AND ${notMe.user('user_id')}) AS web_checks,
        (SELECT count(DISTINCT coalesce(payment_id::text, event_key)) FROM events
-         WHERE channel = 'web' AND name = 'payment_page_viewed' AND occurred_at >= ${FROM})       AS pay_opened,
-       (SELECT count(*) FROM payments WHERE status = 'paid' AND raw->>'channel' = 'web' AND coalesce(paid_at, created_at) >= ${FROM}) AS paid,
+         WHERE channel = 'web' AND name = 'payment_page_viewed' AND occurred_at >= ${FROM} AND ${notMe.visitor('visitor_id')}) AS pay_opened,
+       (SELECT count(*) FROM payments WHERE status = 'paid' AND raw->>'channel' = 'web' AND coalesce(paid_at, created_at) >= ${FROM} AND ${notMe.user('user_id')}) AS paid,
        (SELECT coalesce(sum(amount_paise), 0) FROM payments
-         WHERE status = 'paid' AND raw->>'channel' = 'web' AND coalesce(paid_at, created_at) >= ${FROM}) AS revenue_paise,
+         WHERE status = 'paid' AND raw->>'channel' = 'web' AND coalesce(paid_at, created_at) >= ${FROM} AND ${notMe.user('user_id')}) AS revenue_paise,
        (SELECT count(*) FROM customer_push_subscriptions)                                      AS push_devices,
        (SELECT count(DISTINCT user_id) FROM customer_push_subscriptions)                       AS push_customers,
        (SELECT count(*) FROM site_sessions WHERE ended_at IS NULL AND last_used_at > now() - interval '15 minutes') AS online_now`,

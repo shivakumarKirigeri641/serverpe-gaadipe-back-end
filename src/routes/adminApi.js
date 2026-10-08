@@ -874,6 +874,32 @@ router.get('/web/sessions/:id', needs('customers.view'), safe(async (req, res) =
   if (!refreshing(req)) await auth.audit({ adminId: req.admin.id, action: 'view_session', ip: ipOf(req), detail: { session_id: String(req.params.id).slice(0, 64) } });
   res.json(out);
 }));
+/*
+ * "THIS IS ME" (user, 2026-10-08: keep my own testing out of the numbers). The
+ * signed-in admin's own mobile goes into internal_mobiles, and their customer
+ * account (if any) is marked internal now — so every device they sign in on
+ * stops counting as a visitor, sign-in, check or sale (admin/notMe.js).
+ */
+const internalOf = async () => String(await require('../util/settings').get('internal_mobiles', ''))
+  .split(',').map((s) => s.replace(/\D/g, '').slice(-10)).filter((s) => s.length === 10);
+router.get('/me/internal', safe(async (req, res) => {
+  const me = String(req.admin.mobile || '').replace(/\D/g, '').slice(-10);
+  res.json({ mobile: me, internal: (await internalOf()).includes(me) });
+}));
+router.post('/me/internal', safe(async (req, res) => {
+  const me = String(req.admin.mobile || '').replace(/\D/g, '').slice(-10);
+  if (me.length !== 10) return res.status(400).json({ error: 'no_mobile', message: 'Your admin account has no mobile number.' });
+  const on = req.body?.on === true;
+  const list = new Set(await internalOf());
+  if (on) list.add(me); else list.delete(me);
+  await db.query(`INSERT INTO app_settings (key, value) VALUES ('internal_mobiles', $1)
+                  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, modified_at = now()`, [[...list].join(',')]);
+  await require('../util/settings').refresh?.();
+  const u = await db.query(`UPDATE users SET is_internal = $2, modified_at = now() WHERE right(mobile, 10) = $1`, [me, on]);
+  await auth.audit({ adminId: req.admin.id, action: on ? 'marked_self_internal' : 'unmarked_self_internal', ip: ipOf(req), detail: { accounts: u.rowCount } });
+  res.json({ ok: true, mobile: me, internal: on, accounts: u.rowCount });
+}));
+
 // Up or down, and by how much — every key number against yesterday, last week and last month (src/admin/compare.js).
 router.get('/web/compare', needs('dashboard.view'), safe(async (req, res) => res.json(await require('../admin/compare').all())));
 router.get('/web/customers/:id', needs('customers.view'), safe(async (req, res) => {

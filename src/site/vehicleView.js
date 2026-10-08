@@ -55,8 +55,10 @@ function basic(data, { detail = 'count' } = {}) {
       // VAHAN carries the variant inside the model ("H/H.SPLENDOR PLUS"), so
       // the two are one field rather than an invented split.
       model: rc.model || null,
-      vehicle_class: rc.vehicle_class || null,
-      fuel: rc.fuel || null,
+      // With free_view_detail 'none' (the free look before sign-in, 2026-10-08:
+      // "show only make, model, variant") nothing else about the vehicle.
+      vehicle_class: detail === 'none' ? null : (rc.vehicle_class || null),
+      fuel: detail === 'none' ? null : (rc.fuel || null),
     },
     /*
      * WHAT is wrong, never WHEN or BY HOW MUCH.

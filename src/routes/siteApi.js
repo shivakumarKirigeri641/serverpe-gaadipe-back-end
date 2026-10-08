@@ -714,6 +714,55 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
 }));
 
 /**
+ * THE RC CARD (user, 2026-10-08: "My vehicles" as number plates, each opening a
+ * card that flips for the rest of the details).
+ *
+ * FROM WHAT IS ALREADY STORED, NEVER A NEW LOOKUP. Swiping through your own
+ * vehicles must not spend a Government call each time, so this reads the saved
+ * snapshots (mail/customer storedRecord) and nothing else; a vehicle with no
+ * saved record says so and the chat offers a fresh check instead.
+ *
+ * Only vehicles on this account. Paid: the full view (same daily cap and
+ * watermark as any full record) with the report and its invoice to download.
+ * Not paid: the free view as the free check shows it.
+ */
+router.get('/vehicles/:regNo/card', safe(async (req, res) => {
+  const parsed = plate.parse(req.params.regNo);
+  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  const mine = await db.one(
+    `SELECT v.id, uv.check_count, uv.last_checked_at,
+            EXISTS (SELECT 1 FROM watches w WHERE w.user_id = uv.user_id AND w.vehicle_id = v.id AND w.is_active) AS watched
+       FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
+      WHERE uv.user_id = $1 AND v.reg_no = $2`, [req.user.id, parsed.regNo]);
+  if (!mine) return res.status(404).json({ error: 'not_yours', message: 'This vehicle is not in your list.' });
+
+  const data = await customerMail.storedRecord(mine.id);
+  if (!data) return res.status(404).json({ error: 'no_record', message: 'No saved record for this vehicle yet — check it again to see it.' });
+
+  const paid = await db.one(
+    `SELECT r.id, r.report_number, r.valid_until, r.pdf_path,
+            (SELECT i.id FROM invoices i WHERE i.user_id = r.user_id AND i.payment_id = r.payment_id
+              ORDER BY i.id DESC LIMIT 1) AS invoice_id,
+            (SELECT i.invoice_number FROM invoices i WHERE i.user_id = r.user_id AND i.payment_id = r.payment_id
+              ORDER BY i.id DESC LIMIT 1) AS invoice_number,
+            (SELECT i.pdf_path IS NOT NULL FROM invoices i WHERE i.user_id = r.user_id AND i.payment_id = r.payment_id
+              ORDER BY i.id DESC LIMIT 1) AS invoice_ready
+       FROM vehicle_reports r
+      WHERE r.user_id = $1 AND r.reg_no = $2 AND r.valid_until > now()
+      ORDER BY r.id DESC LIMIT 1`, [req.user.id, parsed.regNo]);
+
+  const plan = await billing.reportPlan();
+  await activity.record(req, { action: paid ? 'view_card_paid' : 'view_card', regNo: parsed.regNo });
+  res.json({
+    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() }),
+    report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until, downloadable: Boolean(paid.pdf_path) } : null,
+    invoice: paid?.invoice_id ? { id: String(paid.invoice_id), number: paid.invoice_number, downloadable: Boolean(paid.invoice_ready) } : null,
+    mine: { check_count: Number(mine.check_count || 0), last_checked_at: mine.last_checked_at, watched: mine.watched },
+    ...(await offerFor(req, plan, paid, parsed.regNo)),
+  });
+}));
+
+/**
  * Check any vehicle — the free look.
  *
  * Quota-limited by the same rules as WhatsApp, and never more than the basic

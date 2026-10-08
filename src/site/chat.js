@@ -59,8 +59,11 @@ async function anonCheck(req) {
         AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'`,
     [device, ip]);
   if (used.device >= perDevice || used.ip >= perIp) {
+    // One free look a day by default (migration 140): a second number asks for the sign-in.
     return { status: 429, body: { error: 'sign_in_needed',
-      message: `You have used today's ${perDevice} free checks without signing in. Sign in with your mobile number to keep checking — it takes a few seconds.` } };
+      message: perDevice === 1
+        ? 'To check another vehicle and see full details, please sign in with your mobile number — it takes a few seconds.'
+        : `You have used today's ${perDevice} free checks without signing in. Sign in with your mobile number to keep checking — it takes a few seconds.` } };
   }
 
   const scan = await require('../security/guard').noteVehicleCheck(req, parsed.regNo);

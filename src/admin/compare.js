@@ -21,22 +21,26 @@ const db = require('../db');
 const WEB_PAID = `status = 'paid' AND amount_paise > 0 AND coalesce(raw->>'channel', raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
 
 /* key: [table, time column, filter, aggregate, words] */
+/* Your own visits, sign-ins and purchases are left out (admin/notMe.js, 2026-10-08). */
+const notMe = require('./notMe');
+const NV = notMe.visitor('visitor_id');
+const NU = notMe.user('user_id');
 const METRICS = {
-  visits:          ['events', 'occurred_at', `name = 'session_started' AND channel = 'web'`, 'count(*)', 'Visits'],
-  visitors:        ['events', 'occurred_at', `name = 'session_started' AND channel = 'web'`, 'count(DISTINCT visitor_id)', 'Visitors'],
-  chat_visitors:   ['events', 'occurred_at', `name = 'page_view' AND channel = 'web' AND page LIKE '/chat%'`, 'count(DISTINCT visitor_id)', 'Opened the chat'],
-  codes_requested: ['site_otps', 'created_at', 'true', 'count(*)', 'Sign-in codes asked'],
-  sign_ins:        ['event_log', 'created_at', `kind = 'site_sign_in'`, 'count(*)', 'Sign-ins'],
-  new_customers:   ['users', 'created_at', `signup_channel = 'web'`, 'count(*)', 'New customers'],
-  free_checks:     ['event_log', 'created_at', `kind = 'chat_anon_check'`, 'count(*)', 'Checks before sign-in'],
-  checks:          ['event_log', 'created_at', `kind IN ('vehicle_check', 'vehicle_check_repeat') AND detail->>'channel' = 'web'`, 'count(*)', 'Signed-in checks'],
+  visits:          ['events', 'occurred_at', `name = 'session_started' AND channel = 'web' AND ${NV}`, 'count(*)', 'Visits'],
+  visitors:        ['events', 'occurred_at', `name = 'session_started' AND channel = 'web' AND ${NV}`, 'count(DISTINCT visitor_id)', 'Visitors'],
+  chat_visitors:   ['events', 'occurred_at', `name = 'page_view' AND channel = 'web' AND page LIKE '/chat%' AND ${NV}`, 'count(DISTINCT visitor_id)', 'Opened the chat'],
+  codes_requested: ['site_otps', 'created_at', notMe.mobile('mobile'), 'count(*)', 'Sign-in codes asked'],
+  sign_ins:        ['event_log', 'created_at', `kind = 'site_sign_in' AND ${NU}`, 'count(*)', 'Sign-ins'],
+  new_customers:   ['users', 'created_at', `signup_channel = 'web' AND NOT coalesce(is_internal, false)`, 'count(*)', 'New customers'],
+  free_checks:     ['event_log', 'created_at', `kind = 'chat_anon_check' AND ${notMe.device(`detail->>'device'`)}`, 'count(*)', 'Checks before sign-in'],
+  checks:          ['event_log', 'created_at', `kind IN ('vehicle_check', 'vehicle_check_repeat') AND detail->>'channel' = 'web' AND ${NU}`, 'count(*)', 'Signed-in checks'],
   new_vehicles:    ['vehicles', 'first_seen_at', 'true', 'count(*)', 'New vehicles (all channels)'],
-  checkouts:       ['payments', 'created_at', `coalesce(raw->>'channel', 'whatsapp') = 'web'`, 'count(*)', 'Checkouts opened'],
-  paid:            ['payments', 'paid_at', WEB_PAID, 'count(*)', 'Paid reports'],
-  revenue_paise:   ['payments', 'paid_at', WEB_PAID, 'coalesce(sum(amount_paise), 0)', 'Revenue'],
-  failed_tries:    ['events', 'occurred_at', `name = 'payment_failed'`, 'count(*)', 'Failed payment tries'],
-  reports:         ['vehicle_reports', 'created_at', 'true', 'count(*)', 'Reports made'],
-  emails_sent:     ['customer_emails', 'sent_at', `status = 'sent'`, 'count(*)', 'Customer emails sent'],
+  checkouts:       ['payments', 'created_at', `coalesce(raw->>'channel', 'whatsapp') = 'web' AND ${NU}`, 'count(*)', 'Checkouts opened'],
+  paid:            ['payments', 'paid_at', `${WEB_PAID} AND ${NU}`, 'count(*)', 'Paid reports'],
+  revenue_paise:   ['payments', 'paid_at', `${WEB_PAID} AND ${NU}`, 'coalesce(sum(amount_paise), 0)', 'Revenue'],
+  failed_tries:    ['events', 'occurred_at', `name = 'payment_failed' AND ${NV}`, 'count(*)', 'Failed payment tries'],
+  reports:         ['vehicle_reports', 'created_at', NU, 'count(*)', 'Reports made'],
+  emails_sent:     ['customer_emails', 'sent_at', `status = 'sent' AND ${NU}`, 'count(*)', 'Customer emails sent'],
 };
 const LOWER_IS_BETTER = new Set(['failed_tries']);
 
