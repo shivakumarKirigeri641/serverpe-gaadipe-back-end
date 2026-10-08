@@ -169,31 +169,8 @@ router.post('/hb', express.json({ limit: '2kb' }), async (req, res) => {
   }
 });
 
-/*
- *   POST …/public/users/mirror  { visitor_id, session_id, page, mode, input, items }
- *
- * THE LIVE REPLICA (user, 2026-10-08): the chat's conversation as the visitor
- * sees it, for the admin's visit screen (src/site/mirror.js — memory only).
- * Dropped while monitoring is off for this visit.
- */
-const mirror = require('../site/mirror');
-router.post('/mirror', express.json({ limit: '48kb' }), async (req, res) => {
-  try {
-    const b = req.body || {};
-    if (BOT_UA.test(req.get('user-agent') || '') || !ID_RE.test(String(b.visitor_id || '')) || !ID_RE.test(String(b.session_id || ''))) {
-      return res.json({ m: 'off' });
-    }
-    if (limited(`mr:${b.session_id}`)) return res.json({ m: 'on' });
-    if (await presence.monitoringOff({ sessionId: b.session_id, visitorId: b.visitor_id })) {
-      mirror.forget(b.session_id);
-      return res.json({ m: 'off' });
-    }
-    mirror.put(b.session_id, { visitorId: b.visitor_id, items: b.items, mode: b.mode, page: b.page, input: b.input });
-    res.json({ m: 'on' });
-  } catch (e) {
-    console.error('[track] mirror %s', e.message);
-    res.json({ m: 'on' });
-  }
-});
+/* The live phone replica (/mirror) was removed on 2026-10-08 at the user's
+   request. A page still loaded from before gets "off" and stops sending. */
+router.post('/mirror', (req, res) => res.json({ m: 'off' }));
 
 module.exports = router;

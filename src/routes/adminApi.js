@@ -876,10 +876,6 @@ router.get('/web/sessions/:id', needs('customers.view'), safe(async (req, res) =
 }));
 // Up or down, and by how much — every key number against yesterday, last week and last month (src/admin/compare.js).
 router.get('/web/compare', needs('dashboard.view'), safe(async (req, res) => res.json(await require('../admin/compare').all())));
-// What the visitor sees right now — the chat, as on their phone (src/site/mirror.js).
-router.get('/web/sessions/:id/screen', needs('customers.view'), safe(async (req, res) => {
-  res.json({ screen: require('../site/mirror').get(String(req.params.id).slice(0, 64)) });
-}));
 router.get('/web/customers/:id', needs('customers.view'), safe(async (req, res) => {
   const out = await control.customer(req.params.id);
   if (!refreshing(req)) await auth.audit({ adminId: req.admin.id, action: 'view_customer', ip: ipOf(req), detail: { user_id: String(req.params.id).slice(0, 20) } });

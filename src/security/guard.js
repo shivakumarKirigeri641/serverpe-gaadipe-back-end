@@ -130,6 +130,11 @@ function loopGuard(surface) {
       if (req.method === 'GET' && /\/(session|me|pricing)$/.test(req.path)) return next();   // harmless polling
       // A customer's page reading something (notice, prices, terms) is not a loop (2026-10-07).
       if (surface === 'site' && req.method === 'GET') return next();
+      /* A signed-in admin's screens refresh themselves — the live phone replica
+         every 2 s, the Server log every 3 s, counters and pop-ups (2026-10-08:
+         "loop from 101.0.62.129 … /web/sessions/…/screen, 16 in 30 s"). Reading
+         is not a loop; an admin's writes (POST, PUT, DELETE) are still watched. */
+      if (surface === 'admin' && req.method === 'GET' && req.get('authorization')) return next();
       // Signed out, a visitor is their browser (the tunnel's device key), not their IP —
       // many phones share one address on Indian mobile networks.
       const who = req.get('authorization')
