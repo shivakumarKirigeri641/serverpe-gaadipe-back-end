@@ -861,6 +861,19 @@ router.get('/web/customers', needs('customers.view'), safe(async (req, res) => {
   res.json(out);
 }));
 router.get('/web/free-checks', needs('dashboard.view'), safe(async (req, res) => res.json(await web.freeChecks({ range: req.query.range }))));
+/* Every free-check attempt before sign-in, in full (migration 142): device, IP, session,
+   user agent, place, source, consent words and versions, outcome — refused ones too. */
+router.get('/web/free-checks/audit', needs('dashboard.view'), safe(async (req, res) => {
+  const days = Math.min(90, Math.max(1, Number(req.query.days) || 7));
+  const { rows } = await db.query(
+    `SELECT a.*, u.mobile AS linked_mobile FROM anon_checks a LEFT JOIN users u ON u.id = a.user_id
+      WHERE a.created_at > now() - ($1 || ' days')::interval ORDER BY a.id DESC LIMIT 300`, [String(days)]);
+  const totals = await db.one(
+    `SELECT count(*)::int AS attempts, count(*) FILTER (WHERE outcome = 'shown')::int AS shown,
+            count(*) FILTER (WHERE outcome = 'refused')::int AS refused, count(*) FILTER (WHERE user_id IS NOT NULL)::int AS then_signed_in
+       FROM anon_checks WHERE created_at > now() - ($1 || ' days')::interval`, [String(days)]);
+  res.json({ days, totals, rows: rows.map((r) => ({ ...r, id: String(r.id), user_id: r.user_id ? String(r.user_id) : null })) });
+}));
 router.get('/web/log', needs('customers.view'), safe(async (req, res) => res.json(await web.log({
   range: req.query.range, kind: req.query.kind, q: req.query.q, pages: req.query.pages === '1', limit: req.query.limit }))));
 router.get('/web/emails', needs('dashboard.view'), safe(async (_req, res) => res.json(await web.emails())));

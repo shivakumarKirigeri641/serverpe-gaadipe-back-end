@@ -389,7 +389,7 @@ const EMAILS = [
   ['notify_visits', 'visit', 'Someone opens the website', 'One email per visit: where they came from, phone, place, new or returning, what they tapped'],
   ['notify_sign_ins', 'sign_in', 'Someone signs in on the website', 'New customers are marked 🆕, with where they came from'],
   ['notify_web_checks', 'web_check', 'A vehicle is checked on the website', 'After signing in: new vehicle or repeat, found or not'],
-  ['notify_chat_checks', 'chat_check', 'A free check in the chat', 'Without signing in — can be many a day while ads run'],
+  ['notify_chat_checks', 'free_check', 'A free check before sign-in', 'Full details: vehicle, what was shown, place, IP, device, ids, consent — one per lookup'],
   ['notify_push_on', 'push_on', 'A customer allows notifications', 'On a phone or computer'],
   ['notify_payments', 'payment', 'A payment succeeds', 'With the invoice PDF'],
   ['notify_contact', 'contact', 'A Contact us message', ''],

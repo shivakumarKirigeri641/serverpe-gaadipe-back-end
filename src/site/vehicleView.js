@@ -102,6 +102,34 @@ function basic(data, { detail = 'count' } = {}) {
   };
 }
 
+/*
+ * THE FREE CHECK BEFORE SIGN-IN (user, 2026-10-08): make, model NAME and fuel —
+ * the variant hidden. VAHAN sends model and variant as one text ("SELTOS D1.5
+ * 6AT HTX PLUS", "H/H.SPLENDOR PLUS"), so the first word of the model, after
+ * cleaning a maker prefix like "H/H.", is the name and the rest is hidden.
+ * Two-word names ("SWIFT DZIRE") show their first word only: never more than
+ * meant. Nothing else about the vehicle is in it.
+ */
+function modelName(model) {
+  const words = String(model || '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return { name: null, hidden: false };
+  // "H/H.SPLENDOR" -> "SPLENDOR"; "M/S.XYZ" -> "XYZ".
+  const first = words[0].replace(/^[A-Z0-9]{1,3}\/[A-Z0-9]{1,3}\.?/i, '').replace(/^[^A-Z0-9]+/i, '') || words[0];
+  return { name: first, hidden: words.length > 1 || first !== words[0] };
+}
+
+function identity(data) {
+  const rc = data.rc || {};
+  const m = modelName(rc.model);
+  return {
+    reg_no: data.vehicle_number,
+    paid: false,
+    detail: 'identity',
+    identity: { maker: rc.maker || null, model: m.name, variant_hidden: m.hidden, fuel: rc.fuel || null },
+    checked_at: data.fetched_at || new Date().toISOString(),
+  };
+}
+
 /** The paid view: everything the report holds, with the same masking. */
 function full(data) {
   const rc = data.rc || {};
@@ -201,4 +229,4 @@ const one = (p) => ({
   status: p.sent_to_court || p.sent_to_virtual_court ? 'In court' : (p.status || 'Pending'),
 });
 
-module.exports = { basic, full };
+module.exports = { basic, full, identity, modelName };

@@ -213,36 +213,70 @@ async function visits() {
   return n;
 }
 
+/*
+ * A FREE CHECK BEFORE SIGN-IN, IN FULL (user, 2026-10-08: "a mail when a user
+ * checks without sign-in, with complete and full details"). One email per
+ * lookup — from the audit record (anon_checks, migration 142): the vehicle and
+ * what was shown, where and on what device, the IP, session and ids, where they
+ * came from, and the words they agreed to. Refused attempts (limits, guard) are
+ * not emailed one by one; the email counts them. Switch: notify_chat_checks.
+ */
 async function chatChecks() {
   if (!(await on('notify_chat_checks'))) return 0;
   const { rows } = await db.query(
-    `SELECT e.id, e.created_at, e.detail FROM event_log e
-      WHERE e.kind = 'chat_anon_check' AND e.created_at > now() - interval '1 hour'
-        AND ${notDone('chat_check', 'e.id::text')}
-      ORDER BY e.id LIMIT 30`);
+    `SELECT a.* FROM anon_checks a
+      WHERE a.outcome <> 'refused' AND a.created_at > now() - interval '1 hour'
+        AND ${notDone('free_check', 'a.id::text')}
+      ORDER BY a.id LIMIT 30`).catch(() => ({ rows: [] }));
   let n = 0;
-  for (const e of rows) {
-    const d = e.detail || {};
-    n += await deliver('chat_check', e.id, async () => {
-      const v = d.reg_no ? await db.one(`SELECT maker, model, fuel, vehicle_class FROM vehicles WHERE reg_no = $1`, [d.reg_no]) : null;
-      const sameDevice = d.device ? await db.one(
-        `SELECT count(*)::int AS n FROM event_log WHERE kind = 'chat_anon_check' AND detail->>'device' = $1
-            AND created_at >= (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`, [d.device]) : null;
+  for (const a of rows) {
+    n += await deliver('free_check', a.id, async () => {
+      const d = a.device || {};
+      const p = a.place || {};
+      const s = a.shown || {};
+      const k = a.consent || {};
+      const v = a.reg_no ? await db.one(`SELECT maker, model, fuel, vehicle_class FROM vehicles WHERE reg_no = $1`, [a.reg_no]) : null;
+      const day = await db.one(
+        `SELECT count(*) FILTER (WHERE outcome <> 'refused')::int AS lookups, count(*) FILTER (WHERE outcome = 'refused')::int AS refused,
+                count(*) FILTER (WHERE outcome = 'refused' AND (device_id = $1 OR ip = $2))::int AS refused_same
+           FROM anon_checks WHERE created_at >= (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`,
+        [a.device_id || '', a.ip || '']);
+      const place = [p.city, p.region, p.country].filter(Boolean).join(', ') || 'Not known';
+      const shownLine = a.outcome === 'shown'
+        ? [s.maker, s.model ? `${s.model}${s.variant_hidden ? ' •••' : ''}` : null, s.fuel].filter(Boolean).join(' · ')
+        : a.outcome === 'not_found' ? 'No Government record found' : `Failed (${a.refusal || 'records service'})`;
       return {
-        subject: `${d.found ? '🆓' : '⚠️'} Free chat check · ${d.reg_no || 'vehicle'} · ${d.found ? 'found' : 'not found'}`,
+        subject: `${a.outcome === 'shown' ? '🆓' : '⚠️'} Free check · ${a.reg_no || 'vehicle'} · ${shownLine} · ${p.city || place}`,
         ...T.layout({
-          badge: { text: 'Free check in the chat · not signed in', tone: d.found ? 'info' : 'watch' },
-          title: `Someone checked ${d.reg_no || 'a vehicle'} in the chat`,
-          lead: `${T.ist(e.created_at)} · ${d.found ? 'Basic details shown' : 'Not found, or the records service failed'}. They have not signed in yet.`,
+          badge: { text: 'Free check before sign-in', tone: a.outcome === 'shown' ? 'info' : 'watch' },
+          title: `A visitor checked ${a.reg_no || 'a vehicle'} without signing in`,
+          lead: `${T.ist(a.created_at)} · from ${place} · ${a.source ? `came from ${sourceName(a.source)}` : 'came directly'}. They agreed to the Terms first.`,
+          stats: [['Vehicle', a.reg_no || '—'], ['Shown', a.outcome === 'shown' ? 'Yes' : 'No'], ['Free checks today', String(day?.lookups ?? 0)], ['Refused today', String(day?.refused ?? 0)]],
           sections: [
             { heading: 'Vehicle', rows: [
-              ['Number', d.reg_no], ['RTO', d.reg_no ? await rtoLine(d.reg_no) : null],
-              ['Make · model', v ? [v.maker, v.model].filter(Boolean).join(' · ') : '—'],
-              ['Fuel · type', v ? [v.fuel, v.vehicle_class].filter(Boolean).join(' · ') : '—'],
+              ['Number', a.reg_no], ['RTO', a.reg_no ? await rtoLine(a.reg_no) : null],
+              ['Shown to the visitor', shownLine],
+              ['On record (not shown)', v ? [v.maker, v.model, v.fuel, v.vehicle_class].filter(Boolean).join(' · ') : null],
+              ['Data from', a.data_source], ['Took', a.latency_ms != null ? `${a.latency_ms} ms` : null],
             ] },
-            { heading: 'Visitor', rows: [
-              ['Device', d.device ? `${String(d.device).slice(0, 10)}…` : 'Unknown'],
-              ['Free checks today (this device)', sameDevice ? `${sameDevice.n} of 3` : null],
+            { heading: 'Where and who', rows: [
+              ['Place (from IP)', place], ['IP address', a.ip], ['IP chain', a.ip_chain],
+              ['Came from', [sourceName(a.source || 'direct'), a.campaign].filter(Boolean).join(' · ')], ['Referrer', a.referrer], ['Page', a.page],
+              ['Refused again today (same device or IP)', day?.refused_same ? String(day.refused_same) : null],
+            ] },
+            { heading: 'Device', rows: [
+              ['Device', [d.type, d.vendor, d.model].filter(Boolean).join(' · ')], ['Operating system', [d.os, d.os_version].filter(Boolean).join(' ')],
+              ['Browser', [d.browser, d.browser_version].filter(Boolean).join(' ')], ['Screen · viewport', [d.screen, d.viewport].filter(Boolean).join(' · ')],
+              ['Time zone', d.timezone], ['Languages', d.languages], ['Network', d.connection], ['Platform', d.platform],
+              ['User agent', a.user_agent],
+            ] },
+            { heading: 'Ids', rows: [
+              ['Record', `#${a.id}`], ['Device id', a.device_id], ['Visitor id', a.visitor_id], ['Session id', a.session_id],
+            ] },
+            { heading: 'Consent', rows: [
+              ['Agreed', k.agreed ? `Yes — tapped “Agree & check” (${k.language === 'hi' ? 'Hindi' : 'English'})` : 'No'],
+              ['Words shown', k.words], ['Policy versions', k.versions ? Object.entries(k.versions).map(([x, y]) => `${x} ${y}`).join(' · ') : null],
+              ['Lawful purpose', k.lawful_purpose_confirmed ? 'Confirmed' : null],
             ] },
           ],
           cta: { label: 'Open free checks', url: `${WEBADMIN()}/web/free-checks` },

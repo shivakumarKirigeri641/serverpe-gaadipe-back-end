@@ -7,12 +7,13 @@
  *   history(user, opts)   their GaadiPe WhatsApp conversation, as chat items
  *   summary(user)         "welcome back": vehicles, paid reports, last check
  *
- * THE ANONYMOUS CHECK costs nothing and gives nothing away:
- *   - free sources only (ULIP, then eChallan.app) — never the paid RC backup
- *   - the same basic view a signed-in free check shows (site/vehicleView.basic)
+ * THE ANONYMOUS CHECK (2026-10-08, migration 142) costs nothing and gives little away:
+ *   - "Agree & check" first; every attempt recorded in anon_checks
+ *   - the saved record or ULIP's RC only — no challans, no paid sources
+ *   - make, model name (variant hidden) and fuel only (site/vehicleView.identity)
  *   - the scraping guard, the block list and owner-hidden vehicles, as /check
- *   - at most chat_anon_checks_per_day per device (3) and per address (10)
- * Everything beyond it — the full report, history, alerts — needs a sign-in.
+ *   - 1 per browser and 1 per network address a day, and an hourly site cap
+ * Everything beyond it — the basic view, the full report, history — needs a sign-in.
  *
  * THE HISTORY is shown only to the signed-in owner of the number (they proved
  * it with the SMS code), newest last, a page at a time. It is READ from
@@ -29,11 +30,6 @@ const blocks = require('../admin/blocks');
 
 const hash = (v) => crypto.createHash('sha256').update(String(v || '')).digest('hex').slice(0, 24);
 
-async function freeDetail() {
-  const v = String(await settings.get('free_view_detail', 'count')).toLowerCase();
-  return ['labels', 'count', 'none'].includes(v) ? v : 'count';
-}
-
 /** The basic check for a visitor who has not signed in. */
 async function anonCheck(req) {
   const parsed = plate.parse(req.body?.reg_no);
@@ -47,65 +43,143 @@ async function anonCheck(req) {
       message: 'Please sign in with your mobile number to check a vehicle — it takes a few seconds, and your checks are kept in your account.' } };
   }
 
-  const device = String(req.body?.client?.device_id || req.get('x-gp-device') || '').slice(0, 64);
-  const ip = hash(req.ip);
-  const perDevice = await settings.num('chat_anon_checks_per_day', 3);
-  const perIp = await settings.num('chat_anon_checks_per_day_ip', 10);
+  /*
+   * ONE FREE LOOK, AGREED FIRST, RECORDED IN FULL (user, 2026-10-08, migration 142).
+   *   consent     the visitor tapped "Agree & check" (Terms, Privacy, Refund,
+   *               lawful purpose) — no agreement, no lookup
+   *   device      a browser without its id is refused (simple bots have none)
+   *   limits      1 per browser AND 1 per network address a day, and a cap for
+   *               the whole site per hour; the scraping guard; blocked vehicles
+   *   data        the saved record or ULIP's RC only (ulip_only=1): no challan
+   *               call, no paid backup, no eChallan.app
+   *   shown       make, model name without its variant, fuel (vehicleView.identity)
+   *   recorded    every attempt, refused ones too, in anon_checks: device, IP,
+   *               session, user agent, place, source, consent words and versions
+   */
+  const ctx = require('./device').contextOf(req);
+  const c = (req.body && typeof req.body.client === 'object' && req.body.client) || {};
+  const consentIn = (req.body && typeof req.body.consent === 'object' && req.body.consent) || {};
+  const device = String(ctx.device_id || '').slice(0, 64);
+  const ipHash = hash(req.ip);
+  /* The per-network limit counts an IPv4 address, or an IPv6 /64 block: a phone
+     on IPv6 can take a new address within its block at will, the block it cannot. */
+  const rawIp = String(ctx.ip || '').replace(/^::ffff:/, '');
+  const ipKey = rawIp.includes(':') ? `${rawIp.split(':').slice(0, 4).join(':')}::/64` : rawIp;
+  const visitorId = String(c.visitor_id || '').slice(0, 64) || null;
+  const sessionId = String(c.session_id || '').slice(0, 64) || null;
+  const touch = visitorId ? await db.one(
+    `SELECT first_touch->>'source' AS source, first_touch->>'campaign' AS campaign FROM visitors WHERE visitor_id = $1`, [visitorId]).catch(() => null) : null;
+
+  const { policyVersions } = require('../pay/consent');
+  const consent = consentIn.agreed === true ? {
+    agreed: true, method: 'agree_and_check_button',
+    words: String(consentIn.words || '').slice(0, 1200) || null,
+    language: consentIn.language === 'hi' ? 'hi' : 'en',
+    lawful_purpose_confirmed: true,
+    documents: ['terms', 'privacy', 'refund'],
+    versions: await policyVersions().catch(() => null),
+    free_check_terms_version: '1.0',
+    at: new Date().toISOString(),
+  } : null;
+
+  // Every attempt leaves a row — what was asked, by whom, and what happened.
+  const audit = (fields) => db.query(
+    `INSERT INTO anon_checks (reg_no, outcome, refusal, data_source, latency_ms, shown, device_id, visitor_id, session_id,
+                              ip, ip_chain, user_agent, device, place, referrer, page, source, campaign, consent, ip_key)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+    [parsed.regNo, fields.outcome, fields.refusal || null, fields.data_source || null, fields.latency_ms ?? null,
+     fields.shown ? JSON.stringify(fields.shown) : null, device || null, visitorId, sessionId,
+     ctx.ip || null, ctx.ip_chain || null, ctx.user_agent || null,
+     JSON.stringify({ type: ctx.device_type, vendor: ctx.device_vendor, model: ctx.device_model, os: ctx.os, os_version: ctx.os_version,
+       browser: ctx.browser, browser_version: ctx.browser_version, screen: ctx.screen, viewport: ctx.viewport, timezone: ctx.timezone,
+       languages: ctx.languages, platform: ctx.platform, connection: String(c.connection || '').slice(0, 60) || null,
+       touch_points: c.touch_points ?? null, cpu_cores: c.cpu_cores ?? null, memory_gb: c.memory_gb ?? null }),
+     JSON.stringify({ city: ctx.city, region: ctx.region, country: ctx.country }),
+     String(c.referrer || '').slice(0, 300) || null, String(c.page || '').slice(0, 200) || null,
+     touch?.source || null, touch?.campaign || null, consent ? JSON.stringify(consent) : null, ipKey || null])
+    .then((r) => r.rows[0]?.id).catch((e) => { console.error('[chat] anon_checks:', e.message); return null; });
+
+  const SIGN_IN = 'You have used today’s free check. Sign in with your mobile number to check more vehicles — it is free and takes a few seconds.';
+  const refuse = async (refusal, status, body) => { await audit({ outcome: 'refused', refusal }); return { status, body }; };
+
+  if (!consent) {
+    return refuse('no_consent', 400, { error: 'consent_required',
+      message: 'Please tap “Agree & check” to agree to the Terms, Privacy policy and Refund policy first.' });
+  }
+  if (!device) return refuse('no_device_id', 403, { error: 'sign_in_needed', message: SIGN_IN });
+
+  const perDevice = await settings.num('chat_anon_checks_per_day', 1);
+  const perIp = await settings.num('chat_anon_checks_per_day_ip', 1);
+  const perHour = await settings.num('chat_anon_checks_per_hour', 60);
   const used = await db.one(
-    `SELECT count(*) FILTER (WHERE $1 <> '' AND detail->>'device' = $1)::int AS device,
-            count(*) FILTER (WHERE detail->>'ip' = $2)::int AS ip
-       FROM event_log
-      WHERE kind = 'chat_anon_check'
-        AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'`,
-    [device, ip]);
-  if (used.device >= perDevice || used.ip >= perIp) {
-    // One free look a day by default (migration 140): a second number asks for the sign-in.
-    return { status: 429, body: { error: 'sign_in_needed',
-      message: perDevice === 1
-        ? 'To check another vehicle and see full details, please sign in with your mobile number — it takes a few seconds.'
-        : `You have used today's ${perDevice} free checks without signing in. Sign in with your mobile number to keep checking — it takes a few seconds.` } };
+    `SELECT count(*) FILTER (WHERE device_id = $1 AND created_at > ${TODAY})::int AS device,
+            count(*) FILTER (WHERE ip_key = $2 AND created_at > ${TODAY})::int AS ip,
+            count(*) FILTER (WHERE created_at > now() - interval '1 hour')::int AS hour
+       FROM anon_checks
+      WHERE outcome <> 'refused' AND created_at > now() - interval '1 day'`,
+    [device, ipKey || '']);
+  if (used.device >= perDevice) return refuse('daily_limit_device', 429, { error: 'sign_in_needed', message: SIGN_IN });
+  if (used.ip >= perIp) return refuse('daily_limit_ip', 429, { error: 'sign_in_needed', message: SIGN_IN });
+  if (used.hour >= perHour) {
+    return refuse('hourly_site_cap', 429, { error: 'sign_in_needed',
+      message: 'Free checks are busy right now. Sign in with your mobile number to check this vehicle — it is free.' });
   }
 
   const scan = await require('../security/guard').noteVehicleCheck(req, parsed.regNo);
   if (!scan.ok) {
-    return { status: 429, body: { error: 'too_many_vehicles',
-      message: 'That is a lot of vehicles in a short time. Please try again in an hour.' } };
+    return refuse('scraping_guard', 429, { error: 'too_many_vehicles',
+      message: 'That is a lot of vehicles in a short time. Please try again in an hour.' });
   }
   if (await blocks.isBlocked('vehicle', parsed.regNo)
       || await require('../owners/verify').hiddenFrom(null, parsed.regNo)) {
-    return { status: 403, body: { error: 'blocked',
-      message: 'This vehicle cannot be checked here. If it is yours, please write to support@gaadipe.in.' } };
+    return refuse('vehicle_blocked', 403, { error: 'blocked',
+      message: 'This vehicle cannot be checked here. If it is yours, please write to support@gaadipe.in.' });
   }
 
-  // Free sources only: an anonymous visitor never costs an IDSPay call.
-  // The same rule as every free check (rc_backup_paid_only): ULIP, eChallan.app, and IDSPay only if switched on for free checks.
-  const data = await gateway.full(parsed.regNo, await require('../vehicle/rcBackup').freeOpts());
-  /* KEPT LIKE EVERY OTHER CHECK (2026-10-07: "the mail said make & model '-'"). A
-     free check never saved the vehicle, so the admin email, the Vehicle Explorer
-     and the API cost knew nothing of it. Saved before the event, which the email reads. */
+  const started = Date.now();
+  const data = await gateway.rc(parsed.regNo, { ulip_only: 1 });
+  const latency = Date.now() - started;
+  // Kept like every other check, so the admin email and the Vehicle Explorer know the vehicle.
   if (data?.success) {
     await require('../vehicle/store').record(null, data)
       .catch((e) => console.error('[chat] could not save %s: %s', parsed.regNo, e.message));
   }
+  const shown = data?.success ? view.identity(data) : null;
+  const dataSource = data?.success ? (data.cached ? 'saved record' : 'ULIP') : null;
+  await audit({ outcome: data?.success ? 'shown' : data?.error === 'vehicle_not_found' ? 'not_found' : 'failed',
+    refusal: data?.success ? null : String(data?.error || 'failed').slice(0, 80),
+    data_source: dataSource, latency_ms: latency, shown: shown?.identity || null });
+  // The admin's email and the Free checks screen read this (notify.js, admin/web.js).
   await db.query(`INSERT INTO event_log (kind, detail) VALUES ('chat_anon_check', $1)`,
-    [JSON.stringify({ device, ip, reg_no: parsed.regNo, found: data?.success === true, ...(data?.success ? {} : { error: data?.error || 'failed' }) })]).catch(() => {});
-  require('../util/activity').log('🔍', `Vehicle checked before sign-in · ${parsed.regNo} · ${data?.success ? 'found' : `not shown (${String(data?.error || 'failed').replace(/_/g, ' ')})`}`,
-    { who: 'a visitor (not signed in)' });
+    [JSON.stringify({ device, ip: ipHash, reg_no: parsed.regNo, found: data?.success === true, ...(data?.success ? {} : { error: data?.error || 'failed' }) })]).catch(() => {});
+  require('../util/activity').log('🔍', `Free check before sign-in · ${parsed.regNo} · ${data?.success ? `shown (${[shown.identity.maker, shown.identity.model].filter(Boolean).join(' ')})` : `not shown (${String(data?.error || 'failed').replace(/_/g, ' ')})`}`,
+    { who: `a visitor (not signed in) · ${[ctx.city, ctx.region].filter(Boolean).join(', ') || 'place unknown'}` });
 
   if (!data?.success) {
-    return { status: data?.error === 'vehicle_not_found' ? 404 : 503, body: {
+    return { status: data?.error === 'vehicle_not_found' || data?.error === 'not_found' ? 404 : 503, body: {
       error: data?.error || 'unavailable',
-      message: data?.error === 'vehicle_not_found'
-        ? `No Government record was found for ${parsed.regNo}. Very new vehicles can take a few weeks to appear.`
+      message: data?.error === 'vehicle_not_found' || data?.error === 'not_found'
+        ? `No Government record was found for ${parsed.regNo}. Please check the number — very new vehicles can take a few weeks to appear.`
         : 'The Government vehicle records server is slow right now. Please try again in a little while.',
     } };
   }
   const plan = await require('../pay/billing').reportPlan();
-  return { status: 200, body: {
-    vehicle: view.basic(data, { detail: await freeDetail() }),
-    price_paise: plan?.price_paise ?? null,
-    left_today: Math.max(0, perDevice - used.device - 1),
-  } };
+  return { status: 200, body: { vehicle: shown, price_paise: plan?.price_paise ?? null, left_today: 0 } };
+}
+
+/** Today in India, as an SQL expression. */
+const TODAY = `(date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`;
+
+/*
+ * A free check made before signing in belongs to the person who then signs in on
+ * the same browser (user, 2026-10-08): "checked KA… free, then signed in".
+ */
+async function linkAnonChecks(userId, deviceId) {
+  if (!userId || !deviceId) return;
+  await db.query(
+    `UPDATE anon_checks SET user_id = $1, linked_at = now()
+      WHERE device_id = $2 AND user_id IS NULL AND created_at > now() - interval '30 days'`,
+    [userId, String(deviceId).slice(0, 64)]).catch(() => {});
 }
 
 /* ─────────────────────────────────────────── the WhatsApp history ── */
@@ -208,4 +282,4 @@ async function summary(user) {
   };
 }
 
-module.exports = { anonCheck, history, summary, _test: { toItem } };
+module.exports = { anonCheck, linkAnonChecks, history, summary, _test: { toItem } };

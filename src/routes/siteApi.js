@@ -286,6 +286,8 @@ router.post('/session/verify', safe(async (req, res) => {
       `UPDATE visitors SET user_id = $2, mobile = $3 WHERE visitor_id = $1 AND user_id IS NULL`,
       [vid, out.user.id, String(out.user.mobile || '').slice(-10) || null]).catch(() => {});
   }
+  // A free check made on this browser before signing in now belongs to this account (migration 142).
+  if (out.user?.id) require('../site/chat').linkAnonChecks(out.user.id, req.body?.client?.device_id).catch(() => {});
   res.json(out);
 }));
 
