@@ -79,7 +79,7 @@ const { gate, loopGuard } = require('./security/guard');
 const { tunnel } = require('./security/tunnel');
 // Files come back as files, not through the encrypted tunnel: report and
 // invoice PDFs, the backup, and the CSV exports (command center phase 3).
-const fileRoute = (req) => /^\/((reports|invoices)\/[^/]+\/file|reports\/[^/]+\/admin-view|owner-photos\/\d+\/photo|maintenance\/backup|export\/[a-z_]+(\.csv)?|exports\/\d+\/file|fleets\/\d+\/excel)$/.test(req.path);
+const fileRoute = (req) => /^\/((reports|invoices)\/[^/]+\/file|reports\/[^/]+\/admin-view|owner-photos\/\d+\/photo|maintenance\/backup|export\/[a-z_]+(\.csv)?|exports\/\d+\/file|fleets\/\d+\/excel|customers\/\d+\/excel)$/.test(req.path);
 
 app.use('/admin/api', cors(config.admin.origins), gate('admin'),
   tunnel('admin', { exempt: fileRoute, stream: (req, res, write) => require('./admin/stream').handle(req, res, write) }),

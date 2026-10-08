@@ -28,6 +28,7 @@
     "express": "^4.21.2",
     "geoip-lite": "^1.4.10",
     "imapflow": "^1.7.8",
+    "jszip": "^3.10.2",
     "mailparser": "^3.9.34",
     "nodemailer": "^6.10.1",
     "pdfkit": "^0.20.2",

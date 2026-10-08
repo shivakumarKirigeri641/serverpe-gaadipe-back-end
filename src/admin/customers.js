@@ -37,6 +37,20 @@ const SESSION_COLS = `
        WHEN s.ended_at IS NULL THEN 'idle'
        ELSE coalesce(s.ended_reason, 'ended') END AS state`;
 
+/*
+ * THE AGREEMENT BEHIND A SIGN-IN (user, 2026-10-08: "show the accepted terms and
+ * policies with date and time on every sign-in"). Each sign-in writes a
+ * consent_accepted record (site/auth.js) in the same moment: the documents,
+ * their versions, the time and the IP. Joined as `consent_at` and `consent`.
+ *   CONSENT_OF('s.user_id', 's.created_at')  a LEFT JOIN LATERAL, alias c
+ */
+const CONSENT_OF = (userCol, atCol) => `
+  LEFT JOIN LATERAL (
+    SELECT c.created_at AS consent_at, c.detail AS consent FROM event_log c
+     WHERE c.kind = 'consent_accepted' AND c.user_id = ${userCol}
+       AND c.created_at BETWEEN ${atCol} - interval '2 minutes' AND ${atCol} + interval '2 minutes'
+     ORDER BY abs(extract(epoch FROM c.created_at - ${atCol})) LIMIT 1) c ON true`;
+
 const SORTS = {
   last_seen: 'u.last_seen_at DESC NULLS LAST',
   joined: 'u.created_at DESC',
@@ -395,12 +409,15 @@ async function detail(userId) {
           ORDER BY id DESC`, [userId]),
       // Every sign-in step for this person, by account or by the number typed.
       db.query(
-        `SELECT * FROM site_sign_ins WHERE user_id = $1 OR mobile = $2
-          ORDER BY id DESC LIMIT 500`, [userId, user.mobile]),
+        `SELECT g.*, c.consent_at, c.consent FROM site_sign_ins g
+           ${CONSENT_OF("CASE WHEN g.event = 'signed_in' THEN g.user_id END", 'g.created_at')}
+          WHERE g.user_id = $1 OR g.mobile = $2
+          ORDER BY g.id DESC LIMIT 500`, [userId, user.mobile]),
       db.query(
         `SELECT ${SESSION_COLS}, g.city, g.region, g.country, g.device_model, g.device_vendor,
-                g.device_type, g.os, g.os_version, g.browser, g.browser_version
+                g.device_type, g.os, g.os_version, g.browser, g.browser_version, c.consent_at, c.consent
            FROM site_sessions s LEFT JOIN site_sign_ins g ON g.id = s.sign_in_id
+           ${CONSENT_OF('s.user_id', 's.created_at')}
           WHERE s.user_id = $1 ORDER BY s.id DESC LIMIT 500`, [userId]),
     ]);
 
@@ -481,4 +498,4 @@ function summarise(rows) {
   };
 }
 
-module.exports = { list, detail, setPaused, SORTS, SESSION_COLS, sessionOut, summarise };
+module.exports = { list, detail, setPaused, SORTS, SESSION_COLS, CONSENT_OF, sessionOut, summarise };

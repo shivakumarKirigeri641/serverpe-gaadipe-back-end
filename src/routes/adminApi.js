@@ -676,8 +676,9 @@ router.get('/sign-ins', safe(async (req, res) => {
   const q = String(req.query.q || '').trim();
   const term = q ? `%${q.replace(/[%_]/g, '')}%` : '';
   const { rows } = await db.query(
-    `SELECT s.*, u.display_name, u.wa_profile_name, count(*) OVER () AS total_rows
+    `SELECT s.*, u.display_name, u.wa_profile_name, c.consent_at, c.consent, count(*) OVER () AS total_rows
        FROM site_sign_ins s LEFT JOIN users u ON u.id = s.user_id
+       ${customers.CONSENT_OF("CASE WHEN s.event = 'signed_in' THEN s.user_id END", 's.created_at')}
       WHERE ($1 = '' OR s.event = $1)
         AND ($2 = '' OR s.mobile ILIKE $2 OR s.ip ILIKE $2 OR s.device_id ILIKE $2
              OR s.device_model ILIKE $2 OR s.browser ILIKE $2 OR s.os ILIKE $2 OR s.city ILIKE $2)
@@ -717,11 +718,12 @@ router.get('/sessions', safe(async (req, res) => {
     `SELECT * FROM (
        SELECT ${customers.SESSION_COLS}, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
               g.city, g.region, g.country, g.device_model, g.device_vendor, g.device_type,
-              g.os, g.os_version, g.browser, g.browser_version,
+              g.os, g.os_version, g.browser, g.browser_version, c.consent_at, c.consent,
               count(*) OVER () AS total_rows
          FROM site_sessions s
          JOIN users u ON u.id = s.user_id
          LEFT JOIN site_sign_ins g ON g.id = s.sign_in_id
+         ${customers.CONSENT_OF('s.user_id', 's.created_at')}
         WHERE ($1 = '' OR u.mobile ILIKE $1 OR u.display_name ILIKE $1 OR u.wa_profile_name ILIKE $1
                OR s.ip ILIKE $1 OR s.device_id ILIKE $1)
      ) x
@@ -771,6 +773,25 @@ router.get('/customers', safe(async (req, res) => {
     paying: bool(req.query.paying),
     segment: req.query.segment || null,
   }));
+}));
+
+/*
+ * ONE CUSTOMER IN EXCEL (user, 2026-10-08): profile, vehicles, checks, reports,
+ * payments, every sign-in with its device and agreement, sessions, visits,
+ * agreements, the event trail, and charts (admin/customerExport.js). Personal
+ * details are unmasked only for roles with 'pii'. Every export is audited.
+ */
+router.get('/customers/:id/excel', needs('customers.view'), safe(async (req, res) => {
+  if (!/^\d+$/.test(String(req.params.id))) return res.status(400).json({ error: 'bad_id', message: 'No such customer.' });
+  const pii = auth.can(req.admin.role, 'pii');
+  const out = await require('../admin/customerExport').build(req.params.id, { pii });
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'No such customer.' });
+  await auth.audit({ adminId: req.admin.id, action: 'export_customer_excel', ip: ipOf(req),
+                     detail: { user_id: out.user.id, masked: !pii } });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${out.fileName}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.end(out.buffer);
 }));
 
 router.get('/customers/:id', safe(async (req, res) => {
