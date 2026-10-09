@@ -518,7 +518,7 @@ async function lifecycle() {
  * as above). Run first with dryRun: true to see who would get it:
  *   node -e "require('./src/jobs/watch').dailyStatus({ everyone: true, dryRun: true }).then(r=>{console.log(r);process.exit(0)})"
  */
-async function dailyStatus({ mobile = null, everyone = false, dryRun = false } = {}) {
+async function dailyStatus({ mobile = null, everyone = false, dryRun = false, gapMs = 0, onEach = null } = {}) {
   const byHand = Boolean(mobile || everyone);
   if (!byHand && !await settings.bool('watch_daily_status_enabled', false)) return { sent: 0 };
   const from = await settings.num('alert_send_hour_ist', 19);
@@ -579,12 +579,17 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false } =
   }
 
   let sent = 0;
+  let n = 0;
   for (const [userId, list] of people) {
+    // A pause between customers when sent by hand (the launch update: 5 s).
+    if (gapMs > 0 && n > 0) await new Promise((r) => setTimeout(r, gapMs));
+    n += 1;
     // Claimed first, so two passes in the same minute cannot both send.
     const claim = await db.one(
       `INSERT INTO event_log (user_id, kind, detail)
        SELECT $1, 'watch_status', $2
-        WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE user_id = $1 AND kind = 'watch_status' AND detail->>'ist_date' = $3)
+        WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE user_id = $1 AND kind = 'watch_status' AND detail->>'ist_date' = $3
+                            AND coalesce(detail->>'failed', 'false') <> 'true')
        RETURNING id`, [userId, JSON.stringify({ ist_date: today, vehicles: list.map((w) => w.reg_no) }), today]);
     if (!claim) continue;
 
@@ -622,6 +627,8 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false } =
         [claim.id, JSON.stringify({ failed: true, error: String(out?.error || '').slice(0, 300) })]);
       console.warn('[watch] daily status to user %s failed: %s', userId, out?.error);
     }
+    // Sent by hand: report each one; returning false stops the run (scripts/launch-update.js).
+    if (onEach && (await onEach({ n, of: people.size, mobile: first.mobile, vehicles: list.map((w) => w.reg_no), out })) === false) break;
   }
   if (sent) console.log('[watch] daily all-clear sent to %d customer(s)', sent);
   return { sent };
