@@ -211,14 +211,133 @@ const KPIS = [
   ['net_paise', 'Net contribution', 'Website revenue after GST, the payment gateway fee and its GST, SMS and the API cost.', { money: true }],
 ];
 
+/* ─────────────────────────── the WhatsApp admin ─────────────────────────── */
+
+/*
+ * WHATSAPP ONLY (user, 2026-10-09: "no webadmin concepts/contents in the
+ * WhatsApp admin"). The main admin sends X-View: whatsapp (admin/consented.js);
+ * it then sees WhatsApp's own figures — never a website visit, sign-in or
+ * website payment. People count only once they agreed to the Terms on
+ * WhatsApp (and never said STOP). The web admin keeps the website figures above.
+ */
+const waView = () => require('./consented').view.getStore()?.whatsappOnly === true;
+const WA_CHECK = `(kind IN ('vehicle_check', 'vehicle_check_repeat') AND coalesce(detail->>'channel', 'whatsapp') = 'whatsapp')`;
+const WHO = `coalesce(e.mobile, u.mobile)`;
+const WA_PERSON = () => `${WHO} IS NOT NULL AND e.channel <> 'web' AND ${require('./consented').agreedSql(WHO)}
+  AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.id = e.payment_id AND ${WEB_PAY})`;
+const WA_EVENTS = `
+  count(DISTINCT ${WHO}) FILTER (WHERE e.name = 'terms_accepted')                         AS agreed,
+  count(DISTINCT ${WHO}) FILTER (WHERE e.name = 'whatsapp_message_received')              AS chatting,
+  count(*) FILTER (WHERE e.name = 'payment_started')                                     AS pay_started`;
+
+async function waTotals(from, to) {
+  const [ev, ck, rp, api, money] = await Promise.all([
+    db.one(`SELECT ${WA_EVENTS} FROM events e LEFT JOIN users u ON u.id = e.user_id
+             WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND ${WA_PERSON()}`, [from, to]),
+    db.one(`SELECT count(*) AS searches,
+                   count(*) FILTER (WHERE coalesce(detail->>'found', 'true') <> 'false') AS retrieved
+              FROM event_log WHERE created_at >= $1 AND created_at < $2 AND ${WA_CHECK}`, [from, to]),
+    db.one(`SELECT count(*)::int AS reports FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
+             WHERE r.created_at >= $1 AND r.created_at < $2 AND NOT ${WEB_PAY}`, [from, to]),
+    db.one(`SELECT count(*)::int AS api_calls FROM api_calls WHERE created_at >= $1 AND created_at < $2`, [from, to]),
+    ledger.periodMoney(from, to, null, { channel: 'whatsapp' }),
+  ]);
+  const n = Object.fromEntries(Object.entries({ ...ev, ...ck, ...rp }).map(([k, v]) => [k, Number(v || 0)]));
+  return {
+    ...n,
+    paid: money.payments, revenue_paise: money.gross_paise, api_cost_paise: money.api_cost_total_paise,
+    api_calls: api.api_calls, gst_paise: money.gst_paise, gateway_paise: money.gateway_paise,
+    messaging_paise: money.messaging_paise, refund_paise: money.refund_paise, net_paise: money.net_paise,
+  };
+}
+
+async function waSeries(from, to, step) {
+  const { rows } = await db.query(
+    `WITH b AS (
+       SELECT t, t + $3::interval AS t2 FROM generate_series($1::timestamptz, $2::timestamptz - interval '1 second', $3::interval) t
+     )
+     SELECT b.t, to_char(b.t AT TIME ZONE 'Asia/Kolkata', $4) AS label,
+            (SELECT row_to_json(x) FROM (SELECT ${WA_EVENTS} FROM events e LEFT JOIN users u ON u.id = e.user_id
+               WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2 AND ${WA_PERSON()}) x) AS ev,
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WA_CHECK}) AS searches,
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WA_CHECK}
+                AND coalesce(detail->>'found', 'true') <> 'false') AS retrieved,
+            (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
+              WHERE r.created_at >= b.t AND r.created_at < b.t2 AND NOT ${WEB_PAY}) AS reports,
+            (SELECT coalesce(sum(cost_paise), 0) FROM api_calls a WHERE a.created_at >= b.t AND a.created_at < b.t2) AS api_cost_paise
+       FROM b ORDER BY b.t`,
+    [from, to, step === 'hour' ? '1 hour' : '1 day', step === 'hour' ? 'HH24:00' : 'DD Mon']);
+  const { rows: all } = await ledger.entries({ from, to });
+  const pays = all.filter((p) => p.channel === 'whatsapp');
+  return rows.map((r) => {
+    const n = { label: r.label, t: r.t, ...Object.fromEntries(Object.entries({ ...(r.ev || {}), searches: r.searches, retrieved: r.retrieved, reports: r.reports, api_cost_paise: r.api_cost_paise })
+      .map(([k, v]) => [k, Number(v || 0)])) };
+    const t0 = new Date(r.t).getTime(); const t1 = t0 + (step === 'hour' ? 3600e3 : 86400e3);
+    const mine = pays.filter((p) => { const at = new Date(p.paid_at || p.created_at).getTime(); return at >= t0 && at < t1; });
+    const kept = mine.reduce((a, p) => a + p.net_revenue_paise - p.gateway_fee_paise - p.gateway_gst_paise, 0);
+    const paidRows = mine.filter((p) => p.status === 'paid' || p.paid_at);
+    return { ...n, paid: paidRows.length, revenue_paise: paidRows.reduce((a, p) => a + (p.gross_paise ?? p.amount_paise ?? 0), 0),
+      net_paise: kept - n.api_cost_paise };
+  });
+}
+
+const WA_KPIS = [
+  ['agreed', 'New customers', 'People who agreed to the Terms on WhatsApp ("Agree & continue").', { drill: 'terms_accepted' }],
+  ['chatting', 'Active on WhatsApp', 'Different customers (who agreed) who messaged GaadiPe.', { drill: 'whatsapp_message_received' }],
+  ['searches', 'Vehicle checks', 'Vehicle numbers checked on WhatsApp.', { drill: 'searches' }],
+  ['retrieved', 'Vehicle details shown', 'Checks that found the vehicle and showed its details.', { drill: 'vehicle_search_success' }],
+  ['pay_started', 'Payment links sent', 'Full-report payment links sent on WhatsApp.', { drill: 'payment_started' }],
+  ['paid', 'Successful payments', 'WhatsApp payments that completed.', { drill: 'payment_success' }],
+  ['revenue_paise', 'Revenue', 'Money received from WhatsApp customers, GST included.', { money: true, drill: 'payment_success' }],
+  ['reports', 'Reports generated', 'Full reports (PDF) produced for WhatsApp payments.', { drill: 'report_delivered' }],
+  ['api_cost_paise', 'API cost', 'What the Government-records calls cost, from api_calls.', { money: true, worse_up: true, drill: 'api' }],
+  ['net_paise', 'Net contribution', 'WhatsApp revenue after GST, the payment gateway fee and its GST, WhatsApp messages and the API cost.', { money: true }],
+];
+
+/* The WhatsApp journey: different customers (who agreed) reaching each step in the period. */
+const WA_STAGES = [
+  ['agreed', 'Agreed to the Terms', 'terms_accepted'], ['searched', 'Sent a vehicle number', 'whatsapp_vehicle_received'],
+  ['saw', 'Saw the vehicle', 'vehicle_search_success'], ['cta', 'Tapped Full report', 'report_preview_viewed'],
+  ['pay_started', 'Payment link sent', 'payment_started'], ['paid', 'Payment completed', 'payment_success'],
+  ['report', 'Report delivered', 'report_delivered'],
+];
+
+async function waStageCounts(from, to) {
+  const row = await db.one(
+    `SELECT ${WA_STAGES.map(([key, , name]) => `count(DISTINCT ${WHO}) FILTER (WHERE e.name = '${name}') AS ${key}`).join(',\n')}
+       FROM events e LEFT JOIN users u ON u.id = e.user_id
+      WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND ${WA_PERSON()}`, [from, to]);
+  return row;
+}
+
+async function waFunnel(r) {
+  const [cur, prev] = await Promise.all([
+    waStageCounts(r.from, r.to),
+    r.prevFrom ? waStageCounts(r.prevFrom, r.prevTo) : null,
+  ]);
+  let last = null; let lastLabel = null;
+  return WA_STAGES.map(([key, label, name]) => {
+    const n = Number(cur[key] || 0);
+    const base = last; const baseLabel = lastLabel;
+    if (n) { last = n; lastLabel = label; }
+    return {
+      key, label, n, previous: prev ? Number(prev[key] || 0) : null, unavailable: null,
+      conversion_pct: !base ? null : Math.round((n / base) * 1000) / 10,
+      drop_pct: !base ? null : Math.max(0, Math.round(((base - n) / base) * 1000) / 10),
+      from_stage: base ? baseLabel : null, drill: name,
+    };
+  });
+}
+
 async function overview(q = {}) {
   const r = resolve(q);
+  const wa = waView();
   const [cur, prev, spark] = await Promise.all([
-    totals(r.from, r.to),
-    r.prevFrom ? totals(r.prevFrom, r.prevTo) : null,
-    series(r.from, r.to, r.step),
+    wa ? waTotals(r.from, r.to) : totals(r.from, r.to),
+    r.prevFrom ? (wa ? waTotals(r.prevFrom, r.prevTo) : totals(r.prevFrom, r.prevTo)) : null,
+    wa ? waSeries(r.from, r.to, r.step) : series(r.from, r.to, r.step),
   ]);
-  const kpis = KPIS.map(([key, label, note, o]) => {
+  const kpis = (wa ? WA_KPIS : KPIS).map(([key, label, note, o]) => {
     const now = cur[key]; const before = prev ? prev[key] : null;
     return {
       key, label, note, money: !!o.money, worse_up: !!o.worse_up, drill: o.drill || null,
@@ -238,7 +357,7 @@ async function overview(q = {}) {
       previous_net_paise: prev ? prev.net_paise : null,
     },
     labels: spark.map((s) => s.label),
-    funnel: await funnel(r),
+    funnel: wa ? await waFunnel(r) : await funnel(r),
     at: new Date().toISOString(),
   };
 }
@@ -309,7 +428,9 @@ async function live({ since = null } = {}) {
         WHERE ($1::bigint IS NULL OR e.id > $1::bigint)
           -- Every page view would drown the rest; the visit start stands for them.
           AND e.name <> 'page_view'
-        ORDER BY e.id DESC LIMIT 40`, [sinceId]),
+          -- The WhatsApp admin: nothing from the website.
+          AND ($2::boolean IS NOT TRUE OR e.channel <> 'web')
+        ORDER BY e.id DESC LIMIT 40`, [sinceId, waView()]),
     db.one(
       `SELECT
          count(DISTINCT visitor_id) FILTER (WHERE channel = 'web' AND occurred_at > now() - interval '5 minutes')::int  AS on_site,
@@ -327,14 +448,15 @@ async function live({ since = null } = {}) {
    * the web admin the website's. A WhatsApp check is saved without a channel.
    */
   const consented = require('./consented');
-  const waView = consented.view.getStore()?.whatsappOnly === true;
-  const WA_CHECK = `(kind IN ('vehicle_check', 'vehicle_check_repeat') AND coalesce(detail->>'channel', 'whatsapp') = 'whatsapp')`;
+  const wa = waView();
+  if (wa) delete now.on_site;   // website visitors: not in the WhatsApp admin
   const web = await db.one(
-    `SELECT count(*) FILTER (WHERE ${waView ? WA_CHECK : WEB_CHECK})::int AS searches,
+    `SELECT count(*) FILTER (WHERE ${wa ? WA_CHECK : WEB_CHECK})::int AS searches,
             count(DISTINCT detail->>'mobile') FILTER (WHERE kind = 'site_sign_in')::int AS signing_in
        FROM event_log WHERE created_at > now() - interval '15 minutes'
         AND kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat', 'site_sign_in')`);
-  now.searches = web.searches; now.signing_in = web.signing_in;
+  now.searches = web.searches;
+  if (!wa) now.signing_in = web.signing_in;
   // "Chatting": people who wrote on WhatsApp in the last 15 minutes — only those who agreed (and never STOP).
   now.chatting = (await db.one(
     `SELECT count(*)::int AS n FROM whatsapp_sessions s
@@ -380,6 +502,7 @@ async function drill({ what, range, from, to, compare, previous = false, limit =
        FROM events e LEFT JOIN users u ON u.id = e.user_id
       WHERE e.occurred_at >= $1 AND e.occurred_at < $2
         AND (${sel.web ? `e.channel = 'web'` : `e.name = ANY($3::text[])`})
+        ${waView() ? `AND ${WA_PERSON()}` : ''}
       ORDER BY e.occurred_at DESC LIMIT $4`,
     sel.web ? [a, b, [], Math.min(1000, limit)] : [a, b, sel.names, Math.min(1000, limit)]);
   return {

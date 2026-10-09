@@ -197,6 +197,8 @@ function whereOf(q, admin, args) {
   for (const k of ['maker', 'model', 'fuel']) if (q[k]) w.push(`x.${k} ILIKE ${bind(`%${String(q[k]).trim()}%`)}`);
   if (q.vclass) w.push(`(x.vehicle_class ILIKE ${bind(`%${String(q.vclass).trim()}%`)} OR x.category ILIKE $${args.length})`);
 
+  // The WhatsApp admin (X-View: whatsapp, 2026-10-09): never a vehicle only ever checked on the website.
+  if (require('./consented').view.getStore()?.whatsappOnly) w.push('NOT (x.web_lookups > 0 AND x.wa_lookups = 0)');
   if (q.channel === 'whatsapp') w.push('x.wa_lookups > 0');
   if (q.channel === 'web') w.push(`(x.web_lookups > 0 OR x.reg_no IN (SELECT reg_no FROM vehicle_reports WHERE channel = 'web'))`);
   if (q.paid === 'yes') w.push('x.paid > 0');

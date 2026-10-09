@@ -224,7 +224,9 @@ async function periodMoney(from, to, prefetched, { channel = null } = {}) {
      channel 'website' keeps the website's payments and leaves WhatsApp's
      template messages out of the costs. */
   const webOnly = channel === 'website';
-  const rows = webOnly ? got.rows.filter((r) => r.channel === 'website') : got.rows;
+  // And WhatsApp only, for the WhatsApp admin (user, 2026-10-09).
+  const rows = webOnly ? got.rows.filter((r) => r.channel === 'website')
+    : channel === 'whatsapp' ? got.rows.filter((r) => r.channel === 'whatsapp') : got.rows;
   const t = total(rows);
   /*
    * THE RC BACKUP, EVERY CALL (user, 2026-10-05). api_calls holds a backup
