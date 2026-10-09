@@ -596,14 +596,17 @@ router.post('/push/test', safe(async (req, res) => res.json({
   sent: await push().toAdmins({ adminId: req.admin.id, title: '🔔 GaadiPe notifications are on', body: 'Payments, feedback, milestones and outages will arrive here.', tag: 'test' }),
 })));
 
-/* The Graphs section (user, 2026-10-03): a page's series, and the drill-down under a mark. */
+/* The Graphs section (user, 2026-10-03): a page's series, and the drill-down under a mark.
+   The WhatsApp admin (X-View: whatsapp) gets WhatsApp's graphs, the web admin the website's (2026-10-09). */
+const graphsFor = (req) => require(String(req.get('x-view') || '').toLowerCase() === 'whatsapp'
+  ? '../admin/graphsWhatsApp' : '../admin/graphs');
 router.get('/graphs/:page/drill', needs('dashboard.view'), safe(async (req, res) => {
-  const fn = require('../admin/graphs').DRILLS[req.params.page];
+  const fn = graphsFor(req).DRILLS[req.params.page];
   if (!fn) return res.status(404).json({ error: 'not_found', message: 'No such graph.' });
   res.json(await fn(req.query));
 }));
 router.get('/graphs/:page', needs('dashboard.view'), safe(async (req, res) => {
-  const fn = require('../admin/graphs').PAGES[req.params.page];
+  const fn = graphsFor(req).PAGES[req.params.page];
   if (!fn) return res.status(404).json({ error: 'not_found', message: 'No such graph.' });
   res.json(await fn(req.query));
 }));
