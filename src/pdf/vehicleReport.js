@@ -179,7 +179,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     y = T.sectionTitle(doc, 'Vehicle', y, T.BRAND.brand);
     y = T.kvCard(doc, [
       ['Registration number', report.reg_no],
-      ['Make and model', [rc.maker, rc.model].filter(Boolean).map(titleCase).join(' ') || '—'],
+      ['Make and model', [rc.maker, require('../site/vehicleView').cleanModel(rc.model) || rc.model].filter(Boolean).map(titleCase).join(' ') || '—'],
       ['Class', titleCase(rc.vehicle_class) || '—'],
       ['Fuel', titleCase(rc.fuel) || '—'],
       ['Colour', titleCase(rc.colour) || '—'],

@@ -277,7 +277,7 @@ function full(data) {
     locked: null,
     identity: {
       maker: rc.maker || null,
-      model: rc.model || null,
+      model: cleanModel(rc.model) || rc.model || null,
       vehicle_class: rc.vehicle_class || null,
       fuel: rc.fuel || null,
       colour: rc.colour || null,
@@ -364,4 +364,4 @@ const one = (p) => ({
   status: p.sent_to_court || p.sent_to_virtual_court ? 'In court' : (p.status || 'Pending'),
 });
 
-module.exports = { basic, full, identity, modelName, rtoOf, verdict, publicView };
+module.exports = { basic, full, identity, modelName, rtoOf, verdict, publicView, cleanModel };
