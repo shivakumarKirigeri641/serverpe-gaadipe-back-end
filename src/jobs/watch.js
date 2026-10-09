@@ -509,12 +509,22 @@ async function lifecycle() {
  */
 // { mobile } sends to that one customer only, at any hour — for testing from
 // the server: node -e "require('./src/jobs/watch').dailyStatus({ mobile: '98xxxxxxxx' })"
-async function dailyStatus({ mobile = null } = {}) {
-  if (!mobile && !await settings.bool('watch_daily_status_enabled', false)) return { sent: 0 };
+/*
+ * THE LAUNCH UPDATE (user, 2026-10-09, WhatsApp back after the ban): once, by
+ * hand, every paying customer with monitoring on gets today's status of their
+ * vehicles — a real update, so it may go as the utility template — whatever
+ * day of monitoring they are on. Never to anyone who chose "Alert only on
+ * change", said STOP, or heard from us in the last day or two (the same rules
+ * as above). Run first with dryRun: true to see who would get it:
+ *   node -e "require('./src/jobs/watch').dailyStatus({ everyone: true, dryRun: true }).then(r=>{console.log(r);process.exit(0)})"
+ */
+async function dailyStatus({ mobile = null, everyone = false, dryRun = false } = {}) {
+  const byHand = Boolean(mobile || everyone);
+  if (!byHand && !await settings.bool('watch_daily_status_enabled', false)) return { sent: 0 };
   const from = await settings.num('alert_send_hour_ist', 19);
   const until = await settings.num('alert_send_until_hour_ist', 22);
   const hour = istNow().getUTCHours();
-  if (!mobile && (hour < from || hour >= until)) return { sent: 0 };
+  if (!byHand && (hour < from || hour >= until)) return { sent: 0 };
 
   const today = istNow().toISOString().slice(0, 10);
   // The first IST date that still counts as "recent": every 2 days → yesterday.
@@ -550,12 +560,22 @@ async function dailyStatus({ mobile = null } = {}) {
                 WHERE c.kind = 'consent_accepted' AND c.detail->>'mobile' = u.mobile),
               u.created_at) > now() - make_interval(days => $3::int))
       ORDER BY w.user_id, v.reg_no`, [today, mobile ? String(mobile).replace(/\D/g, '').slice(-10) : null,
-                                      await settings.num('watch_daily_status_days', 7), since]);
+                                      everyone ? 0 : await settings.num('watch_daily_status_days', 7), since]);
 
   const people = new Map();
   for (const r of rows) {
     if (!people.has(r.user_id)) people.set(r.user_id, []);
     people.get(r.user_id).push(r);
+  }
+  if (dryRun) {
+    const would = [];
+    for (const [, list] of people) {
+      const m = list[0].mobile;
+      const why = await send.optedOut(m) ? 'STOP' : (await send.consentGate(m, await settings.get('template_daily_status', 'gp_monitoring_alert_en_v1'))).error || null;
+      would.push({ mobile: `••${String(m).slice(-4)}`, name: list[0].name || null, vehicles: list.map((w) => w.reg_no),
+                   goes_as: why ? `NOT SENT (${why})` : (await send.windowOpen(m) ? 'free message' : 'template') });
+    }
+    return { dryRun: true, people: would.length, would };
   }
 
   let sent = 0;
