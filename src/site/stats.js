@@ -20,10 +20,12 @@ const settings = require('../util/settings');
 const TTL_MS = 10 * 60 * 1000;
 let cache = { at: 0, value: null };
 
-/* The people behind each figure: real customers, not us. */
-const REAL = `u.is_internal = false`;
-const NOT_STOPPED = `NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
-                                  WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)`;
+/* The people behind each figure: real customers, not us — and only those who
+   agreed to the Terms (user, 2026-10-09): someone who only said Hi is not a
+   customer. agreedSql also leaves out anyone who said STOP. */
+const { agreedSql } = require('../admin/consented');
+const REAL = `u.is_internal = false AND ${agreedSql('u.mobile', { whatsappOnly: false })}`;
+const NOT_STOPPED = 'true';
 
 async function compute() {
   const row = await db.one(`

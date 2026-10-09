@@ -99,16 +99,23 @@ router.use(safe(async (req, res, next) => {
    * the numbers are still whole (admin/consented.js). Admins, staff, fleets and
    * referrals are not WhatsApp customers and are left alone.
    */
+  /*
+   * WHATSAPP ONLY (user, 2026-10-09): the main admin sends X-View: whatsapp, and
+   * then only people who agreed ON WHATSAPP are shown, in lists and in counts.
+   * The web admin sends nothing and keeps its website customers.
+   */
+  const consented = require('../admin/consented');
+  const whatsappOnly = String(req.get('x-view') || '').toLowerCase() === 'whatsapp';
   if (!CONSENT_SKIP.test(req.path)) {
     const inner = res.json.bind(res);
     res.json = (body) => {
-      require('../admin/consented').filter(body)
+      consented.filter(body, { whatsappOnly })
         .then((out) => inner(out))
         .catch((e) => { console.error('[admin] consent filter:', e.message); inner(body); });
       return res;
     };
   }
-  next();
+  consented.view.run({ whatsappOnly }, next);
 }));
 const CONSENT_SKIP = /^\/(session|me|admins|people|sessions|fleets|referrals|quizpe|settings|config|audit|blocks|security)(\/|$)/;
 

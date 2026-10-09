@@ -17,6 +17,19 @@
  * is only not shown.
  */
 const db = require('../db');
+const { AsyncLocalStorage } = require('async_hooks');
+
+/*
+ * WHICH PANEL IS ASKING (user, 2026-10-09: "give preference to WhatsApp only,
+ * hide the web based ones"). The main admin sends X-View: whatsapp and then only
+ * an agreement made ON WHATSAPP counts; the web admin also counts the website's.
+ * Held for the whole request (routes/adminApi.js), so agreedSql() needs no argument.
+ * Agreements recorded before the channel was (all WhatsApp then) count as WhatsApp.
+ */
+const view = new AsyncLocalStorage();
+const whatsappOnlyNow = () => view.getStore()?.whatsappOnly === true;
+const channelSql = (alias, whatsappOnly) => (whatsappOnly
+  ? `AND coalesce(${alias}.detail->>'channel', 'whatsapp') = 'whatsapp'` : '');
 
 const KEYS = ['mobile', 'phone', 'wa_id', 'customer_mobile', 'checker', 'to'];
 const ten = (v) => {
@@ -36,13 +49,14 @@ function collect(node, out, depth = 0) {
 }
 
 /** Of these mobiles, the ones that may be shown: agreed, never STOP — and staff. */
-async function allowedOf(mobiles) {
+async function allowedOf(mobiles, { whatsappOnly = whatsappOnlyNow() } = {}) {
   if (!mobiles.length) return new Set();
   const { rows } = await db.query(
     `SELECT m FROM unnest($1::text[]) AS m
       WHERE (
               EXISTS (SELECT 1 FROM event_log c WHERE c.kind = 'consent_accepted'
-                       AND right(regexp_replace(c.detail->>'mobile', '\\D', '', 'g'), 10) = m)
+                       AND right(regexp_replace(c.detail->>'mobile', '\\D', '', 'g'), 10) = m
+                       ${channelSql('c', whatsappOnly)})
               AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions s
                                WHERE right(s.mobile, 10) = m AND s.wa_opt_out_at IS NOT NULL)
             )
@@ -68,11 +82,11 @@ function strip(node, allowed, depth = 0) {
 }
 
 /** The answer with everyone who did not agree, or said STOP, taken out. */
-async function filter(body) {
+async function filter(body, { whatsappOnly = whatsappOnlyNow() } = {}) {
   const found = new Set();
   collect(body, found);
   if (!found.size) return body;
-  const allowed = await allowedOf([...found]);
+  const allowed = await allowedOf([...found], { whatsappOnly });
   if (allowed.size === found.size) return body;
   return strip(body, allowed);
 }
@@ -81,10 +95,11 @@ async function filter(body) {
  * The same rule as an SQL condition over a mobile column, for the lists and
  * counts that must not even count them (Customers, Live conversations).
  */
-const agreedSql = (col) => `(
+const agreedSql = (col, { whatsappOnly = whatsappOnlyNow() } = {}) => `(
   EXISTS (SELECT 1 FROM event_log ac WHERE ac.kind = 'consent_accepted'
-           AND right(regexp_replace(ac.detail->>'mobile', '\\D', '', 'g'), 10) = right(${col}, 10))
+           AND right(regexp_replace(ac.detail->>'mobile', '\\D', '', 'g'), 10) = right(${col}, 10)
+           ${channelSql('ac', whatsappOnly)})
   AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
                    WHERE right(so.mobile, 10) = right(${col}, 10) AND so.wa_opt_out_at IS NOT NULL))`;
 
-module.exports = { filter, allowedOf, agreedSql };
+module.exports = { filter, allowedOf, agreedSql, view };
