@@ -433,6 +433,20 @@ async function template(mobile, name, params = [], { language = 'en' } = {}) {
     return { ok: false, error: gate.error };
   }
 
+  /*
+   * AS MANY VALUES AS THE TEMPLATE HAS (2026-10-09). Meta refuses a template
+   * sent with more values than its {{n}} — the renewal job sends 5 and the
+   * approved gp_renewal_en_v1 has 3, so every renewal reminder failed. The
+   * count is read with the category (GET only); extra trailing values are left
+   * off and noted. Unknown count: sent as given.
+   */
+  const want = await varCount(name);
+  const values = want != null && clean.length > want ? clean.slice(0, want) : clean;
+  if (values.length < clean.length) {
+    console.warn('[wa] template %s has %d variable(s); %d value(s) given — the last %d left off',
+      name, want, clean.length, clean.length - values.length);
+  }
+
   return post({
     messaging_product: 'whatsapp',
     to: toWaId(mobile),
@@ -440,34 +454,46 @@ async function template(mobile, name, params = [], { language = 'en' } = {}) {
     template: {
       name,
       language: { code: language },
-      components: clean.length
-        ? [{ type: 'body', parameters: clean.map(text => ({ type: 'text', text })) }]
+      components: values.length
+        ? [{ type: 'body', parameters: values.map(text => ({ type: 'text', text })) }]
         : [],
     },
-  }, { mobile, type: 'template', body: `${name}(${clean.join(' | ')})`, templateName: name });
+  }, { mobile, type: 'template', body: `${name}(${values.join(' | ')})`, templateName: name });
 }
 
 /* ───────────────────────────────── the consent gate for templates (2026-10-09) ── */
 
 const ten = (m) => String(m || '').replace(/\D/g, '').slice(-10);
 
-/* Meta's category for each template, read (GET only) and kept an hour. */
-let categories = { at: 0, map: new Map() };
-async function categoryOf(name) {
+/* Meta's category for each template, and how many {{n}} its body has — read (GET only) and kept an hour. */
+let categories = { at: 0, map: new Map(), vars: new Map() };
+async function readTemplates() {
   if (Date.now() - categories.at > 60 * 60 * 1000 && wa.token && wa.businessId) {
     try {
-      const map = new Map();
-      let next = `https://graph.facebook.com/${wa.apiVersion}/${wa.businessId}/message_templates?fields=name,category&limit=200`;
+      const map = new Map(); const vars = new Map();
+      let next = `https://graph.facebook.com/${wa.apiVersion}/${wa.businessId}/message_templates?fields=name,category,components&limit=200`;
       for (let i = 0; next && i < 10; i += 1) {
         const r = await fetch(next, { headers: { Authorization: `Bearer ${wa.token}` }, signal: AbortSignal.timeout(15000) });
         const j = await r.json().catch(() => ({}));
         if (j.error) break;
-        for (const t of j.data || []) map.set(t.name, String(t.category || '').toUpperCase());
+        for (const t of j.data || []) {
+          map.set(t.name, String(t.category || '').toUpperCase());
+          const body = (t.components || []).find((c) => c.type === 'BODY');
+          if (body?.text) vars.set(t.name, new Set(String(body.text).match(/\{\{\d+\}\}/g) || []).size);
+        }
         next = j.paging?.next || null;
       }
-      if (map.size) categories = { at: Date.now(), map };
+      if (map.size) categories = { at: Date.now(), map, vars };
     } catch { /* keep the last answer */ }
   }
+}
+/** How many {{n}} the template's body has, or null when not known. */
+async function varCount(name) {
+  await readTemplates();
+  return categories.vars.has(name) ? categories.vars.get(name) : null;
+}
+async function categoryOf(name) {
+  await readTemplates();
   if (categories.map.has(name)) return categories.map.get(name);
   const row = await db.one(`SELECT upper(category) AS c FROM wa_templates WHERE template_name = $1`, [name]).catch(() => null);
   return row?.c || 'MARKETING';   // unknown: the strict answer
@@ -538,4 +564,4 @@ async function optedOut(mobile) {
 }
 
 module.exports = { _unmasked: unmasked, text, buttons, list, document, template, windowOpen, toWaId, allowed, optedOut,
-                   agreedTerms, optedInToOffers, categoryOf, consentGate };
+                   agreedTerms, optedInToOffers, categoryOf, consentGate, _varCount: varCount };
