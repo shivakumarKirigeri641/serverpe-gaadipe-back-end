@@ -61,6 +61,7 @@ const BTN = {
   OWNER: 'role_owner',
   PARTNER: 'role_partner',
   AGREE_OWNER: 'agree_owner',
+  AGREE_OWNER_OFFERS: 'agree_owner_offers',
   AGREE_PARTNER: 'agree_partner',
   PLATE_OK: 'plate_ok',
   PLATE_RETRY: 'plate_retry',
@@ -359,7 +360,21 @@ const OWNER_TERMS =
   // prompting people to reply STOP straight away.
   `Please agree to our Terms (${SITE}/terms), Privacy (${SITE}/privacy) and Refund (${SITE}/refund) policies to continue.`
   // One account, any channel (Terms 4.1, 2026-10-07).
-  + ' You also agree to receive messages about your account, checks and reports on WhatsApp, SMS or email — the same account works on gaadipe.in.';
+  + ' You also agree to receive messages about your account, checks and reports on WhatsApp, SMS or email — the same account works on gaadipe.in.'
+  // The offers opt-in, in the same message (user, 2026-10-09: "no separate step"), as its own button.
+  + '\n\nTap *Agree + get offers* to also get occasional tips & offers here — at most one a week; reply STOP any time.';
+
+/*
+ * AGREE, OR AGREE + OFFERS (user, 2026-10-09). One message, two buttons: the
+ * Terms alone, or the Terms and the tips-&-offers opt-in in one tap. Marketing
+ * stays a real, separate choice (DPDP; the promise in the Meta appeal) without
+ * a separate step. WhatsApp allows 20 characters per button.
+ */
+const AGREE_BUTTONS = () => [
+  { id: BTN.AGREE_OWNER, title: 'Agree & continue' },
+  { id: BTN.AGREE_OWNER_OFFERS, title: 'Agree + get offers' },
+];
+const AGREE_OFFERS_WORDS = 'Agree + get offers — I agree to the Terms, Privacy and Refund policies, and to receive occasional tips & offers from GaadiPe on WhatsApp (at most one a week; STOP any time).';
 
 const PARTNER_TERMS =
   'Good to have you! 🤝 Please read the partner terms first:\n\n'
@@ -1151,7 +1166,7 @@ async function deliverReport(mobile, regNo, message) {
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
   require('../owners/checkAlerts').noteCheck({ regNo, checker: mobile, channel: 'whatsapp' });
   await reportMenu(mobile, regNo, data, bought);
-  await askOffersOnce(mobile).catch((e) => console.error('[wa] offers ask:', e.message));
+  // (The separate tips-&-offers question is gone, 2026-10-09: it is the second Agree button now.)
 }
 
 /**
@@ -1265,7 +1280,7 @@ async function start(mobile) {
     ? `✅ Basic check — *free* · 📋 Full report — ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}* (only if you want it)\n\n`
     : '';
   await send.buttons(mobile, INTRO + price + OWNER_TERMS,
-    [{ id: BTN.AGREE_OWNER, title: 'Agree & continue' }],
+    AGREE_BUTTONS(),
     { footer: 'ServerPe App Solutions' });
   await setState(mobile, 'owner_consent', 'terms shown');
 }
@@ -1615,8 +1630,7 @@ async function handle(session, message, mobile) {
     switch (intent.id) {
       case BTN.OWNER:
         await setState(mobile, 'owner_consent', 'chose owner');
-        await send.buttons(mobile, OWNER_TERMS,
-          [{ id: BTN.AGREE_OWNER, title: 'Agree & continue' }]);
+        await send.buttons(mobile, OWNER_TERMS, AGREE_BUTTONS());
         return;
 
       case BTN.PARTNER:
@@ -1625,6 +1639,16 @@ async function handle(session, message, mobile) {
           [{ id: BTN.AGREE_PARTNER, title: 'Agree & continue' }]);
         return;
 
+      case BTN.AGREE_OWNER_OFFERS: {
+        // The Terms AND the tips-&-offers opt-in, in one tap, recorded with the words shown.
+        const u = await store.upsertUser(mobile);
+        await require('../site/auth').setPromoConsent(u.id, true, { channel: 'whatsapp', text: AGREE_OFFERS_WORDS })
+          .catch((e) => console.error('[wa] offers opt-in:', e.message));
+        await db.query(
+          `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+          [mobile, JSON.stringify({ offers_answer: 'yes', offers_answered_at: new Date().toISOString() })]);
+      }
+      // falls through: the Terms are agreed exactly as with "Agree & continue"
       case BTN.AGREE_OWNER:
         await recordConsent(mobile, 'owner', ['terms', 'privacy', 'refund']);
         await funnel(mobile, 'agreed');
@@ -2171,7 +2195,7 @@ async function handle(session, message, mobile) {
         await send.buttons(mobile,
           'Our Terms have been updated since you last used GaadiPe.\n\n'
           + OWNER_TERMS,
-          [{ id: BTN.AGREE_OWNER, title: 'Agree & continue' }]);
+          AGREE_BUTTONS());
         return;
       }
 
@@ -2300,7 +2324,7 @@ async function handle(session, message, mobile) {
 
     case 'owner_consent':
       await send.buttons(mobile,
-        'Please tap *Agree & continue* above to proceed. '
+        'Please tap *Agree & continue* (or *Agree + get offers*) above to proceed. '
         + 'Tap below to start again.',
         [{ id: BTN.CHECK_ANOTHER, title: 'Start again' }]);
       return;
