@@ -1652,6 +1652,7 @@ async function handle(session, message, mobile) {
       if (/^my (vehicle )?reports?$|^my vehicles?$|^view my vehicles?$/i.test(intent.text)) { await myVehicles(mobile, message); return; }
       // The service-update template's buttons (gp_service_update_v1, 2026-10-09).
       if (/^check (another|a)( vehicle)?$/i.test(intent.text)) {
+        if (!(await send.agreedTerms(mobile))) { await start(mobile); return; }
         await setState(mobile, 'owner_start', 'template: check another');
         await send.text(mobile, 'Sure — send me the vehicle number, like *KA01XX1234*.');
         return;
@@ -2227,6 +2228,16 @@ async function handle(session, message, mobile) {
         await send.buttons(mobile,
           'Our Terms have been updated since you last used GaadiPe.\n\n'
           + OWNER_TERMS,
+          AGREE_BUTTONS());
+        return;
+      }
+      /* NO AGREEMENT ON FILE AT ALL (user, 2026-10-09: a customer who paid on
+         5 Oct had none, so the alerts' consent gate refused them). Asked once,
+         like a Terms update — whatever path brought them here. */
+      if (!agreed && !(await send.agreedTerms(mobile))) {
+        await setState(mobile, 'owner_consent', 'no agreement on file');
+        await send.buttons(mobile,
+          'Before we continue, please agree to our Terms.\n\n' + OWNER_TERMS,
           AGREE_BUTTONS());
         return;
       }
