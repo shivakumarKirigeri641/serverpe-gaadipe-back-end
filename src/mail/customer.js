@@ -255,7 +255,7 @@ function basicSection(v) {
       ['Expired', f.expired?.length ? { html: pill(f.expired.join(', '), 'expired'), text: f.expired.join(', ') } : 'Nothing expired'],
       ['Due soon', f.due_soon?.length ? { html: pill(f.due_soon.join(', '), 'due'), text: f.due_soon.join(', ') } : 'Nothing due in 60 days'],
       ['Pending challans', f.challans_pending ? { html: pill(String(f.challans_pending), 'expired'), text: String(f.challans_pending) } : '0'],
-      ['Full report', { html: `<a href="${esc(`${SITE()}/app/vehicle/${encodeURIComponent(v.reg_no)}`)}" style="color:#0f766e;font-weight:700;">See dates, amounts, loan & FASTag →</a>`, text: `${SITE()}/app/vehicle/${v.reg_no}` }],
+      ['Full report', { html: `<a href="${esc(`${SITE()}/app/vehicle/${encodeURIComponent(v.reg_no)}`)}" style="color:#0f766e;font-weight:700;">${v.detail === 'public' ? 'See loan, challan amounts & the verdict →' : 'See dates, amounts, loan & FASTag →'}</a>`, text: `${SITE()}/app/vehicle/${v.reg_no}` }],
     ],
   };
 }

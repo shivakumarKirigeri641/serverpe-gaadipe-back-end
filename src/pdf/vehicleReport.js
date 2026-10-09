@@ -154,6 +154,27 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       y += h + 12;
     }
 
+    /*
+     * ── THE BUYER'S VERDICT, FIRST (user, 2026-10-10) ── what to do before paying
+     * for this vehicle, in plain lines (site/vehicleView.verdict — the same rules as
+     * the website). A sample shows it too, so people see what they are buying.
+     */
+    {
+      const lines = require('../site/vehicleView').verdict(data);
+      const worst = lines.some((l) => l.tone === 'wrong') ? 'bad' : lines.some((l) => l.tone === 'watch') ? 'warn' : 'ok';
+      y = T.sectionTitle(doc, 'Verdict — before you pay', y,
+        worst === 'bad' ? T.BRAND.red || T.BRAND.brand : worst === 'warn' ? '#E07B00' : T.BRAND.green);
+      for (const l of lines) {
+        y = T.ensureSpace(doc, y, 24);
+        const kind = l.tone === 'wrong' ? 'bad' : l.tone === 'watch' ? 'warn' : 'ok';
+        T.statusIcon(doc, kind, T.M, y, 12);
+        doc.font(doc._F.bold).fontSize(9.2).fillColor(T.BRAND.ink || '#0b2e2b')
+           .text(l.text, T.M + 17, y + 0.5, { width: W - 17 });
+        y = doc.y + 6;
+      }
+      y += 6;
+    }
+
     /* ── the vehicle ── */
     y = T.sectionTitle(doc, 'Vehicle', y, T.BRAND.brand);
     y = T.kvCard(doc, [

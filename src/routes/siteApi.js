@@ -164,8 +164,11 @@ router.post('/chat/check', safe(async (req, res) => {
 /** How much the free view gives away: labels | count | none (migration 050). */
 const freeDetail = async () => {
   const v = String(await settings.get('free_view_detail', 'count')).toLowerCase();
-  return ['labels', 'count', 'none'].includes(v) ? v : 'count';
+  // 'public' (2026-10-10): the whole public record free after sign-in, like CarInfo (site/vehicleView.publicView).
+  return ['public', 'labels', 'count', 'none'].includes(v) ? v : 'count';
 };
+/* A vehicle answer with its RTO (office, district, state) — from the number, free. */
+const withRto = async (v) => (v && v.reg_no ? { ...v, rto: await view.rtoOf(v.reg_no).catch(() => null) } : v);
 
 const unlockMode = async () => {
   const m = String(await settings.get('report_unlock', 'both')).toLowerCase();
@@ -709,7 +712,7 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
   const plan = await billing.reportPlan();
   await activity.record(req, { action: paid ? 'view_vehicle_paid' : 'view_vehicle', regNo: parsed.regNo });
   res.json({
-    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() }),
+    vehicle: await withRto(paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() })),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     ...(await offerFor(req, plan, paid, parsed.regNo)),
   });
@@ -756,7 +759,7 @@ router.get('/vehicles/:regNo/card', safe(async (req, res) => {
   const plan = await billing.reportPlan();
   await activity.record(req, { action: paid ? 'view_card_paid' : 'view_card', regNo: parsed.regNo });
   res.json({
-    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() }),
+    vehicle: await withRto(paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() })),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until, downloadable: Boolean(paid.pdf_path) } : null,
     invoice: paid?.invoice_id ? { id: String(paid.invoice_id), number: paid.invoice_number, downloadable: Boolean(paid.invoice_ready) } : null,
     mine: { check_count: Number(mine.check_count || 0), last_checked_at: mine.last_checked_at, watched: mine.watched },
@@ -855,7 +858,7 @@ router.post('/check', safe(async (req, res) => {
   const plan = await billing.reportPlan();
   res.json({
     owner_notice: ownerNotice ? 'This vehicle’s owner is verified on GaadiPe and is told when it is checked (with the last 4 digits of your number).' : null,
-    vehicle: paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() }),
+    vehicle: await withRto(paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() })),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     ...(await offerFor(req, plan, paid, parsed.regNo)),
   });

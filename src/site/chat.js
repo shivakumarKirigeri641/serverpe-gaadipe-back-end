@@ -162,7 +162,14 @@ async function anonCheck(req) {
     await require('../vehicle/store').record(null, data)
       .catch((e) => console.error('[chat] could not save %s: %s', parsed.regNo, e.message));
   }
-  const shown = data?.success ? view.identity(data) : null;
+  // Like CarInfo before sign-in (2026-10-10): variant, masked owner and RTO, each a setting.
+  const shown = data?.success ? view.identity(data, {
+    variant: await settings.bool('free_check_show_variant', true),
+    owner: await settings.bool('free_check_show_owner', true),
+  }) : null;
+  if (shown && await settings.bool('free_check_show_rto', true)) {
+    shown.rto = await view.rtoOf(parsed.regNo).catch(() => null);
+  }
   const SOURCE = { ECHALLANAPP: 'eChallan.app', RCBACKUP: 'RC backup (paid)' };
   const dataSource = data?.success
     ? (data.cached ? 'saved record' : SOURCE[String(data.source || '').toUpperCase()] || 'ULIP')

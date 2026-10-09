@@ -66,6 +66,11 @@ const GROUPS = [
     ['chat_anon_checks_per_day', 'Free check before sign-in: per browser, per day', 'How many vehicles one browser may check without signing in each day (1).'],
     ['chat_anon_checks_per_day_ip', 'Free check before sign-in: per network, per day', 'How many free checks one network address may make a day. Homes and offices share one address on Wi-Fi — 3 lets a family each try once.'],
     ['chat_anon_checks_per_hour', 'Free check before sign-in: whole site, per hour', 'A flood of free checks stops here (60).'],
+    // Like CarInfo (2026-10-10, migration 148).
+    ['free_check_show_variant', 'Free check before sign-in: show the variant (true / false)', 'true: the full model, e.g. "SPLENDOR PLUS"; false: only the first word, the rest hidden.'],
+    ['free_check_show_owner', 'Free check before sign-in: show the owner name, masked (true / false)', 'The name masked as the Government masks it (R****H) — lets a buyer confirm it is the seller\'s vehicle.'],
+    ['free_check_show_rto', 'Free check before sign-in: show the RTO (true / false)', 'RTO code, office, district and state — worked out from the number, free.'],
+    ['free_view_detail', 'Free check after sign-in: how much it shows', 'public = the whole public record like CarInfo (every validity date, age, norms, seats, weight, RC status, how many challans) — the ₹19 report keeps the loan, blacklist/NOC, challan amounts, owners, insurer, FASTag and the verdict; labels / count / none show less.'],
     ['free_check_backup_per_day', 'Free check before sign-in: paid RC backup calls a day', 'When ULIP and eChallan.app cannot answer, a free check may use the paid RC backup (IDSPay) up to this many times a day; after that it stops at eChallan.app. 0 = never. Paid reports are not affected.'],
     // The line before a vehicle check in the chat (user, 2026-10-07).
     ['check_notice_mode', 'Check notice: on / auto / off', 'Before a visitor’s first check, and when a check fails: “Government services may be down…”. auto = only while VAHAN is down.'],

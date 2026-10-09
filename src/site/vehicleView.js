@@ -37,6 +37,7 @@ const maskNumber = report.maskNumber;
  * whether there is a loan on it are the report.
  */
 function basic(data, { detail = 'count' } = {}) {
+  if (detail === 'public') return publicView(data);
   const rc = data.rc || {};
   const c = data.challans || {};
   const docs = report.documentsOf(rc);
@@ -118,16 +119,148 @@ function modelName(model) {
   return { name: first, hidden: words.length > 1 || first !== words[0] };
 }
 
-function identity(data) {
+/*
+ * BEFORE SIGN-IN, LIKE CARINFO (user, 2026-10-10: "carinfo.app shows this before
+ * login" — make and model with variant, the owner's name masked, RTO details).
+ * Each extra is a setting (free_check_show_variant / _owner, read by site/chat.js);
+ * the RTO is added there too (rtoOf, it needs the database).
+ */
+/* VAHAN's model without the maker's code in front: "H/H.SPLENDOR PLUS" -> "SPLENDOR PLUS". */
+const cleanModel = (model) => (String(model || '').trim().replace(/^[A-Z0-9]{1,3}\/[A-Z0-9]{1,3}\.?\s*/i, '').trim() || null);
+
+function identity(data, { variant = false, owner = false } = {}) {
   const rc = data.rc || {};
   const m = modelName(rc.model);
   return {
     reg_no: data.vehicle_number,
     paid: false,
     detail: 'identity',
-    identity: { maker: rc.maker || null, model: m.name, variant_hidden: m.hidden, fuel: rc.fuel || null },
+    identity: {
+      maker: rc.maker || null,
+      model: variant ? (cleanModel(rc.model) || m.name) : m.name,
+      variant_hidden: variant ? false : m.hidden,
+      fuel: rc.fuel || null,
+      vehicle_class: rc.vehicle_class || null,
+      owner_masked: owner ? report.maskName(rc.owner_name) : null,
+    },
     checked_at: data.fetched_at || new Date().toISOString(),
   };
+}
+
+/*
+ * SIGNED IN, FREE — THE PUBLIC RECORD (user, 2026-10-10: CarInfo shows this after
+ * login, free_view_detail = 'public'). What the Government's own Parivahan shows:
+ * the vehicle, the owner's name masked, every validity DATE, its age, norms,
+ * seats, weight, RC status — and how many challans are pending, not which.
+ *
+ * WHAT STAYS IN THE ₹19 REPORT: the loan / financer, blacklist and NOC, every
+ * challan with its amount, how many owners, insurer and policy, chassis and
+ * engine, FASTag, the buyer's verdict, the PDF and 28 days of alerts.
+ */
+function publicView(data) {
+  const rc = data.rc || {};
+  const c = data.challans || {};
+  const docs = report.documentsOf(rc);
+  return {
+    reg_no: data.vehicle_number,
+    pretty: data.vehicle_number_pretty || data.vehicle_number,
+    paid: false,
+    detail: 'public',
+    identity: {
+      maker: rc.maker || null,
+      model: cleanModel(rc.model),
+      vehicle_class: rc.vehicle_class || null,
+      fuel: rc.fuel || null,
+      norms: rc.norms || null,
+      seats: rc.seats ?? null,
+      unladen_weight: rc.unladen_weight ?? null,
+      reg_date: rc.reg_date || null,
+      rc_status: rc.status || null,
+      owner_masked: report.maskName(rc.owner_name),
+    },
+    documents: docs.map((d) => ({
+      label: d.label,
+      name: d.name,
+      valid_until: d.date instanceof Date ? d.date.toISOString().slice(0, 10) : d.date,
+      days: d.days,
+      state: d.days < 0 ? 'expired' : d.days <= 30 ? 'due' : 'valid',
+    })),
+    found: {
+      expired: docs.filter((d) => d.days < 0).map((d) => d.label),
+      due_soon: docs.filter((d) => d.days >= 0 && d.days <= 60).map((d) => d.label),
+      challans_pending: c.pending_count ?? 0,
+      documents_total: docs.length,
+      has_record: docs.length > 0,
+    },
+    locked: [
+      'Loan / hypothecation (financer)',
+      'Blacklist and NOC status',
+      'Every challan, with offence, place and amount',
+      'How many owners the vehicle has had',
+      'Insurer and policy, chassis and engine (masked)',
+      'FASTag status',
+      'A clear verdict: what to check before you pay',
+      'PDF report + 28 days of alerts',
+    ],
+    checked_at: data.fetched_at || new Date().toISOString(),
+  };
+}
+
+/*
+ * THE RTO, FROM THE NUMBER ALONE — free, the same for every vehicle of that
+ * office (code, office, district, state). Not from the vehicle's record.
+ */
+async function rtoOf(regNo) {
+  const geo = require('../admin/geo');
+  const code = geo.rtoCode(regNo);
+  if (!code) return null;
+  const row = await require('../db').one(
+    `SELECT code, state_code, office, district FROM rtos WHERE code = $1`, [code]).catch(() => null);
+  const state = row?.state_code || code.slice(0, 2);
+  return {
+    code: `${code.slice(0, 2)}-${code.slice(2)}`,
+    office: row?.office ? row.office.replace(/\s*\((previously|formerly|earlier)[^)]*\)/gi, '').trim() : null,
+    district: row?.district && row.district.length <= 60 ? row.district : null,
+    state: geo.STATES[state] || state,
+    website: 'https://parivahan.gov.in',
+  };
+}
+
+/*
+ * THE BUYER'S VERDICT (user, 2026-10-10: what the ₹19 sells that a data app does
+ * not — what to DO). Plain rules on the record already fetched; no extra call.
+ * tone: wrong (stop and check), watch (ask the seller), good (clear).
+ */
+function verdict(data) {
+  const rc = data.rc || {};
+  const c = data.challans || {};
+  const out = [];
+  const rs = (p) => `₹${Math.round(Number(p || 0) / 100).toLocaleString('en-IN')}`;
+  const none = (v) => !v || /^(na|n\/a|none|nil|no|not available|-)$/i.test(String(v).trim());
+  if (!none(rc.blacklist_status)) {
+    out.push({ tone: 'wrong', text: `Blacklist: ${rc.blacklist_status}. Do not buy until the RTO clears it.` });
+  }
+  if (!none(rc.financer)) {
+    // "CENTURION BANK LTD.,." -> "Centurion Bank Ltd" (the sentence supplies the full stop)
+    const bank = String(rc.financer).trim().replace(/[\s,;.]+$/, '').toLowerCase()
+      .replace(/\b([a-z])/g, (m) => m.toUpperCase());
+    out.push({ tone: 'wrong', text: `Loan recorded with ${bank}. Before paying, get the bank's NOC and Form 35 so the loan can be removed from the RC.` });
+  }
+  const pending = c.pending_count ?? 0;
+  if (pending > 0) {
+    out.push({ tone: 'watch', text: `${pending} challan${pending === 1 ? '' : 's'} pending${c.pending_amount_paise ? ` (${rs(c.pending_amount_paise)})` : ''}. Ask the seller to clear them before the RC transfer.` });
+  }
+  if (rc.status && !/^active$/i.test(String(rc.status).trim())) {
+    out.push({ tone: 'watch', text: `RC status: ${rc.status}. Ask the seller to explain and fix it at the RTO before you buy.` });
+  }
+  for (const d of report.documentsOf(rc)) {
+    if (d.days < 0) out.push({ tone: 'watch', text: `${d.name || d.label} expired ${Math.abs(d.days)} day${Math.abs(d.days) === 1 ? '' : 's'} ago. The vehicle should not be driven until it is renewed.` });
+    else if (d.days <= 30) out.push({ tone: 'watch', text: `${d.name || d.label} ends in ${d.days} day${d.days === 1 ? '' : 's'}. Budget for the renewal.` });
+  }
+  const owners = Number(rc.owner_serial || 0);
+  if (owners >= 3) out.push({ tone: 'watch', text: `This vehicle has had ${owners} owners. Check the service record and the condition carefully.` });
+  if (!out.length) out.push({ tone: 'good', text: 'No loan, no blacklist, no pending challans and every document valid on the Government record.' });
+  return out;
 }
 
 /** The paid view: everything the report holds, with the same masking. */
@@ -203,6 +336,8 @@ function full(data) {
     permit_type: rc.permit_type || null,
   };
 
+  out.verdict = verdict(data);
+
   out.challans = {
     pending_count: c.pending_count ?? 0,
     pending_amount_paise: c.pending_amount_paise ?? null,
@@ -229,4 +364,4 @@ const one = (p) => ({
   status: p.sent_to_court || p.sent_to_virtual_court ? 'In court' : (p.status || 'Pending'),
 });
 
-module.exports = { basic, full, identity, modelName };
+module.exports = { basic, full, identity, modelName, rtoOf, verdict, publicView };
