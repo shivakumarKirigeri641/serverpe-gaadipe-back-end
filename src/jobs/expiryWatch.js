@@ -364,7 +364,12 @@ async function runOnce({ limit = 20 } = {}) {
     if (config.whatsapp.enabled) {
       const send = require('../whatsapp/send');
       const name = String(row.display_name || row.wa_profile_name || '').split(' ')[0] || 'there';
-      const out = await send.template(row.mobile, await settings.get('wa_template_monitoring', 'gp_monitoring_alert_en_v1'),
+      // Inside the 24-hour window (they wrote or tapped a button): a free message,
+      // not a template (user, 2026-10-09).
+      const open = await send.windowOpen(row.mobile).catch(() => false) && !(await send.optedOut(row.mobile).catch(() => true));
+      const out = open
+        ? await send.text(row.mobile, `🔔 *${row.reg_no}*\n\n${documentLine(claimed)}\n\n${adviceLine(claimed)}`).catch(() => ({ ok: false }))
+        : await send.template(row.mobile, await settings.get('wa_template_monitoring', 'gp_monitoring_alert_en_v1'),
         [name, row.reg_no, documentLine(claimed), adviceLine(claimed)],
         { language: await settings.get('wa_template_language', 'en') }).catch(() => ({ ok: false }));
       if (out.ok) warned += 1;

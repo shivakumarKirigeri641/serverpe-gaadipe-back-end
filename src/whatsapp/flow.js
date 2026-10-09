@@ -1367,6 +1367,35 @@ const quietNudges = (mobile) => db.query(
   `UPDATE whatsapp_sessions SET context = context || jsonb_build_object('no_nudge_at', now()), modified_at = now()
     WHERE mobile = $1`, [mobile]).catch(() => {});
 
+/*
+ * HOW OFTEN THEY HEAR FROM US (user, 2026-10-09; the buttons on
+ * gp_monitoring_alert_en_v2, tapped or typed):
+ *   "Only alert changes"  no more "today's update" all-clear (jobs/watch.js
+ *                         dailyStatus); real alerts — a change, an expiry,
+ *                         challans — still come, as paid for
+ *   "Keep me updated"     the opt-in: updates on again
+ * Recorded with the time in event_log (the latest one counts). Either tap opens
+ * the 24-hour window, so the answers here are free messages.
+ */
+async function alertChoice(mobile, text, message) {
+  const off = /^only alert (on )?changes?$|^alert me (only )?(on|when) changes?$/i.test(text || '');
+  const on = /^(yes,? )?keep me updated$/i.test(text || '');
+  if (!off && !on) return false;
+  const u = await store.upsertUser(mobile);
+  await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, $2, $3)`,
+    [u.id, off ? 'watch_status_off' : 'watch_status_on', JSON.stringify({ mobile, text, at: new Date().toISOString() })]);
+  await funnel(mobile, off ? 'watch_status_off' : 'watch_status_on');
+  if (off) {
+    await send.text(mobile, '👍 Done. No more routine updates — I will message you *only when something changes* '
+      + 'on your vehicle: a new challan, or a document about to expire.\n\n'
+      + '_Changed your mind? Reply *Keep me updated*._');
+  } else {
+    await send.text(mobile, '✅ You are set — I will keep you updated on your vehicle here.');
+    await myVehicles(mobile, message);
+  }
+  return true;
+}
+
 async function handle(session, message, mobile) {
   const intent = intentOf(message);
   const state = session.state || 'new';
@@ -1459,6 +1488,8 @@ async function handle(session, message, mobile) {
     await stopped(mobile, 'Done ✅ — GaadiPe will not message you any more.');
     return;
   }
+  // The alert template's "Only alert changes" / "Keep me updated" — tapped or typed.
+  if (await alertChoice(mobile, intent.text, message)) return;
   /*
    * "DON'T MESSAGE ME" IS STOP TOO (user, 2026-09-30). Someone wrote "Don't
    * message me" after seeing the price; the bot read it as a vehicle number and
@@ -1625,20 +1656,6 @@ async function handle(session, message, mobile) {
         return;
       }
       if (/^(support|help|contact( us)?)$/i.test(intent.text)) { await sendSupportLink(mobile); return; }
-      /*
-       * "ONLY ALERT CHANGES" (user, 2026-10-09; gp_monitoring_alert_en_v2's third
-       * button). No more "today's update" all-clear (jobs/watch.js dailyStatus);
-       * real alerts — a change, an expiry, challans — still come, as paid for.
-       */
-      if (/^only alert (on )?changes?$|^alert me (only )?(on|when) changes?$/i.test(intent.text)) {
-        const u = await store.upsertUser(mobile);
-        await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'watch_status_off', $2)`,
-          [u.id, JSON.stringify({ mobile, via: 'template button', at: new Date().toISOString() })]);
-        await funnel(mobile, 'watch_status_off');
-        await send.text(mobile, '👍 Done. No more routine updates — I will message you *only when something changes* '
-          + 'on your vehicle: a new challan, or a document about to expire.');
-        return;
-      }
     }
 
     switch (intent.id) {

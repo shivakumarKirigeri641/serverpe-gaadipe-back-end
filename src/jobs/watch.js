@@ -536,8 +536,10 @@ async function dailyStatus({ mobile = null } = {}) {
                           AND e.kind IN ('watch_status', 'watch_digest') AND e.detail->>'ist_date' BETWEEN $4 AND $1
                           AND coalesce(e.detail->>'failed', 'false') <> 'true')
         AND ($2::text IS NULL OR u.mobile = $2)
-        -- Tapped "Only alert changes" (2026-10-09): real alerts only.
-        AND NOT EXISTS (SELECT 1 FROM event_log so WHERE so.user_id = w.user_id AND so.kind = 'watch_status_off')
+        -- "Only alert changes" / "Keep me updated" (2026-10-09): the latest tap counts.
+        AND (SELECT so.kind FROM event_log so WHERE so.user_id = w.user_id
+               AND so.kind IN ('watch_status_off', 'watch_status_on')
+             ORDER BY so.created_at DESC, so.id DESC LIMIT 1) IS DISTINCT FROM 'watch_status_off'
         -- Strictly the first N days after the customer FIRST tapped "Agree &
         -- continue" (user, 2026-09-27) — not from when a vehicle was enrolled,
         -- so a second vehicle does not restart it. A website buyer who never
