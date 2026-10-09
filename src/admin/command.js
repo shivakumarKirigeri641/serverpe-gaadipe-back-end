@@ -321,13 +321,24 @@ async function live({ since = null } = {}) {
   const paying = await db.one(
     `SELECT count(*)::int AS n FROM payments
       WHERE status = 'created' AND created_at > now() - interval '30 minutes'`);
-  // The website's checks and sign-ins in the last 15 minutes (2026-10-07: WhatsApp is retired).
+  /*
+   * Checks and sign-ins in the last 15 minutes. WhatsApp is back (2026-10-09):
+   * the main admin (X-View: whatsapp, admin/consented.js) counts WhatsApp checks,
+   * the web admin the website's. A WhatsApp check is saved without a channel.
+   */
+  const consented = require('./consented');
+  const waView = consented.view.getStore()?.whatsappOnly === true;
+  const WA_CHECK = `(kind IN ('vehicle_check', 'vehicle_check_repeat') AND coalesce(detail->>'channel', 'whatsapp') = 'whatsapp')`;
   const web = await db.one(
-    `SELECT count(*) FILTER (WHERE ${WEB_CHECK})::int AS searches,
+    `SELECT count(*) FILTER (WHERE ${waView ? WA_CHECK : WEB_CHECK})::int AS searches,
             count(DISTINCT detail->>'mobile') FILTER (WHERE kind = 'site_sign_in')::int AS signing_in
        FROM event_log WHERE created_at > now() - interval '15 minutes'
         AND kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat', 'site_sign_in')`);
   now.searches = web.searches; now.signing_in = web.signing_in;
+  // "Chatting": people who wrote on WhatsApp in the last 15 minutes — only those who agreed (and never STOP).
+  now.chatting = (await db.one(
+    `SELECT count(*)::int AS n FROM whatsapp_sessions s
+      WHERE s.last_inbound_at > now() - interval '15 minutes' AND ${consented.agreedSql('s.mobile')}`)).n;
   const errors = now.api_errors + now.delivery_errors;
   return {
     status: errors ? { level: 'degraded', text: `${errors} error${errors === 1 ? '' : 's'} in the last hour` }
