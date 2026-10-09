@@ -1378,7 +1378,8 @@ const quietNudges = (mobile) => db.query(
  * the 24-hour window, so the answers here are free messages.
  */
 async function alertChoice(mobile, text, message) {
-  const off = /^only alert (on )?changes?$|^alert me (only )?(on|when) changes?$/i.test(text || '');
+  // "Alert only on change" is the button (20 characters, WhatsApp's limit); close wordings typed by hand count too.
+  const off = /^(alert|notify)( me)? only (on|if|when)( there are| it)? changes?$|^only alert (on )?changes?$|^(alert|notify)( me)? (on|when) changes? only$|^only (on )?changes?$/i.test(String(text || '').trim());
   const on = /^(yes,? )?keep me updated$/i.test(text || '');
   if (!off && !on) return false;
   const u = await store.upsertUser(mobile);
