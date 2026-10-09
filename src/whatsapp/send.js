@@ -77,6 +77,63 @@ async function switchedOff(type, mobile) {
   return true;
 }
 
+/*
+ * THE BRAKE (user, 2026-10-09, after Meta's template insights showed "Spam rate
+ * limit hit" and "Account has been locked"). Meta's own warnings stop us here,
+ * at once, without anyone watching:
+ *   131048 spam rate limit  → no template (no message we start) for 24 hours —
+ *                             whatsapp_templates_paused_until; replies to people
+ *                             who write in still go
+ *   131031 account locked   → whatsapp_sending_enabled = false: nothing goes
+ *                             until the owner turns it back on
+ * Both tell the admin. The brake only ever stops sending; it never starts it.
+ */
+const SPAM_LIMIT = 131048;
+const LOCKED = 131031;
+const PAUSE_HOURS = 24;
+
+async function setSetting(key, value) {
+  await db.query(
+    `INSERT INTO app_settings (key, value) VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, modified_at = now()`, [key, value]);
+  settings.refresh();
+}
+
+/** Until when templates are paused, or null. */
+async function templatesPausedUntil() {
+  const v = String(await settings.get('whatsapp_templates_paused_until', '') || '');
+  const until = v ? new Date(v) : null;
+  return until && !Number.isNaN(until.getTime()) && until > new Date() ? until : null;
+}
+
+async function brake(code, mobile, type) {
+  const ping = (p) => require('../util/adminPing').ping({ source: 'whatsapp', ...p }).catch(() => {});
+  if (code === LOCKED) {
+    if (!(await settings.bool('whatsapp_sending_enabled', false))) return;
+    await setSetting('whatsapp_sending_enabled', 'false');
+    console.error('[wa] BRAKE: Meta says the account is locked (131031) — WhatsApp sending switched OFF');
+    await ping({
+      key: 'whatsapp_locked', severity: 'critical',
+      title: '🛑 WhatsApp locked — sending switched off',
+      text: `Meta refused a ${type} to ••${String(mobile).slice(-4)}: "account has been locked" (131031). `
+        + 'Every WhatsApp send is now OFF (whatsapp_sending_enabled = false). Check Business Support Home / WhatsApp Manager, '
+        + 'and turn it back on in Settings only once the account shows as fine.',
+    });
+  } else if (code === SPAM_LIMIT) {
+    if (await templatesPausedUntil()) return;
+    const until = new Date(Date.now() + PAUSE_HOURS * 3600 * 1000);
+    await setSetting('whatsapp_templates_paused_until', until.toISOString());
+    console.error('[wa] BRAKE: spam rate limit (131048) — templates paused until %s', until.toISOString());
+    await ping({
+      key: 'whatsapp_spam_limit', severity: 'critical',
+      title: '⚠️ WhatsApp spam limit — templates paused 24 h',
+      text: `Meta refused a ${type} to ••${String(mobile).slice(-4)}: "spam rate limit hit" (131048) — too many recent messages were blocked or reported. `
+        + `No alert, reminder or broadcast template goes out until ${until.toISOString().slice(0, 16).replace('T', ' ')} UTC; replies to customers who write in still go. `
+        + 'Send less, and only to people who asked. To end the pause early, clear whatsapp_templates_paused_until in Settings.',
+    });
+  }
+}
+
 async function post(payload, meta) {
   const { mobile, type, body, templateName } = meta;
   if (await switchedOff(type, mobile)) return { ok: false, error: 'whatsapp_off' };
@@ -145,6 +202,7 @@ async function post(payload, meta) {
 
   if (error) {
     console.error('[wa] out %s rejected: %s', mobile, error);
+    await brake(Number(json.error.code), mobile, type).catch((e) => console.error('[wa] brake:', e.message));
     return { ok: false, error };
   }
   console.log('[wa] out %s %s %s', mobile, type, JSON.stringify(body || '').slice(0, 60));
@@ -346,6 +404,13 @@ async function template(mobile, name, params = [], { language = 'en' } = {}) {
   if (await optedOut(mobile)) {
     console.log('[wa] %s replied STOP — not sending template %s', mobile, name);
     return { ok: false, error: 'opted_out' };
+  }
+
+  // The brake (above post): Meta said "spam rate limit" — no template until the pause ends.
+  const paused = await templatesPausedUntil();
+  if (paused) {
+    console.log('[wa] templates paused until %s (spam limit) — not sending %s to ••%s', paused.toISOString(), name, String(mobile).slice(-4));
+    return { ok: false, error: 'templates_paused' };
   }
 
   /*

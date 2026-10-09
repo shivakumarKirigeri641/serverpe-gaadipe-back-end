@@ -57,6 +57,7 @@ const GROUPS = [
     // WhatsApp, back since 2026-10-09 (migration 144).
     ['whatsapp_sending_enabled', 'WhatsApp: sending on (true / false)', 'The master switch. false: nothing at all is sent on WhatsApp — replies, alerts, broadcasts. Turn it off at once if anything looks wrong.'],
     ['whatsapp_marketing_per_day', 'WhatsApp: marketing messages a day (all customers)', 'At most this many MARKETING-template messages a day, and only to customers who opted in to offers (25).'],
+    ['whatsapp_templates_paused_until', 'WhatsApp: templates paused until', 'Set by itself when Meta says "spam rate limit hit" (24 hours). While set, no alert, reminder or broadcast template goes; replies still go. Clear it to end the pause early.'],
     ['whatsapp_marketing_gap_days', 'WhatsApp: days between marketing to one person', 'No second marketing message to the same customer within this many days (7).'],
     ['nudge_enabled', 'WhatsApp: remind people who said Hi to agree (true / false)', 'Off since 2026-10-09: someone who only said Hi hears from GaadiPe again only if they write.'],
     // The free check before sign-in (migrations 142–143).
