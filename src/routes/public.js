@@ -127,7 +127,9 @@ router.get('/notice', async (_req, res) => {
     res.set('Cache-Control', 'public, max-age=60');
     res.json({
       ...(on
-        ? { on: true, en: String(await settings.get('site_notice_en', '')), hi: String(await settings.get('site_notice_hi', '')) }
+        ? { on: true, en: String(await settings.get('site_notice_en', '')), hi: String(await settings.get('site_notice_hi', '')),
+            // 'warn' (yellow ⚠️) or 'good' (green ✅, with an "Open WhatsApp" link) — 2026-10-09.
+            tone: String(await settings.get('site_notice_tone', 'warn')) === 'good' ? 'good' : 'warn' }
         : { on: false }),
       check: await checkNotice(settings),
       // The chat asks for sign-in before a check when this is on (2026-10-08).

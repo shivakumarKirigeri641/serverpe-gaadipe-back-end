@@ -49,6 +49,7 @@ const GROUPS = [
     ['site_notice_on', 'Website notice: show it (true / false)', 'A line at the top of every page of gaadipe.in — e.g. while WhatsApp is unavailable.'],
     ['site_notice_en', 'Website notice: English text', ''],
     ['site_notice_hi', 'Website notice: Hindi text', ''],
+    ['site_notice_tone', 'Website notice: look (warn / good)', 'warn = yellow ⚠️ (something is down); good = green ✅ with an "Open WhatsApp" button (good news).'],
     // Referral rewards (user, 2026-10-08: hidden for now).
     ['referral_rewards_enabled', 'Referral rewards: offer and use them (true / false)', 'false: no free report and no reduced-price report — everyone pays the plan price. Rewards already earned are kept for when it is switched on.'],
     // Sign in for every check (user, 2026-10-08).
