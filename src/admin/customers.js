@@ -203,7 +203,9 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
               SELECT 1 FROM subscriptions s WHERE s.user_id = u.id AND s.is_active
                  AND s.ends_on >= CURRENT_DATE))
         AND (${SEGMENTS[segment] || 'true'})
-        -- Everyone is listed (2026-10-07): WhatsApp is retired, so a WhatsApp STOP no longer hides anyone.
+        -- Only people who agreed to the Terms and never said STOP — not listed,
+        -- not counted (user, 2026-10-09; admin/consented.js).
+        AND ${require('./consented').agreedSql('u.mobile')}
       ORDER BY ${order}
       LIMIT $6 OFFSET $7`,
     [term, digits, plate, blocked, paying, Math.min(200, limit), offset]);

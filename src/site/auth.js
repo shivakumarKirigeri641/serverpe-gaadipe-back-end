@@ -178,16 +178,17 @@ const SIGN_IN_NOTICE = 'By signing in, you agree to GaadiPe’s Terms of use, Pr
 
 const PROMO_CONSENT ='Send me vehicle tips, new features and GaadiPe offers by SMS, WhatsApp or email. I can stop this any time in my Profile or by replying STOP.';
 
-async function setPromoConsent(userId, agree, { ip = null, userAgent = null, channel = 'web' } = {}) {
+/* `text`: the exact words the customer said yes to — WhatsApp asks in its own words (2026-10-09). */
+async function setPromoConsent(userId, agree, { ip = null, userAgent = null, channel = 'web', text = PROMO_CONSENT } = {}) {
   const row = await db.one(agree
     ? `UPDATE users SET promo_consent_at = coalesce(promo_consent_at, now()), promo_consent_text = $2,
               promo_consent_withdrawn_at = NULL, modified_at = now() WHERE id = $1 RETURNING *`
     : `UPDATE users SET promo_consent_withdrawn_at = CASE WHEN promo_consent_at IS NOT NULL THEN now() ELSE promo_consent_withdrawn_at END,
               promo_consent_at = NULL, modified_at = now() WHERE id = $1 RETURNING *`,
-  agree ? [userId, PROMO_CONSENT] : [userId]);
+  agree ? [userId, text] : [userId]);
   await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, $2, $3)`,
     [userId, agree ? 'promo_consent_given' : 'promo_consent_withdrawn',
-     JSON.stringify({ text: PROMO_CONSENT, channel, ip, user_agent: userAgent })]);
+     JSON.stringify({ text, channel, ip, user_agent: userAgent })]);
   return row;
 }
 

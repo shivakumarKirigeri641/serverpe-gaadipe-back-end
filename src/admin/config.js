@@ -53,6 +53,11 @@ const GROUPS = [
     ['referral_rewards_enabled', 'Referral rewards: offer and use them (true / false)', 'false: no free report and no reduced-price report — everyone pays the plan price. Rewards already earned are kept for when it is switched on.'],
     // Sign in for every check (user, 2026-10-08).
     ['check_sign_in_required', 'Sign-in required for every vehicle check (true / false)', 'true: a visitor signs in with their mobile before any check. false: one free check a day without signing in — make, model name and fuel, after “Agree & check”.'],
+    // WhatsApp, back since 2026-10-09 (migration 144).
+    ['whatsapp_sending_enabled', 'WhatsApp: sending on (true / false)', 'The master switch. false: nothing at all is sent on WhatsApp — replies, alerts, broadcasts. Turn it off at once if anything looks wrong.'],
+    ['whatsapp_marketing_per_day', 'WhatsApp: marketing messages a day (all customers)', 'At most this many MARKETING-template messages a day, and only to customers who opted in to offers (25).'],
+    ['whatsapp_marketing_gap_days', 'WhatsApp: days between marketing to one person', 'No second marketing message to the same customer within this many days (7).'],
+    ['nudge_enabled', 'WhatsApp: remind people who said Hi to agree (true / false)', 'Off since 2026-10-09: someone who only said Hi hears from GaadiPe again only if they write.'],
     // The free check before sign-in (migrations 142–143).
     ['chat_anon_checks_per_day', 'Free check before sign-in: per browser, per day', 'How many vehicles one browser may check without signing in each day (1).'],
     ['chat_anon_checks_per_day_ip', 'Free check before sign-in: per network, per day', 'How many free checks one network address may make a day. Homes and offices share one address on Wi-Fi — 3 lets a family each try once.'],

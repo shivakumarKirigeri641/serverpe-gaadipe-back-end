@@ -93,8 +93,24 @@ router.use(safe(async (req, res, next) => {
     const json = res.json.bind(res);
     res.json = (body) => json(maskDeep(body));
   }
+  /*
+   * ONLY PEOPLE WHO AGREED (user, 2026-10-09): someone who only said Hi, or who
+   * replied STOP, is taken out of every answer before it leaves — first, while
+   * the numbers are still whole (admin/consented.js). Admins, staff, fleets and
+   * referrals are not WhatsApp customers and are left alone.
+   */
+  if (!CONSENT_SKIP.test(req.path)) {
+    const inner = res.json.bind(res);
+    res.json = (body) => {
+      require('../admin/consented').filter(body)
+        .then((out) => inner(out))
+        .catch((e) => { console.error('[admin] consent filter:', e.message); inner(body); });
+      return res;
+    };
+  }
   next();
 }));
+const CONSENT_SKIP = /^\/(session|me|admins|people|sessions|fleets|referrals|quizpe|settings|config|audit|blocks|security)(\/|$)/;
 
 /* 9886122415 -> 98******15, in any field that holds a customer's mobile. */
 const MOBILE_KEYS = /^(mobile|user_mobile|phone|wa_id|requested_by|person_mobile)$/;
@@ -2093,30 +2109,29 @@ router.post('/broadcasts/send', needs('settings'), safe(async (req, res) => {
 }));
 
 /* Broadcast in batches (2026-10-05, src/admin/broadcastPlans.js). */
+/*
+ * MANUAL ONLY (user, 2026-10-09, after the 6 Oct "sending spam" disable). Broadcast
+ * plans (automatic batches) and the broadcast room's Auto-select and batch send —
+ * built to fill Meta's 24-hour room and reach the next tier — are switched off.
+ * Their screens still read; nothing can be planned, resumed or sent from them.
+ * A broadcast is one manual choice at a time on Broadcast (/broadcasts/send).
+ */
+const MANUAL_ONLY = { error: 'manual_only',
+  message: 'Automatic and room-filling broadcasts are switched off. Choose the customers yourself on Broadcast — marketing only to customers who opted in to offers.' };
 router.get('/broadcast-plans', safe(async (_req, res) => res.json(await require('../admin/broadcastPlans').list())));
-router.post('/broadcast-plans', needs('settings'), safe(async (req, res) => {
-  if (req.body?.confirm !== 'SEND') return res.status(400).json({ error: 'confirm', message: 'Type SEND to confirm.' });
-  const out = await require('../admin/broadcastPlans').create(req.body || {}, req.admin.id);
-  if (!out.ok) return res.status(400).json({ error: 'bad_plan', ...out });
-  res.json(out);
-}));
+router.post('/broadcast-plans', needs('settings'), (_req, res) => res.status(410).json(MANUAL_ONLY));
 router.post('/broadcast-plans/:id/:action(pause|resume|cancel)', needs('settings'), safe(async (req, res) => {
+  if (req.params.action === 'resume') return res.status(410).json(MANUAL_ONLY);
   const out = await require('../admin/broadcastPlans').act(String(req.params.id).replace(/\D/g, '') || '0', req.params.action, req.admin.id);
   if (!out.ok) return res.status(400).json({ error: 'bad_action', ...out });
   res.json(out);
 }));
 
-/* Broadcast room (2026-10-06, src/admin/broadcastRoom.js): room now, when more frees, today's batch, the next tier. */
+/* Broadcast room (2026-10-06, src/admin/broadcastRoom.js): room now and the tier — read only now. */
 router.get('/broadcast-room', safe(async (_req, res) => res.json(await require('../admin/broadcastRoom').room())));
 router.get('/broadcast-room/tier', safe(async (_req, res) => res.json(await require('../admin/broadcastRoom').tier())));
-router.get('/broadcast-room/suggest', safe(async (req, res) =>
-  res.json(await require('../admin/broadcastRoom').suggest({ size: req.query.size ?? null, filter: req.query.filter || null, gapDays: req.query.gap_days ?? null }))));
-router.post('/broadcast-room/send', needs('settings'), safe(async (req, res) => {
-  if (req.body?.confirm !== 'SEND') return res.status(400).json({ error: 'confirm', message: 'Type SEND to confirm.' });
-  const out = await require('../admin/broadcastRoom').send(req.body || {}, req.admin.id);
-  if (!out.ok) return res.status(400).json({ error: 'bad_batch', ...out });
-  res.json(out);
-}));
+router.get('/broadcast-room/suggest', (_req, res) => res.status(410).json(MANUAL_ONLY));
+router.post('/broadcast-room/send', needs('settings'), (_req, res) => res.status(410).json(MANUAL_ONLY));
 
 router.post('/broadcasts/:id/cancel', needs('settings'), safe(async (req, res) => {
   const out = await broadcasts.cancel(String(req.params.id).replace(/\D/g, '') || '0');

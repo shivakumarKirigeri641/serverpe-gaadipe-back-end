@@ -45,6 +45,8 @@ async function conversations({ limit = 60, activeMinutes = null, q = '' } = {}) 
        LEFT JOIN users u ON u.mobile = s.mobile
       WHERE ($1 = '' OR s.mobile LIKE '%' || $2 || '%' OR s.profile_name ILIKE '%' || $1 || '%')
         AND ($3::int IS NULL OR s.last_inbound_at > now() - ($3 || ' minutes')::interval)
+        -- Only people who agreed and never said STOP (2026-10-09, admin/consented.js).
+        AND ${require('./consented').agreedSql('s.mobile')}
       -- Newest customer message first (user, 2026-09-25): the list answers
       -- "who is messaging", and each row shows when they last wrote. Sorting
       -- by our own sends too (alerts, broadcasts) put people we messaged above
@@ -112,10 +114,10 @@ async function pulse({ sinceMessageId = null } = {}) {
   const counts = await db.one(
     `SELECT
        (SELECT max(id) FROM whatsapp_messages)                          AS last_message_id,
-       (SELECT count(*) FROM whatsapp_sessions
-         WHERE last_inbound_at > now() - interval '15 minutes')         AS active_15m,
-       (SELECT count(*) FROM whatsapp_sessions
-         WHERE last_inbound_at > now() - interval '24 hours')           AS active_24h,
+       (SELECT count(*) FROM whatsapp_sessions ws
+         WHERE ws.last_inbound_at > now() - interval '15 minutes' AND ${require('./consented').agreedSql('ws.mobile')}) AS active_15m,
+       (SELECT count(*) FROM whatsapp_sessions ws
+         WHERE ws.last_inbound_at > now() - interval '24 hours' AND ${require('./consented').agreedSql('ws.mobile')}) AS active_24h,
        (SELECT count(*) FROM payments
          WHERE status = 'created' AND created_at > now() - interval '30 minutes') AS paying_now,
        (SELECT count(*) FROM event_log

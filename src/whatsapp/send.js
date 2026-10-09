@@ -60,25 +60,26 @@ function unmasked(payload) {
 }
 
 /*
- * WHATSAPP IS RETIRED (user, 2026-10-07: "stop sending WhatsApp messages, it's
- * no more"). Meta disabled the account permanently; customers are reached by
- * the website, SMS and email. Nothing leaves for WhatsApp — whatever .env says —
- * until this is set back to false in the code.
+ * THE SWITCH (user, 2026-10-09). WhatsApp was disabled by Meta on 6 Oct for
+ * "sending spam" and restored on 9 Oct. Sending is now an admin setting —
+ * whatsapp_sending_enabled (migration 144, OFF until the owner turns it on in
+ * Settings) — so it can be stopped at once without a deploy. Off, nothing
+ * leaves for WhatsApp, whatever .env says.
  */
-const RETIRED = true;
-let retiredSkips = 0;
-function retired(type, mobile) {
-  if (!RETIRED) return false;
-  retiredSkips += 1;
-  if (retiredSkips === 1 || retiredSkips % 50 === 0) {
-    console.log('[wa] WhatsApp is retired — not sending %s to ••%s (%d skipped since start)', type, String(mobile || '').slice(-4), retiredSkips);
+const settings = require('../util/settings');
+let offSkips = 0;
+async function switchedOff(type, mobile) {
+  if (await settings.bool('whatsapp_sending_enabled', false)) return false;
+  offSkips += 1;
+  if (offSkips === 1 || offSkips % 50 === 0) {
+    console.log('[wa] WhatsApp sending is OFF (whatsapp_sending_enabled) — not sending %s to ••%s (%d skipped since start)', type, String(mobile || '').slice(-4), offSkips);
   }
   return true;
 }
 
 async function post(payload, meta) {
   const { mobile, type, body, templateName } = meta;
-  if (retired(type, mobile)) return { ok: false, error: 'whatsapp_retired' };
+  if (await switchedOff(type, mobile)) return { ok: false, error: 'whatsapp_off' };
 
   // Enforced here, at the one door every message leaves through, so no path —
   // a reply, a watch alert, a payment receipt — can reach a number outside the
@@ -275,7 +276,7 @@ async function list(mobile, { body, button, rows, header, footer, sectionTitle }
  */
 async function document(mobile, filePath, { filename, caption } = {}) {
   const fs = require('fs');
-  if (retired('document', mobile)) return { ok: false, error: 'whatsapp_retired' };
+  if (await switchedOff('document', mobile)) return { ok: false, error: 'whatsapp_off' };
   // Checked before the upload too, or a blocked send still ships the PDF to Meta.
   if (!allowed(mobile)) {
     console.warn('[wa] %s not in WHATSAPP_ALLOWED_RECIPIENTS — not sending document', mobile);
@@ -347,6 +348,26 @@ async function template(mobile, name, params = [], { language = 'en' } = {}) {
     return { ok: false, error: 'opted_out' };
   }
 
+  /*
+   * WHO MAY BE MESSAGED FIRST (user, 2026-10-09, after the spam disable — the
+   * promise in the appeal). A template starts a conversation, so here, at the
+   * one door every template leaves through:
+   *   any template      only someone who agreed to the Terms (WhatsApp's
+   *                     "Agree & continue" or the website) — never someone who
+   *                     only said Hi
+   *   a MARKETING one   also opted in to offers, no marketing to them in the last
+   *                     whatsapp_marketing_gap_days (7), under
+   *                     whatsapp_marketing_per_day (25) for everyone, and only
+   *                     while the number's quality is GREEN
+   * The category is Meta's own (read, cached an hour); one not known is treated
+   * as marketing.
+   */
+  const gate = await consentGate(mobile, name);
+  if (!gate.ok) {
+    console.log('[wa] not sending template %s to ••%s: %s', name, String(mobile).slice(-4), gate.error);
+    return { ok: false, error: gate.error };
+  }
+
   return post({
     messaging_product: 'whatsapp',
     to: toWaId(mobile),
@@ -361,6 +382,87 @@ async function template(mobile, name, params = [], { language = 'en' } = {}) {
   }, { mobile, type: 'template', body: `${name}(${clean.join(' | ')})`, templateName: name });
 }
 
+/* ───────────────────────────────── the consent gate for templates (2026-10-09) ── */
+
+const ten = (m) => String(m || '').replace(/\D/g, '').slice(-10);
+
+/* Meta's category for each template, read (GET only) and kept an hour. */
+let categories = { at: 0, map: new Map() };
+async function categoryOf(name) {
+  if (Date.now() - categories.at > 60 * 60 * 1000 && wa.token && wa.businessId) {
+    try {
+      const map = new Map();
+      let next = `https://graph.facebook.com/${wa.apiVersion}/${wa.businessId}/message_templates?fields=name,category&limit=200`;
+      for (let i = 0; next && i < 10; i += 1) {
+        const r = await fetch(next, { headers: { Authorization: `Bearer ${wa.token}` }, signal: AbortSignal.timeout(15000) });
+        const j = await r.json().catch(() => ({}));
+        if (j.error) break;
+        for (const t of j.data || []) map.set(t.name, String(t.category || '').toUpperCase());
+        next = j.paging?.next || null;
+      }
+      if (map.size) categories = { at: Date.now(), map };
+    } catch { /* keep the last answer */ }
+  }
+  if (categories.map.has(name)) return categories.map.get(name);
+  const row = await db.one(`SELECT upper(category) AS c FROM wa_templates WHERE template_name = $1`, [name]).catch(() => null);
+  return row?.c || 'MARKETING';   // unknown: the strict answer
+}
+
+/* The number's quality (GET only), kept ten minutes. */
+let quality = { at: 0, value: null };
+async function qualityRating() {
+  if (Date.now() - quality.at > 10 * 60 * 1000 && wa.token && wa.phoneNumberId) {
+    try {
+      const r = await fetch(`https://graph.facebook.com/${wa.apiVersion}/${wa.phoneNumberId}?fields=quality_rating`,
+        { headers: { Authorization: `Bearer ${wa.token}` }, signal: AbortSignal.timeout(15000) });
+      const j = await r.json().catch(() => ({}));
+      if (!j.error) quality = { at: Date.now(), value: String(j.quality_rating || '').toUpperCase() };
+    } catch { /* keep the last answer */ }
+  }
+  return quality.value;
+}
+
+/** Agreed to the Terms — on WhatsApp or on the website. */
+async function agreedTerms(mobile) {
+  const row = await db.one(
+    `SELECT 1 AS yes FROM event_log
+      WHERE kind = 'consent_accepted' AND right(regexp_replace(detail->>'mobile', '\\D', '', 'g'), 10) = $1 LIMIT 1`,
+    [ten(mobile)]).catch(() => null);
+  return Boolean(row);
+}
+
+/** Opted in to tips and offers, and not withdrawn. */
+async function optedInToOffers(mobile) {
+  const row = await db.one(
+    `SELECT 1 AS yes FROM users WHERE right(mobile, 10) = $1
+        AND promo_consent_at IS NOT NULL AND promo_consent_withdrawn_at IS NULL LIMIT 1`,
+    [ten(mobile)]).catch(() => null);
+  return Boolean(row);
+}
+
+async function consentGate(mobile, name) {
+  if (!(await agreedTerms(mobile))) return { ok: false, error: 'not_agreed' };
+  const category = await categoryOf(name);
+  if (category !== 'MARKETING') return { ok: true, category };
+
+  if (!(await optedInToOffers(mobile))) return { ok: false, error: 'not_opted_in_to_offers' };
+  if ((await qualityRating()) !== 'GREEN') return { ok: false, error: 'quality_not_green' };
+  const marketingNames = [...categories.map].filter(([, c]) => c === 'MARKETING').map(([n]) => n);
+  const names = marketingNames.length ? marketingNames : [name];
+  const gapDays = await settings.num('whatsapp_marketing_gap_days', 7);
+  const perDay = await settings.num('whatsapp_marketing_per_day', 25);
+  const sent = await db.one(
+    `SELECT count(*) FILTER (WHERE right(mobile, 10) = $1 AND created_at > now() - ($3 || ' days')::interval)::int AS to_them,
+            count(*) FILTER (WHERE created_at > (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'))::int AS today
+       FROM whatsapp_messages
+      WHERE direction = 'out' AND error_message IS NULL AND template_name = ANY($2::text[])
+        AND created_at > now() - interval '30 days'`,
+    [ten(mobile), names, String(gapDays)]);
+  if (sent.to_them > 0) return { ok: false, error: 'marketing_gap' };
+  if (sent.today >= perDay) return { ok: false, error: 'marketing_daily_cap' };
+  return { ok: true, category };
+}
+
 /** Replied STOP, and has not replied START since. */
 async function optedOut(mobile) {
   const row = await db.one(
@@ -370,4 +472,5 @@ async function optedOut(mobile) {
   return Boolean(row);
 }
 
-module.exports = { _unmasked: unmasked, text, buttons, list, document, template, windowOpen, toWaId, allowed, optedOut };
+module.exports = { _unmasked: unmasked, text, buttons, list, document, template, windowOpen, toWaId, allowed, optedOut,
+                   agreedTerms, optedInToOffers, categoryOf, consentGate };

@@ -169,9 +169,15 @@ async function templates({ refresh = false } = {}) {
  * is everyone in either. Each row says which audiences it is in, so the list
  * explains itself.
  */
+/*
+ * ONLY PEOPLE WHO AGREED (user, 2026-10-09, after the 6 Oct "sending spam" disable):
+ * "Everyone" means everyone who agreed to the Terms and never said STOP. Someone
+ * who only said Hi is not an audience — not listed, not counted, not selectable —
+ * and "Said Hi" is gone. Marketing templates go only to "Opted in to offers".
+ */
 const FILTERS = {
-  all:      'Everyone',
-  hi_only:  'Said Hi, never checked a vehicle',
+  all:      'Everyone who agreed (not STOP)',
+  offers:   'Opted in to offers (the only audience for marketing)',
   checked:  'Checked a vehicle, never paid',
   lapsed:   'Paid before, nothing active now',
   active:   'Paying now (report or watch active)',
@@ -186,7 +192,7 @@ const LEGACY = { not_paying: 'NOT paid' };
 
 const PREDICATE = {
   all:     'true',
-  hi_only: 'has_chat AND NOT checked',
+  offers:  'offers',
   checked: 'checked AND NOT paid',
   lapsed:  'paid AND NOT active',
   active:  'active',
@@ -239,20 +245,26 @@ const PEOPLE = `
            (SELECT max(t.sent_at) FROM whatsapp_broadcast_targets t
              WHERE t.mobile = p.mobile AND t.status = 'sent') AS last_broadcast_at,
            EXISTS (SELECT 1 FROM blocks b
-                    WHERE b.kind = 'mobile' AND b.value = p.mobile AND b.released_at IS NULL) AS blocked
+                    WHERE b.kind = 'mobile' AND b.value = p.mobile AND b.released_at IS NULL) AS blocked,
+           EXISTS (SELECT 1 FROM users ou WHERE right(ou.mobile, 10) = right(p.mobile, 10)
+                    AND ou.promo_consent_at IS NOT NULL AND ou.promo_consent_withdrawn_at IS NULL) AS offers
       FROM pool p
      -- Replied STOP (user, 2026-09-25): the Terms promise we stop messaging
      -- them, so they are not in any audience — not listed, not counted, not
      -- sendable. send.js refuses them as well, in case of a list built earlier.
      WHERE NOT EXISTS (SELECT 1 FROM whatsapp_sessions s
                         WHERE s.mobile = p.mobile AND s.wa_opt_out_at IS NOT NULL)
+       -- Agreed to the Terms (WhatsApp "Agree & continue" or the website), or not
+       -- here at all (2026-10-09). send.js refuses them too.
+       AND EXISTS (SELECT 1 FROM event_log c WHERE c.kind = 'consent_accepted'
+                    AND right(regexp_replace(c.detail->>'mobile', '\\D', '', 'g'), 10) = right(p.mobile, 10))
   )`;
 
 /** Which audiences a row is in — shown beside it, so the list explains itself. */
 const segmentsOf = (r) => Object.keys(FILTERS)
   .filter((k) => k !== 'all' && k !== 'paying')
   .filter((k) => ({
-    hi_only: r.has_chat && !r.checked,
+    offers: r.offers,
     checked: r.checked && !r.paid,
     lapsed: r.paid && !r.active,
     active: r.active,
@@ -407,7 +419,7 @@ async function peopleByMobile(mobiles) {
   if (!clean.length) return [];
   const { rows } = await db.query(
     `${PEOPLE}
-     SELECT user_id AS id, mobile, display_name, wa_profile_name, last_vehicle
+     SELECT user_id AS id, mobile, display_name, wa_profile_name, last_vehicle, offers
        FROM people WHERE mobile = ANY($1::text[])
       ORDER BY user_id NULLS LAST`, [clean]);
   return rows;
@@ -425,9 +437,39 @@ async function queue({ template_name, language = 'en', variables = [], mobiles =
     return { ok: false, error: 'whatsapp_off',
              message: 'WhatsApp is switched off (WHATSAPP_ENABLED). Turn it on before broadcasting.' };
   }
+  if (!(await require('../util/settings').bool('whatsapp_sending_enabled', false))) {
+    return { ok: false, error: 'whatsapp_off',
+             message: 'WhatsApp sending is switched off (Settings → whatsapp_sending_enabled).' };
+  }
   const check = await preview({ template_name, language, variables, mobiles });
   if (!check.ok) return check;
-  const people = await peopleByMobile(mobiles);
+  let people = await peopleByMobile(mobiles);
+  /*
+   * MARKETING, STRICTLY (2026-10-09): only customers who opted in to offers, and
+   * no more than what is left of today's whatsapp_marketing_per_day. Anyone else
+   * chosen is left out, and the panel is told how many and why — rather than
+   * queued and refused one by one (send.js would refuse them anyway).
+   */
+  const marketing = String(check.template?.category || '').toUpperCase() === 'MARKETING';
+  if (marketing) {
+    const chosen = people.length;
+    people = people.filter((p) => p.offers);
+    if (!people.length) {
+      return { ok: false, error: 'not_opted_in',
+               message: `${check.template.name} is a MARKETING template: it can go only to customers who opted in to offers — none of the ${chosen} chosen has.` };
+    }
+    const perDay = await require('../util/settings').num('whatsapp_marketing_per_day', 25);
+    const today = await db.one(
+      `SELECT count(*)::int AS n FROM whatsapp_broadcast_targets t JOIN whatsapp_broadcasts b ON b.id = t.broadcast_id
+        WHERE b.created_at > (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')
+          AND b.status <> 'cancelled' AND t.status IN ('pending', 'sent')
+          AND b.template_name IN (SELECT template_name FROM wa_templates WHERE upper(category) = 'MARKETING')`);
+    const left = Math.max(0, perDay - (today?.n || 0));
+    if (people.length > left) {
+      return { ok: false, error: 'marketing_daily_cap',
+               message: `Marketing is capped at ${perDay} a day (whatsapp_marketing_per_day); ${left} left today. Choose ${left} or fewer.` };
+    }
+  }
   if (!people.length) return { ok: false, error: 'recipients', message: 'Choose at least one customer.' };
 
   const b = await db.one(

@@ -83,7 +83,31 @@ const BTN = {
   OWNER_VERIFY: 'owner_verify',
   OWNER_HIDE: 'owner_hide',
   OWNER_SHOW: 'owner_show',
+  OFFERS_YES: 'offers_yes',
+  OFFERS_NO: 'offers_no',
 };
+
+/*
+ * TIPS & OFFERS ON WHATSAPP — ASKED, NEVER ASSUMED (user, 2026-10-09, after the
+ * spam disable: marketing only to people who opted in). Once, in a conversation
+ * the customer started, after their first vehicle result: a reply, so no template
+ * and nothing unsolicited. "Yes" is recorded with these exact words (the same
+ * opt-in as the website's box, site/auth.setPromoConsent); "No" is remembered and
+ * never asked again. STOP withdraws it on every channel.
+ */
+const OFFERS_ASK = 'One quick question: would you like occasional *tips & offers* from GaadiPe here on WhatsApp? At most one a week. Reply *STOP* any time to stop them.';
+const OFFERS_WORDS = 'Yes — send me occasional tips & offers from GaadiPe on WhatsApp (at most one a week; STOP any time).';
+
+async function askOffersOnce(mobile) {
+  if (await send.optedInToOffers(mobile)) return;
+  const s = await db.one(`SELECT context->>'offers_asked_at' AS asked FROM whatsapp_sessions WHERE mobile = $1`, [mobile]).catch(() => null);
+  if (s?.asked) return;
+  await db.query(
+    `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+    [mobile, JSON.stringify({ offers_asked_at: new Date().toISOString() })]);
+  await send.buttons(mobile, OFFERS_ASK,
+    [{ id: BTN.OFFERS_YES, title: 'Yes, send offers' }, { id: BTN.OFFERS_NO, title: 'No thanks' }]);
+}
 
 const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
 
@@ -1127,6 +1151,7 @@ async function deliverReport(mobile, regNo, message) {
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
   require('../owners/checkAlerts').noteCheck({ regNo, checker: mobile, channel: 'whatsapp' });
   await reportMenu(mobile, regNo, data, bought);
+  await askOffersOnce(mobile).catch((e) => console.error('[wa] offers ask:', e.message));
 }
 
 /**
@@ -1303,6 +1328,9 @@ const STOP_WHY = {
 };
 const STOP_AFTER = 'If you write to us, we will still reply. Reply *START* any time to hear from us again.';
 async function stopped(mobile, lead) {
+  // STOP withdraws the tips & offers opt-in too, on every channel (the Terms say so; 2026-10-09).
+  const who = await db.one(`SELECT id FROM users WHERE right(mobile, 10) = right($1, 10) AND promo_consent_at IS NOT NULL`, [mobile]).catch(() => null);
+  if (who) await require('../site/auth').setPromoConsent(who.id, false, { channel: 'whatsapp' }).catch(() => {});
   const out = await send.list(mobile, {
     body: `${lead}\n\n${STOP_AFTER}\n\n_May we ask why? One tap helps us improve._ 🙏`,
     button: 'Tell us why',
@@ -1406,7 +1434,8 @@ async function handle(session, message, mobile) {
     return;
   }
 
-  if (/^(stop|unsubscribe|stop promotions)\s*$/i.test(intent.text)) {
+  // "Stop alerts" / "Stop reminders" / "Stop offers" — the templates' own buttons (2026-10-09) — are STOP.
+  if (/^(stop|unsubscribe|stop promotions|stop alerts?|stop reminders?|stop offers)\s*$/i.test(intent.text)) {
     await db.query(
       `UPDATE whatsapp_sessions SET wa_opt_out_at = now(), modified_at = now()
         WHERE mobile = $1`, [mobile]);
@@ -1573,7 +1602,13 @@ async function handle(session, message, mobile) {
      * so it is matched by words.
      */
     if (!Object.values(BTN).includes(intent.id)) {
-      if (/^my (vehicle )?reports?$|^my vehicles?$/i.test(intent.text)) { await myVehicles(mobile, message); return; }
+      if (/^my (vehicle )?reports?$|^my vehicles?$|^view my vehicles?$/i.test(intent.text)) { await myVehicles(mobile, message); return; }
+      // The service-update template's buttons (gp_service_update_v1, 2026-10-09).
+      if (/^check (another|a)( vehicle)?$/i.test(intent.text)) {
+        await setState(mobile, 'owner_start', 'template: check another');
+        await send.text(mobile, 'Sure — send me the vehicle number, like *KA01XX1234*.');
+        return;
+      }
       if (/^(support|help|contact( us)?)$/i.test(intent.text)) { await sendSupportLink(mobile); return; }
     }
 
@@ -1599,6 +1634,20 @@ async function handle(session, message, mobile) {
           + 'What would you like to do?\n\n'
           + '_To check a vehicle you can also just send its number, like *KA01XX1234*._');
         return;
+
+      case BTN.OFFERS_YES:
+      case BTN.OFFERS_NO: {
+        const yes = intent.id === BTN.OFFERS_YES;
+        const u = await store.upsertUser(mobile);
+        if (yes) await require('../site/auth').setPromoConsent(u.id, true, { channel: 'whatsapp', text: OFFERS_WORDS });
+        await db.query(
+          `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+          [mobile, JSON.stringify({ offers_answer: yes ? 'yes' : 'no', offers_answered_at: new Date().toISOString() })]);
+        await send.text(mobile, yes
+          ? '✅ Thank you — you will get occasional tips & offers here, at most one a week. Reply *STOP* any time to stop them.'
+          : '👍 No problem — no offers. You will still get your reports and the alerts you asked for.');
+        return;
+      }
 
       case BTN.AGREE_PARTNER:
         await recordConsent(mobile, 'partner', ['partner-policy', 'privacy']);
