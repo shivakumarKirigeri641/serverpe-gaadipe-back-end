@@ -1625,6 +1625,20 @@ async function handle(session, message, mobile) {
         return;
       }
       if (/^(support|help|contact( us)?)$/i.test(intent.text)) { await sendSupportLink(mobile); return; }
+      /*
+       * "ONLY ALERT CHANGES" (user, 2026-10-09; gp_monitoring_alert_en_v2's third
+       * button). No more "today's update" all-clear (jobs/watch.js dailyStatus);
+       * real alerts — a change, an expiry, challans — still come, as paid for.
+       */
+      if (/^only alert (on )?changes?$|^alert me (only )?(on|when) changes?$/i.test(intent.text)) {
+        const u = await store.upsertUser(mobile);
+        await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'watch_status_off', $2)`,
+          [u.id, JSON.stringify({ mobile, via: 'template button', at: new Date().toISOString() })]);
+        await funnel(mobile, 'watch_status_off');
+        await send.text(mobile, '👍 Done. No more routine updates — I will message you *only when something changes* '
+          + 'on your vehicle: a new challan, or a document about to expire.');
+        return;
+      }
     }
 
     switch (intent.id) {
