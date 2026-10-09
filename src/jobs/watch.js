@@ -502,6 +502,10 @@ async function lifecycle() {
  * anyone who already got a real alert today (they have heard), anyone paused,
  * blocked or who replied STOP (send.js refuses those). Once per person per
  * IST day, recorded as watch_status in event_log.
+ *
+ * ALTERNATE DAYS (user, 2026-10-09, after Meta's "spam rate limit"): at most
+ * once every watch_daily_status_every_days (2) days. A real alert (watch_digest)
+ * counts too, so nobody hears an alert one evening and an "all clear" the next.
  */
 // { mobile } sends to that one customer only, at any hour — for testing from
 // the server: node -e "require('./src/jobs/watch').dailyStatus({ mobile: '98xxxxxxxx' })"
@@ -513,6 +517,9 @@ async function dailyStatus({ mobile = null } = {}) {
   if (!mobile && (hour < from || hour >= until)) return { sent: 0 };
 
   const today = istNow().toISOString().slice(0, 10);
+  // The first IST date that still counts as "recent": every 2 days → yesterday.
+  const every = Math.max(1, await settings.num('watch_daily_status_every_days', 2));
+  const since = new Date(istNow().getTime() - (every - 1) * 86400000).toISOString().slice(0, 10);
   const { rows } = await db.query(
     `SELECT w.id, w.user_id, w.vehicle_id, w.last_checked_at, w.created_at, v.reg_no,
             u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name
@@ -526,7 +533,7 @@ async function dailyStatus({ mobile = null } = {}) {
         AND EXISTS (SELECT 1 FROM payments p WHERE p.user_id = w.user_id AND p.status = 'paid' AND p.amount_paise > 0
                       AND p.raw->>'vehicle_id' = w.vehicle_id::text)
         AND NOT EXISTS (SELECT 1 FROM event_log e WHERE e.user_id = w.user_id
-                          AND e.kind IN ('watch_status', 'watch_digest') AND e.detail->>'ist_date' = $1
+                          AND e.kind IN ('watch_status', 'watch_digest') AND e.detail->>'ist_date' BETWEEN $4 AND $1
                           AND coalesce(e.detail->>'failed', 'false') <> 'true')
         AND ($2::text IS NULL OR u.mobile = $2)
         -- Strictly the first N days after the customer FIRST tapped "Agree &
@@ -539,7 +546,7 @@ async function dailyStatus({ mobile = null } = {}) {
                 WHERE c.kind = 'consent_accepted' AND c.detail->>'mobile' = u.mobile),
               u.created_at) > now() - make_interval(days => $3::int))
       ORDER BY w.user_id, v.reg_no`, [today, mobile ? String(mobile).replace(/\D/g, '').slice(-10) : null,
-                                      await settings.num('watch_daily_status_days', 7)]);
+                                      await settings.num('watch_daily_status_days', 7), since]);
 
   const people = new Map();
   for (const r of rows) {
