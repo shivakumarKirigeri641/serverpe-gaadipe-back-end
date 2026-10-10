@@ -67,8 +67,8 @@ const GROUPS = [
     ['chat_anon_checks_per_day_ip', 'Free check before sign-in: per network, per day', 'How many free checks one network address may make a day. Homes and offices share one address on Wi-Fi — 3 lets a family each try once.'],
     ['chat_anon_checks_per_hour', 'Free check before sign-in: whole site, per hour', 'A flood of free checks stops here (60).'],
     // Website + SMS (2026-10-10, migration 149).
-    ['chat_anon_checks_per_day', 'Free checks before sign-in: per browser a day', '3: a visitor may check this many vehicles a day without signing in.'],
-    ['chat_anon_checks_per_day_ip', 'Free checks before sign-in: per network a day', '3: the same limit per internet address, so clearing the browser does not reset it.'],
+    ['chat_anon_checks_per_day', 'Free checks before sign-in: per browser a day', '2 (migration 153): a visitor may check this many vehicles a day without signing in.'],
+    ['chat_anon_checks_per_day_ip', 'Free checks before sign-in: per network a day', '2: the same limit per internet address, so clearing the browser does not reset it.'],
     ['free_checks_per_day', 'Checks after sign-in: per customer a day', '10.'],
     ['free_monitor_enabled', 'Free monitoring: offered (true / false)', 'After sign-in, one vehicle monitored free — once per mobile number and per browser.'],
     ['free_monitor_days', 'Free monitoring: days', '14.'],
