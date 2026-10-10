@@ -199,6 +199,10 @@ function whereOf(q, admin, args) {
 
   // The WhatsApp admin (X-View: whatsapp, 2026-10-09): never a vehicle only ever checked on the website.
   if (require('./consented').view.getStore()?.whatsappOnly) w.push('NOT (x.web_lookups > 0 AND x.wa_lookups = 0)');
+  // The web admin (X-View: web, 2026-10-10): never a vehicle only ever checked on WhatsApp.
+  if (require('./consented').view.getStore()?.webOnly) {
+    w.push(`NOT (x.wa_lookups > 0 AND x.web_lookups = 0 AND x.reg_no NOT IN (SELECT reg_no FROM vehicle_reports WHERE channel = 'web'))`);
+  }
   if (q.channel === 'whatsapp') w.push('x.wa_lookups > 0');
   if (q.channel === 'web') w.push(`(x.web_lookups > 0 OR x.reg_no IN (SELECT reg_no FROM vehicle_reports WHERE channel = 'web'))`);
   if (q.paid === 'yes') w.push('x.paid > 0');

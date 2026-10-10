@@ -104,18 +104,21 @@ router.use(safe(async (req, res, next) => {
    * then only people who agreed ON WHATSAPP are shown, in lists and in counts.
    * The web admin sends nothing and keeps its website customers.
    */
+  /* WEB ONLY (user, 2026-10-10): the web admin sends X-View: web — website people and data only. */
   const consented = require('../admin/consented');
-  const whatsappOnly = String(req.get('x-view') || '').toLowerCase() === 'whatsapp';
+  const xView = String(req.get('x-view') || '').toLowerCase();
+  const whatsappOnly = xView === 'whatsapp';
+  const webOnly = xView === 'web';
   if (!CONSENT_SKIP.test(req.path)) {
     const inner = res.json.bind(res);
     res.json = (body) => {
-      consented.filter(body, { whatsappOnly })
+      consented.filter(body, { whatsappOnly, webOnly })
         .then((out) => inner(out))
         .catch((e) => { console.error('[admin] consent filter:', e.message); inner(body); });
       return res;
     };
   }
-  consented.view.run({ whatsappOnly }, next);
+  consented.view.run({ whatsappOnly, webOnly }, next);
 }));
 const CONSENT_SKIP = /^\/(session|me|admins|people|sessions|fleets|referrals|quizpe|settings|config|audit|blocks|security)(\/|$)/;
 

@@ -154,6 +154,9 @@ async function list(q = {}) {
         -- The WhatsApp admin (X-View: whatsapp, 2026-10-09): never a website payment.
         ${require('./consented').view.getStore()?.whatsappOnly
           ? `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') NOT IN ('web', 'website')` : ''}
+        -- The web admin (X-View: web, 2026-10-10): website payments only.
+        ${require('./consented').view.getStore()?.webOnly
+          ? `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') IN ('web', 'website')` : ''}
         AND ($3 = '' OR u.mobile LIKE '%' || regexp_replace($3, '\\D', '', 'g') || '%'
              OR v.reg_no LIKE '%' || upper(regexp_replace($3, '[^A-Za-z0-9]', '', 'g')) || '%'
              OR p.order_id = $3 OR p.payment_id = $3)

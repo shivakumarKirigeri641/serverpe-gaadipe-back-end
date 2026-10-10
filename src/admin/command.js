@@ -221,6 +221,7 @@ const KPIS = [
  * WhatsApp (and never said STOP). The web admin keeps the website figures above.
  */
 const waView = () => require('./consented').view.getStore()?.whatsappOnly === true;
+const webView = () => require('./consented').view.getStore()?.webOnly === true;
 const WA_CHECK = `(kind IN ('vehicle_check', 'vehicle_check_repeat') AND coalesce(detail->>'channel', 'whatsapp') = 'whatsapp')`;
 const WHO = `coalesce(e.mobile, u.mobile)`;
 const WA_PERSON = () => `${WHO} IS NOT NULL AND e.channel <> 'web' AND ${require('./consented').agreedSql(WHO)}
@@ -430,7 +431,9 @@ async function live({ since = null } = {}) {
           AND e.name <> 'page_view'
           -- The WhatsApp admin: nothing from the website.
           AND ($2::boolean IS NOT TRUE OR e.channel <> 'web')
-        ORDER BY e.id DESC LIMIT 40`, [sinceId, waView()]),
+          -- The web admin (2026-10-10): nothing from WhatsApp.
+          AND ($3::boolean IS NOT TRUE OR e.channel <> 'whatsapp')
+        ORDER BY e.id DESC LIMIT 40`, [sinceId, waView(), webView()]),
     db.one(
       `SELECT
          count(DISTINCT visitor_id) FILTER (WHERE channel = 'web' AND occurred_at > now() - interval '5 minutes')::int  AS on_site,
@@ -458,9 +461,12 @@ async function live({ since = null } = {}) {
   now.searches = web.searches;
   if (!wa) now.signing_in = web.signing_in;
   // "Chatting": people who wrote on WhatsApp in the last 15 minutes — only those who agreed (and never STOP).
-  now.chatting = (await db.one(
-    `SELECT count(*)::int AS n FROM whatsapp_sessions s
-      WHERE s.last_inbound_at > now() - interval '15 minutes' AND ${consented.agreedSql('s.mobile')}`)).n;
+  // Not in the web admin (2026-10-10): no WhatsApp there.
+  if (!webView()) {
+    now.chatting = (await db.one(
+      `SELECT count(*)::int AS n FROM whatsapp_sessions s
+        WHERE s.last_inbound_at > now() - interval '15 minutes' AND ${consented.agreedSql('s.mobile')}`)).n;
+  }
   const errors = now.api_errors + now.delivery_errors;
   return {
     status: errors ? { level: 'degraded', text: `${errors} error${errors === 1 ? '' : 's'} in the last hour` }
@@ -503,6 +509,7 @@ async function drill({ what, range, from, to, compare, previous = false, limit =
       WHERE e.occurred_at >= $1 AND e.occurred_at < $2
         AND (${sel.web ? `e.channel = 'web'` : `e.name = ANY($3::text[])`})
         ${waView() ? `AND ${WA_PERSON()}` : ''}
+        ${webView() ? `AND e.channel <> 'whatsapp'` : ''}
       ORDER BY e.occurred_at DESC LIMIT $4`,
     sel.web ? [a, b, [], Math.min(1000, limit)] : [a, b, sel.names, Math.min(1000, limit)]);
   return {

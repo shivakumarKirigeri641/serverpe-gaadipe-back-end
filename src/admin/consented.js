@@ -28,8 +28,19 @@ const { AsyncLocalStorage } = require('async_hooks');
  */
 const view = new AsyncLocalStorage();
 const whatsappOnlyNow = () => view.getStore()?.whatsappOnly === true;
-const channelSql = (alias, whatsappOnly) => (whatsappOnly
-  ? `AND coalesce(${alias}.detail->>'channel', 'whatsapp') = 'whatsapp'` : '');
+/*
+ * AND THE WEB ADMIN, WEB ONLY (user, 2026-10-10: "hide or disable all WhatsApp
+ * content in my web admin panel and only show the web browser visits & users").
+ * It sends X-View: web: a person counts once they agreed ON THE WEBSITE (every
+ * site sign-in records it, channel 'web'); a WhatsApp STOP does not hide them
+ * there, because they chose the website after it.
+ */
+const webOnlyNow = () => view.getStore()?.webOnly === true;
+const channelSql = (alias, whatsappOnly, webOnly = false) => (webOnly
+  ? `AND ${alias}.detail->>'channel' = 'web'`
+  : whatsappOnly ? `AND coalesce(${alias}.detail->>'channel', 'whatsapp') = 'whatsapp'` : '');
+const stopSql = (col, webOnly) => (webOnly ? 'true' : `NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
+                   WHERE right(so.mobile, 10) = ${col} AND so.wa_opt_out_at IS NOT NULL)`);
 
 const KEYS = ['mobile', 'phone', 'wa_id', 'customer_mobile', 'checker', 'to'];
 const ten = (v) => {
@@ -49,16 +60,15 @@ function collect(node, out, depth = 0) {
 }
 
 /** Of these mobiles, the ones that may be shown: agreed, never STOP — and staff. */
-async function allowedOf(mobiles, { whatsappOnly = whatsappOnlyNow() } = {}) {
+async function allowedOf(mobiles, { whatsappOnly = whatsappOnlyNow(), webOnly = webOnlyNow() } = {}) {
   if (!mobiles.length) return new Set();
   const { rows } = await db.query(
     `SELECT m FROM unnest($1::text[]) AS m
       WHERE (
               EXISTS (SELECT 1 FROM event_log c WHERE c.kind = 'consent_accepted'
                        AND right(regexp_replace(c.detail->>'mobile', '\\D', '', 'g'), 10) = m
-                       ${channelSql('c', whatsappOnly)})
-              AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions s
-                               WHERE right(s.mobile, 10) = m AND s.wa_opt_out_at IS NOT NULL)
+                       ${channelSql('c', whatsappOnly, webOnly)})
+              AND ${stopSql('m', webOnly)}
             )
          OR EXISTS (SELECT 1 FROM users u WHERE right(u.mobile, 10) = m AND u.is_internal)
          OR EXISTS (SELECT 1 FROM admin_users a WHERE right(regexp_replace(coalesce(a.mobile, ''), '\\D', '', 'g'), 10) = m)`,
@@ -82,11 +92,11 @@ function strip(node, allowed, depth = 0) {
 }
 
 /** The answer with everyone who did not agree, or said STOP, taken out. */
-async function filter(body, { whatsappOnly = whatsappOnlyNow() } = {}) {
+async function filter(body, { whatsappOnly = whatsappOnlyNow(), webOnly = webOnlyNow() } = {}) {
   const found = new Set();
   collect(body, found);
   if (!found.size) return body;
-  const allowed = await allowedOf([...found], { whatsappOnly });
+  const allowed = await allowedOf([...found], { whatsappOnly, webOnly });
   if (allowed.size === found.size) return body;
   return strip(body, allowed);
 }
@@ -95,11 +105,10 @@ async function filter(body, { whatsappOnly = whatsappOnlyNow() } = {}) {
  * The same rule as an SQL condition over a mobile column, for the lists and
  * counts that must not even count them (Customers, Live conversations).
  */
-const agreedSql = (col, { whatsappOnly = whatsappOnlyNow() } = {}) => `(
+const agreedSql = (col, { whatsappOnly = whatsappOnlyNow(), webOnly = webOnlyNow() } = {}) => `(
   EXISTS (SELECT 1 FROM event_log ac WHERE ac.kind = 'consent_accepted'
            AND right(regexp_replace(ac.detail->>'mobile', '\\D', '', 'g'), 10) = right(${col}, 10)
-           ${channelSql('ac', whatsappOnly)})
-  AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so
-                   WHERE right(so.mobile, 10) = right(${col}, 10) AND so.wa_opt_out_at IS NOT NULL))`;
+           ${channelSql('ac', whatsappOnly, webOnly)})
+  AND ${stopSql(`right(${col}, 10)`, webOnly)})`;
 
-module.exports = { filter, allowedOf, agreedSql, view };
+module.exports = { filter, allowedOf, agreedSql, view, webOnlyNow, whatsappOnlyNow };

@@ -102,8 +102,10 @@ async function profitAndLoss(r, money) {
 async function overview(q = {}) {
   const r = period(q);
   const data = await ledger.entries({ from: r.from, to: r.to });
-  const money = await ledger.periodMoney(r.from, r.to, data);
-  const rows = data.rows;
+  // The web admin (X-View: web, 2026-10-10): website money only.
+  const webOnly = require('./consented').webOnlyNow();
+  const money = await ledger.periodMoney(r.from, r.to, data, webOnly ? { channel: 'website' } : {});
+  const rows = webOnly ? data.rows.filter((x) => x.channel === 'website') : data.rows;
   const grain = ['day', 'week', 'month'].includes(q.grain) ? q.grain : (r.to - r.from > 62 * 86400000 ? 'month' : 'day');
   const pnl = await profitAndLoss(r, money);
   const series = group(rows, (x) => bucket(x.paid_at || x.created_at, grain)).sort((a, b) => a.key.localeCompare(b.key));
@@ -153,6 +155,7 @@ async function transactions(q = {}) {
   if (q.status) rows = rows.filter((x) => x.status === q.status);
   if (q.source) rows = rows.filter((x) => x.source === q.source);
   if (q.channel) rows = rows.filter((x) => x.channel === q.channel);
+  if (require('./consented').webOnlyNow()) rows = rows.filter((x) => x.channel === 'website');
   if (q.fee === 'estimated') rows = rows.filter((x) => x.fee_source === 'estimated');
   if (q.loss === '1') rows = rows.filter((x) => x.net_paise < 0);
   const key = SORTS[q.sort] ? q.sort : 'date';

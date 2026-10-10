@@ -121,7 +121,8 @@ async function create({ token, subject, message, name, email, regNo }) {
  */
 async function reply(id, text, adminId) {
   const t = await db.one(
-    `SELECT c.*, u.display_name, u.wa_profile_name
+    `SELECT c.*, u.display_name, u.wa_profile_name,
+            u.email AS user_email, u.email_verified_at, u.email_unsubscribed_at
        FROM contact_messages c LEFT JOIN users u ON u.id = c.user_id
       WHERE c.id = $1`, [id]);
   if (!t) return { ok: false, error: 'unknown_ticket' };
@@ -146,7 +147,40 @@ async function reply(id, text, adminId) {
       { language: await settings.get('wa_template_language', 'en') },
     ).catch((e) => ({ ok: false, error: e.message }));
   }
-  return { ok: true, delivered: sent.ok, reason: sent.ok ? null : sent.error, ticket_no: t.ticket_no };
+  /*
+   * BY EMAIL AND NOTIFICATION (user, 2026-10-10: GaadiPe is website + SMS now).
+   * The address they wrote from, else their confirmed account email; and a
+   * browser notification on their phones. Delivered if any of these went.
+   */
+  const channels = sent.ok ? ['whatsapp'] : [];
+  const to = (t.email && String(t.email).includes('@')) ? t.email
+    : (t.user_email && t.email_verified_at && !t.email_unsubscribed_at ? t.user_email : null);
+  const name = String(t.display_name || t.wa_profile_name || t.name || '').split(' ')[0] || 'there';
+  if (to) {
+    const T = require('../mail/templates');
+    const C = require('../mail/customer');
+    const mail = {
+      subject: `Re: your GaadiPe ticket ${t.ticket_no || ''}`.trim(),
+      replyTo: 'support@gaadipe.in',
+      ...T.layout({
+        tagline: 'GaadiPe support', title: `Our answer to your ticket ${t.ticket_no || ''}`.trim(),
+        lead: `Hi ${name}, thank you for writing to GaadiPe.`,
+        blocks: [`<div style="font-size:14px;line-height:1.7;color:#0b1f1c;background:#f6faf9;border:1px solid #e3ecea;border-radius:10px;padding:14px 16px;">${T.esc(body)}</div>`],
+        cta: { label: 'Open GaadiPe', url: `${C.SITE()}/chat` },
+        footer: 'Reply to this email if you need anything else.',
+      }),
+    };
+    const out = await C.deliver(to, mail, null).catch((e) => ({ ok: false, error: e.message }));
+    if (out.ok) channels.push('email');
+  }
+  if (t.user_id) {
+    const pushed = await require('../site/push').toCustomer(t.user_id, {
+      title: `GaadiPe answered your ticket ${t.ticket_no || ''}`.trim(), body: body.slice(0, 200), url: '/chat', tag: `ticket-${t.id}`,
+    }).catch(() => 0);
+    if (pushed) channels.push('notification');
+  }
+  const delivered = channels.length > 0;
+  return { ok: true, delivered, channels, reason: delivered ? null : (to || t.user_id ? sent.error : 'no email or account to reach'), ticket_no: t.ticket_no };
 }
 
 /** Open tickets, newest first, for the panel. */
