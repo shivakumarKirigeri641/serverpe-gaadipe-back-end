@@ -135,6 +135,8 @@ async function summary() {
       ['net', 'Net contribution', true],
     ].map(([k, label, money]) => ({ key: k, label, money: Boolean(money), value: today[k], ...change(today[k], yday[k]) })),
     compare_label: 'Today so far vs yesterday to the same time',
+    // Free monitoring for one vehicle (2026-10-10, site/freeMonitor.js): the last 30 days.
+    free_monitor: await require('../site/freeMonitor').stats({ days: 30 }).catch(() => null),
     system: services ? services.services.filter((s) => pick.includes(s.key)).map((s) => ({ key: s.key, name: s.name, level: s.level, message: s.message }))
       : null,
     alerts,
