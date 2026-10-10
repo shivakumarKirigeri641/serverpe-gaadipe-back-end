@@ -71,8 +71,12 @@ async function anonCheck(req) {
     `SELECT first_touch->>'source' AS source, first_touch->>'campaign' AS campaign FROM visitors WHERE visitor_id = $1`, [visitorId]).catch(() => null) : null;
 
   const { policyVersions } = require('../pay/consent');
+  /* HOW THEY AGREED: since 2026-10-10 by entering the vehicle number, with the line
+     "By entering a vehicle number, you agree to…" under the welcome (before: the
+     "Agree & check" button). The words shown are recorded either way. */
   const consent = consentIn.agreed === true ? {
-    agreed: true, method: 'agree_and_check_button',
+    agreed: true,
+    method: ['entered_vehicle_number', 'agree_and_check_button'].includes(consentIn.method) ? consentIn.method : 'agree_and_check_button',
     words: String(consentIn.words || '').slice(0, 1200) || null,
     language: consentIn.language === 'hi' ? 'hi' : 'en',
     lawful_purpose_confirmed: true,
@@ -99,7 +103,7 @@ async function anonCheck(req) {
      touch?.source || null, touch?.campaign || null, consent ? JSON.stringify(consent) : null, ipKey || null])
     .then((r) => r.rows[0]?.id).catch((e) => { console.error('[chat] anon_checks:', e.message); return null; });
 
-  const SIGN_IN = 'You have used today’s free check. Sign in with your mobile number to check more vehicles — basic details free (make, model, variant, fuel, vehicle type), full report ₹19.';
+  const SIGN_IN = 'You have used today’s free checks. Sign in free with your mobile number to check more vehicles, see every validity date and the challans, and get 14 days of free monitoring for one vehicle.';
   const refuse = async (refusal, status, body) => { await audit({ outcome: 'refused', refusal }); return { status, body }; };
 
   if (!consent) {
