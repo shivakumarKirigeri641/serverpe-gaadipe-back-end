@@ -1136,8 +1136,10 @@ router.post('/buy', safe(async (req, res) => {
 
 router.get('/reports', safe(async (req, res) => {
   const { rows } = await db.query(
+    // Expired reports are not listed at all (user, 2026-10-10: "if already expired, remove
+    // completely"); the invoice for it stays under Invoices.
     `SELECT id, report_number, reg_no, created_at, valid_until, pdf_path
-       FROM vehicle_reports WHERE user_id = $1 ORDER BY id DESC`, [req.user.id]);
+       FROM vehicle_reports WHERE user_id = $1 AND valid_until > now() ORDER BY id DESC`, [req.user.id]);
   res.json({
     rows: rows.map(({ pdf_path, ...r }) => ({
       ...r, id: String(r.id),

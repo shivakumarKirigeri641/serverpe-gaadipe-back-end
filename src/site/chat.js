@@ -312,7 +312,7 @@ async function summary(user) {
             -- Only reports for vehicles still in My vehicles: one the customer removed
             -- is gone for them, and so is its report from the welcome (user, 2026-10-10).
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
-              WHERE r.user_id = $1 AND p.status = 'paid'
+              WHERE r.user_id = $1 AND p.status = 'paid' AND r.valid_until > now()   -- active only, as My reports lists them
                 AND EXISTS (SELECT 1 FROM user_vehicles uv WHERE uv.user_id = $1
                   AND uv.vehicle_id = r.vehicle_id AND uv.hidden_at IS NULL))::int AS reports,
             (SELECT count(*) FROM whatsapp_messages WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $2
