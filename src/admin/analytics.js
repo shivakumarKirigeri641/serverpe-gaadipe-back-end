@@ -15,6 +15,7 @@
  */
 
 const db = require('../db');
+const NM = require('./notMe');
 
 const n = (v) => Number(v) || 0;
 /* A website payment (a payment's own record of where it was made). */
@@ -32,30 +33,33 @@ async function rollup(from, to) {
                    count(*) FILTER (WHERE name = 'interaction') AS interactions,
                    count(*) FILTER (WHERE name = 'interaction' AND metadata->>'kind' = 'search') AS searches,
                    count(*) FILTER (WHERE name = 'interaction' AND metadata->>'kind' = 'error') AS site_errors
-              FROM events WHERE occurred_at >= $1 AND occurred_at < $2 GROUP BY 1),
+              FROM events WHERE occurred_at >= $1 AND occurred_at < $2 AND ${NM.evt('events')} GROUP BY 1),
+     -- None of it the owner's own (user, 2026-10-10): visits, checks, sign-ins, payments.
      el AS (SELECT date_trunc('minute', created_at) AS m,
                    count(*) FILTER (WHERE kind = 'chat_anon_check') AS free_checks,
                    count(*) FILTER (WHERE kind IN ('vehicle_check', 'vehicle_check_repeat') AND detail->>'channel' = 'web') AS web_checks
-              FROM event_log WHERE created_at >= $1 AND created_at < $2
+              FROM event_log WHERE created_at >= $1 AND created_at < $2 AND ${NM.event('event_log')}
                AND kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat') GROUP BY 1),
      si AS (SELECT date_trunc('minute', created_at) AS m,
                    count(*) FILTER (WHERE event = 'code_requested') AS otp_requests,
                    count(*) FILTER (WHERE event = 'signed_in') AS otp_success,
                    count(*) FILTER (WHERE event IN ('sign_in_failed', 'code_refused')) AS otp_failed
-              FROM site_sign_ins WHERE created_at >= $1 AND created_at < $2 GROUP BY 1),
+              FROM site_sign_ins WHERE created_at >= $1 AND created_at < $2
+               AND ${NM.user('site_sign_ins.user_id')} AND ${NM.mobile('site_sign_ins.mobile')} AND ${NM.device('site_sign_ins.device_id')} GROUP BY 1),
      -- The website's payments and reports only (2026-10-07: every comparison is the website's).
      pa AS (SELECT date_trunc('minute', created_at) AS m, count(*) AS pay_attempts FROM payments
-             WHERE created_at >= $1 AND created_at < $2 AND ${WEB_PAY} GROUP BY 1),
+             WHERE created_at >= $1 AND created_at < $2 AND ${WEB_PAY} AND ${NM.pay('payments')} GROUP BY 1),
      pp AS (SELECT date_trunc('minute', paid_at) AS m, count(*) AS payments, sum(amount_paise) AS revenue_paise
-              FROM payments WHERE status = 'paid' AND paid_at >= $1 AND paid_at < $2 AND ${WEB_PAY} GROUP BY 1),
+              FROM payments WHERE status = 'paid' AND paid_at >= $1 AND paid_at < $2 AND ${WEB_PAY} AND ${NM.pay('payments')} GROUP BY 1),
      rp AS (SELECT date_trunc('minute', r.created_at) AS m, count(*) AS reports FROM vehicle_reports r
               JOIN payments payments ON payments.id = r.payment_id
-             WHERE r.created_at >= $1 AND r.created_at < $2 AND ${WEB_PAY} GROUP BY 1),
+             WHERE r.created_at >= $1 AND r.created_at < $2 AND ${WEB_PAY} AND ${NM.pay('payments')} GROUP BY 1),
      ap AS (SELECT date_trunc('minute', created_at) AS m, count(*) AS api_calls, count(*) FILTER (WHERE NOT ok) AS api_failures,
                    coalesce(sum(duration_ms) FILTER (WHERE NOT cache_hit), 0) AS api_ms_sum
               FROM api_calls WHERE created_at >= $1 AND created_at < $2 GROUP BY 1),
      ws AS (SELECT b.m, count(w.session_id) AS active_sessions FROM b
-              JOIN web_sessions w ON w.started_at < b.m + interval '1 minute' AND w.last_seen_at >= b.m GROUP BY 1)
+              JOIN web_sessions w ON w.started_at < b.m + interval '1 minute' AND w.last_seen_at >= b.m
+               AND ${NM.user('w.user_id')} AND ${NM.visitor('w.visitor_id')} GROUP BY 1)
      INSERT INTO analytics_minute AS a (bucket, visitors, active_sessions, page_views, interactions, searches, free_checks, web_checks,
                                         otp_requests, otp_success, otp_failed, pay_attempts, payments, revenue_paise, reports,
                                         api_calls, api_failures, api_ms_sum, errors, computed_at)
@@ -97,7 +101,7 @@ async function series({ range = '1h' } = {}) {
                     max(active_sessions) AS active_sessions
                FROM analytics_minute, r WHERE bucket >= r.a AND bucket < r.z GROUP BY 1),
      vis AS (SELECT ${bucketExpr.replace(/bucket/g, 'occurred_at')} AS t, count(DISTINCT visitor_id) AS visitors
-               FROM events, r WHERE channel = 'web' AND occurred_at >= r.a AND occurred_at < r.z GROUP BY 1),
+               FROM events, r WHERE channel = 'web' AND occurred_at >= r.a AND occurred_at < r.z AND ${NM.evt('events')} GROUP BY 1),
      grid AS (SELECT generate_series(${R.ist ? `(SELECT a FROM r)` : `to_timestamp(floor(extract(epoch FROM (SELECT a FROM r)) / ${R.step}) * ${R.step})`},
                                      (SELECT z FROM r) - interval '1 second', interval '${R.step} seconds') AS t)
      SELECT grid.t, coalesce(vis.visitors, 0) AS visitors, ${METRICS.filter((m) => m !== 'visitors').map((m) => `coalesce(agg.${m}, 0) AS ${m}`).join(', ')}
@@ -124,8 +128,8 @@ const PERIODS = {
 async function totals(a, z) {
   const r = await db.one(
     `SELECT ${METRICS.filter((m) => !['visitors', 'active_sessions'].includes(m)).map((m) => `coalesce(sum(${m}), 0) AS ${m}`).join(', ')},
-            (SELECT count(DISTINCT visitor_id) FROM events WHERE channel = 'web' AND occurred_at >= $1 AND occurred_at < $2) AS visitors,
-            (SELECT count(*) FROM users WHERE created_at >= $1 AND created_at < $2) AS new_users
+            (SELECT count(DISTINCT visitor_id) FROM events WHERE channel = 'web' AND occurred_at >= $1 AND occurred_at < $2 AND ${NM.evt('events')}) AS visitors,
+            (SELECT count(*) FROM users WHERE created_at >= $1 AND created_at < $2 AND NOT is_internal) AS new_users
        FROM analytics_minute WHERE bucket >= $1 AND bucket < $2`, [a, z]);
   return Object.fromEntries(Object.entries(r).map(([k, v]) => [k, n(v)]));
 }
@@ -152,7 +156,9 @@ async function perVisit({ range = 'today', from = null, to = null } = {}) {
   const [a, z] = from && to ? ['$1::timestamptz', '$2::timestamptz'] : (PERIODS[range] || PERIODS.today);
   const { rows } = await db.query(
     `WITH s AS (SELECT w.session_id, w.user_id, w.started_at, w.last_seen_at, w.source, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name
-                  FROM web_sessions w LEFT JOIN users u ON u.id = w.user_id WHERE w.started_at >= ${a} AND w.started_at < ${z}),
+                  FROM web_sessions w LEFT JOIN users u ON u.id = w.user_id WHERE w.started_at >= ${a} AND w.started_at < ${z}
+                   -- Not the owner's own visits (user, 2026-10-10).
+                   AND ${NM.user('w.user_id')} AND ${NM.visitor('w.visitor_id')}),
      e AS (SELECT session_id,
                   min(occurred_at) FILTER (WHERE name = 'interaction' AND metadata->>'kind' = 'search') AS searched,
                   min(occurred_at) FILTER (WHERE name = 'interaction' AND metadata->>'kind' = 'view') AS saw,

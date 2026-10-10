@@ -182,13 +182,19 @@ function compute(r, R) {
  * Settled payments (paid, refunded, free) whose money landed in [from, to).
  * `ids` narrows to particular payments; `all` includes unsettled ones.
  */
-async function entries({ from, to, ids, all = false } = {}) {
+// notMe: also leave out internal people's payments — for the marketing figures
+// (the Command Center), never for the books.
+async function entries({ from, to, ids, all = false, notMe = false } = {}) {
   const args = []; const w = [];
   const bind = (v) => { args.push(v); return `$${args.length}`; };
   if (ids?.length) w.push(`p.id = ANY(${bind(ids.map(Number))}::bigint[])`);
   if (from) w.push(`coalesce(p.paid_at, p.created_at) >= ${bind(from)}`);
   if (to) w.push(`coalesce(p.paid_at, p.created_at) < ${bind(to)}`);
   if (!all) w.push(`p.status IN ('paid', 'refunded')`);
+  // The owner's TEST-mode purchases are not money (user, 2026-10-10) — out of every
+  // total; one opened by its id (a payment's own page) still reads.
+  if (!ids?.length) w.push(`(p.raw->>'test_mode') IS NULL`);
+  if (notMe) w.push(require('../admin/notMe').user('p.user_id'));
   const R = await rates();
   const { rows } = await db.query(`${ENTRY_SQL(w.join(' AND ') || 'true', R)} ORDER BY coalesce(p.paid_at, p.created_at) DESC, p.id DESC`, args);
   return { rates: R, rows: rows.map((r) => compute(r, R)) };
@@ -217,8 +223,8 @@ function total(rows) {
  * period that no payment explains — lookups that never became a sale,
  * messages to people who did not buy, sign-in codes.
  */
-async function periodMoney(from, to, prefetched, { channel = null } = {}) {
-  const got = prefetched || await entries({ from, to });
+async function periodMoney(from, to, prefetched, { channel = null, notMe = false } = {}) {
+  const got = prefetched || await entries({ from, to, notMe });
   const R = got.rates;
   /* THE WEBSITE ONLY (user, 2026-10-07: "compare everything with the website"):
      channel 'website' keeps the website's payments and leaves WhatsApp's

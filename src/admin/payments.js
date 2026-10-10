@@ -34,6 +34,9 @@ const FAILED = `SELECT DISTINCT nullif(split_part(detail->>'reference_id', '-', 
                    AND detail->>'reference_id' LIKE 'gp-%'`;
 
 const GRAINS = { day: ['day', 'YYYY-MM-DD'], week: ['week', 'YYYY-MM-DD'], month: ['month', 'YYYY-MM'] };
+// The owner's own payments and every TEST-mode payment stay out (user, 2026-10-10);
+// the list shows them only when searched for.
+const NM = require('./notMe');
 
 async function summary(q = {}) {
   const r = command.resolve(q);
@@ -50,20 +53,22 @@ async function summary(q = {}) {
               coalesce(sum(p.amount_paise) FILTER (WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2), 0)::int AS gross_paise,
               coalesce(sum(p.amount_paise) FILTER (WHERE p.status = 'refunded' AND p.refunded_at >= $1 AND p.refunded_at < $2), 0)::int AS refunded_paise,
               count(DISTINCT p.user_id) FILTER (WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2)::int AS payers
-         FROM payments p`, [r.from, r.to]),
+         FROM payments p WHERE ${NM.pay('p')}`, [r.from, r.to]),
     db.query(
       `SELECT to_char(date_trunc('${g}', p.paid_at AT TIME ZONE 'Asia/Kolkata'), '${gFmt}') AS label,
               count(*)::int AS payments, sum(p.amount_paise)::int AS gross_paise
-         FROM payments p WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2
+         FROM payments p WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2 AND ${NM.pay('p')}
         GROUP BY 1 ORDER BY 1`, [r.from, r.to]),
     db.query(
       `SELECT ${SOURCE} AS source, count(*)::int AS payments, sum(p.amount_paise)::int AS gross_paise
          FROM payments p JOIN users u ON u.id = p.user_id
-        WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2
+        WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2 AND ${NM.pay('p')}
         GROUP BY 1 ORDER BY 3 DESC`, [r.from, r.to]),
     db.query(
       `SELECT coalesce(e.metadata->>'method', 'not recorded') AS method, count(*)::int AS payments
-         FROM events e WHERE e.name = 'payment_success' AND e.occurred_at >= $1 AND e.occurred_at < $2
+         FROM events e LEFT JOIN payments p ON p.id = e.payment_id
+        WHERE e.name = 'payment_success' AND e.occurred_at >= $1 AND e.occurred_at < $2
+          AND ${NM.user('e.user_id')} AND (p.id IS NULL OR ${NM.pay('p')})
         GROUP BY 1 ORDER BY 2 DESC`, [r.from, r.to]),
   ]);
   // The same split as the Command Center's, messaging included, so one period
@@ -151,6 +156,7 @@ async function list(q = {}) {
     `SELECT * , count(*) OVER () AS total FROM (${ROW}
       WHERE p.created_at >= $1 AND p.created_at < $2
         AND (${STATUS[q.status] || 'true'})
+        AND ($3 <> '' OR ${NM.pay('p')})
         -- The WhatsApp admin (X-View: whatsapp, 2026-10-09): never a website payment.
         ${require('./consented').view.getStore()?.whatsappOnly
           ? `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') NOT IN ('web', 'website')` : ''}

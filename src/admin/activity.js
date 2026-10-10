@@ -33,8 +33,11 @@ async function stream({ since } = {}) {
   const [a, b] = String(since || '0:0').split(':').map((x) => Number(x) || 0);
   const [ev, api] = await Promise.all([
     db.query(`SELECT id, occurred_at, name, channel, reg_no, mobile, amount_paise, status, duration_ms, source
-                FROM events WHERE id > $1 AND occurred_at > now() - interval '24 hours'
-                 AND name NOT IN ('page_view') ORDER BY id DESC LIMIT 80`, [a]),
+                FROM events e WHERE id > $1 AND occurred_at > now() - interval '24 hours'
+                 AND name NOT IN ('page_view')
+                 -- Not the owner's own activity (user, 2026-10-10).
+                 AND ${require('./notMe').evt('e')}
+               ORDER BY id DESC LIMIT 80`, [a]),
     db.query(`SELECT id, created_at, reg_no, provider_path, error_code, outcome FROM api_calls
                WHERE id > $1 AND NOT ok AND created_at > now() - interval '24 hours' ORDER BY id DESC LIMIT 20`, [b]),
   ]);

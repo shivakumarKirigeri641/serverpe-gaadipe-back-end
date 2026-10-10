@@ -21,6 +21,8 @@ const db = require('../db');
 const command = require('./command');
 
 const LOOKUP = `e.name IN ('vehicle_search_success', 'vehicle_search_failed')`;
+// The owner's own lookups stay out (user, 2026-10-10); the list shows them when searched for.
+const NOT_ME = require('./notMe').evt('e');
 // "KA01AB1234" -> state KA, RTO KA01. Old-style and BH-series numbers are
 // left to their first two letters.
 const STATE = `upper(substring(e.reg_no from 1 for 2))`;
@@ -37,7 +39,7 @@ async function summary(q = {}) {
               count(*) FILTER (WHERE e.name = 'report_generated')::int AS reports,
               count(*) FILTER (WHERE e.name = 'payment_success')::int AS paid,
               count(*) FILTER (WHERE e.name = 'report_delivered')::int AS delivered
-         FROM events e WHERE e.occurred_at >= $1 AND e.occurred_at < $2`, [r.from, r.to]),
+         FROM events e WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND ${NOT_ME}`, [r.from, r.to]),
     db.one(
       `SELECT count(*)::int AS calls,
               count(*) FILTER (WHERE NOT cache_hit)::int AS live_calls,
@@ -51,21 +53,21 @@ async function summary(q = {}) {
       `SELECT to_char(e.occurred_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day,
               count(*) FILTER (WHERE e.name = 'vehicle_search_success')::int AS found,
               count(*) FILTER (WHERE e.name = 'vehicle_search_failed')::int AS failed
-         FROM events e WHERE ${LOOKUP} AND e.occurred_at >= $1 AND e.occurred_at < $2
+         FROM events e WHERE ${LOOKUP} AND e.occurred_at >= $1 AND e.occurred_at < $2 AND ${NOT_ME}
         GROUP BY 1 ORDER BY 1`, [r.from, r.to]),
     db.query(`SELECT ${STATE} AS name, count(*)::int AS count FROM events e
-               WHERE ${LOOKUP} AND e.reg_no IS NOT NULL AND e.occurred_at >= $1 AND e.occurred_at < $2
+               WHERE ${LOOKUP} AND e.reg_no IS NOT NULL AND e.occurred_at >= $1 AND e.occurred_at < $2 AND ${NOT_ME}
                GROUP BY 1 ORDER BY 2 DESC LIMIT 40`, [r.from, r.to]),
     db.query(`SELECT ${RTO} AS name, count(*)::int AS count FROM events e
-               WHERE ${LOOKUP} AND e.reg_no IS NOT NULL AND e.occurred_at >= $1 AND e.occurred_at < $2
+               WHERE ${LOOKUP} AND e.reg_no IS NOT NULL AND e.occurred_at >= $1 AND e.occurred_at < $2 AND ${NOT_ME}
                GROUP BY 1 ORDER BY 2 DESC LIMIT 15`, [r.from, r.to]),
     db.query(`SELECT coalesce(v.vehicle_class, 'Unknown') AS name, count(*)::int AS count
                 FROM events e LEFT JOIN vehicles v ON v.reg_no = e.reg_no
-               WHERE e.name = 'vehicle_search_success' AND e.occurred_at >= $1 AND e.occurred_at < $2
+               WHERE e.name = 'vehicle_search_success' AND e.occurred_at >= $1 AND e.occurred_at < $2 AND ${NOT_ME}
                GROUP BY 1 ORDER BY 2 DESC LIMIT 12`, [r.from, r.to]),
     db.query(`SELECT coalesce(initcap(split_part(v.maker, ' ', 1)), 'Unknown') AS name, count(*)::int AS count
                 FROM events e LEFT JOIN vehicles v ON v.reg_no = e.reg_no
-               WHERE e.name = 'vehicle_search_success' AND e.occurred_at >= $1 AND e.occurred_at < $2
+               WHERE e.name = 'vehicle_search_success' AND e.occurred_at >= $1 AND e.occurred_at < $2 AND ${NOT_ME}
                GROUP BY 1 ORDER BY 2 DESC LIMIT 12`, [r.from, r.to]),
   ]);
   return {
@@ -102,7 +104,7 @@ async function list(q = {}) {
        FROM events e
        LEFT JOIN users u ON u.id = e.user_id OR (e.user_id IS NULL AND u.mobile = e.mobile)
        LEFT JOIN vehicles v ON v.reg_no = e.reg_no
-      WHERE ${LOOKUP} AND e.occurred_at >= $1 AND e.occurred_at < $2
+      WHERE ${LOOKUP} AND e.occurred_at >= $1 AND e.occurred_at < $2 AND ${term ? 'true' : NOT_ME}
         AND (${RESULTS[q.result] || 'true'})
         AND ($3 = '' OR e.reg_no LIKE '%' || $4 || '%' OR coalesce(e.mobile, u.mobile) LIKE '%' || $5 || '%'
              OR v.maker ILIKE '%' || $3 || '%' OR v.model ILIKE '%' || $3 || '%')

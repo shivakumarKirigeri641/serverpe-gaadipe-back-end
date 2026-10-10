@@ -18,6 +18,7 @@
 const db = require('../db');
 const settings = require('../util/settings');
 const { statusOf } = require('../site/presence');
+const NM = require('./notMe');
 
 const n = (v) => Number(v) || 0;
 const plateOf = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -38,6 +39,8 @@ async function sessions({ range = 'today', status = '', q = '', userId = null, l
        FROM web_sessions w LEFT JOIN users u ON u.id = w.user_id
       WHERE w.started_at >= (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') - make_interval(days => $1::int)) AT TIME ZONE 'Asia/Kolkata'
         AND ($2::bigint IS NULL OR w.user_id = $2)
+        -- Not the owner's own visits (user, 2026-10-10) — unless asked for by person or search.
+        AND ($2::bigint IS NOT NULL OR $3 <> '' OR (${NM.user('w.user_id')} AND ${NM.visitor('w.visitor_id')}))
         AND ($3 = '' OR u.mobile ILIKE '%' || $3 || '%' OR w.session_id ILIKE '%' || lower($3) || '%' OR w.visitor_id ILIKE '%' || lower($3) || '%'
              OR coalesce(u.display_name, u.wa_profile_name, '') ILIKE '%' || $3 || '%')
       ORDER BY w.last_seen_at DESC LIMIT $4 OFFSET $5`,

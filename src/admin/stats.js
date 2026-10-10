@@ -22,6 +22,8 @@ const IST = `AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'`;
 /* What is billed: business-initiated WhatsApp templates, and every sign-in code sent. */
 const WA_BILLED = `FROM whatsapp_messages m WHERE m.direction = 'out' AND m.message_type = 'template'`;
 const SMS_BILLED = `FROM site_otps o WHERE true`;
+// The owner's own sign-ups, checks and test payments stay out of the dashboard (2026-10-10).
+const NM = require('./notMe');
 
 const GRAIN = { day: 'day', week: 'week', month: 'month' };
 
@@ -72,11 +74,11 @@ async function dashboard() {
      )
      SELECT
        -- Not counting anyone who replied STOP (user, 2026-09-30).
-       (SELECT count(*) FROM users u WHERE NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)) AS users_total,
+       (SELECT count(*) FROM users u WHERE NOT u.is_internal AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)) AS users_total,
        (SELECT count(*) FROM users u, bounds b
-         WHERE u.created_at ${IST} >= b.today)                             AS users_today,
+         WHERE NOT u.is_internal AND u.created_at ${IST} >= b.today)       AS users_today,
        (SELECT count(*) FROM users u, bounds b
-         WHERE u.created_at ${IST} >= b.yesterday
+         WHERE NOT u.is_internal AND u.created_at ${IST} >= b.yesterday
            AND u.created_at ${IST} < b.today)                              AS users_yesterday,
        (SELECT count(*) ${WA_BILLED})                                     AS wa_total,
        (SELECT count(*) ${WA_BILLED} AND m.created_at ${IST} >= (SELECT today FROM bounds)) AS wa_today,
@@ -84,30 +86,30 @@ async function dashboard() {
        (SELECT count(*) ${SMS_BILLED} AND o.created_at ${IST} >= (SELECT today FROM bounds)) AS sms_today,
        (SELECT count(*) FROM vehicles)                                     AS vehicles_total,
        (SELECT count(*) FROM event_log e, bounds b
-         WHERE e.kind = 'vehicle_check' AND e.created_at ${IST} >= b.today) AS checks_today,
+         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND e.created_at ${IST} >= b.today) AS checks_today,
        (SELECT count(*) FROM event_log e, bounds b
-         WHERE e.kind = 'vehicle_check' AND e.created_at ${IST} >= b.yesterday
+         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND e.created_at ${IST} >= b.yesterday
            AND e.created_at ${IST} < b.today)                              AS checks_yesterday,
-       (SELECT count(*) FROM payments p WHERE p.status = 'paid')           AS payments_total,
-       (SELECT coalesce(sum(amount_paise), 0) FROM payments WHERE status = 'paid') AS gross_total_paise,
+       (SELECT count(*) FROM payments p WHERE p.status = 'paid' AND ${NM.pay('p')}) AS payments_total,
+       (SELECT coalesce(sum(p.amount_paise), 0) FROM payments p WHERE p.status = 'paid' AND ${NM.pay('p')}) AS gross_total_paise,
        (SELECT coalesce(sum(amount_paise), 0) FROM payments p, bounds b
-         WHERE p.status = 'paid' AND p.paid_at ${IST} >= b.today)          AS gross_today_paise,
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.today) AS gross_today_paise,
        (SELECT count(*) FROM payments p, bounds b
-         WHERE p.status = 'paid' AND p.paid_at ${IST} >= b.today)          AS payments_today,
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.today) AS payments_today,
        (SELECT count(*) FROM payments p, bounds b
-         WHERE p.status = 'paid' AND p.paid_at ${IST} >= b.yesterday
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.yesterday
            AND p.paid_at ${IST} < b.today)                                 AS payments_yesterday,
        (SELECT coalesce(sum(amount_paise), 0) FROM payments p, bounds b
-         WHERE p.status = 'paid' AND p.paid_at ${IST} >= b.yesterday
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.yesterday
            AND p.paid_at ${IST} < b.today)                                 AS gross_yesterday_paise,
-       (SELECT count(*) FROM payments WHERE status = 'created'
-          AND created_at > now() - interval '24 hours')                    AS payments_pending,
-       (SELECT count(*) FROM watches WHERE is_active)                      AS watches_active,
-       (SELECT count(*) FROM subscriptions
-         WHERE is_active AND ends_on >= CURRENT_DATE)                      AS subscriptions_active,
-       (SELECT count(*) FROM vehicle_reports)                              AS reports_total,
+       (SELECT count(*) FROM payments p WHERE p.status = 'created' AND ${NM.pay('p')}
+          AND p.created_at > now() - interval '24 hours')                  AS payments_pending,
+       (SELECT count(*) FROM watches w WHERE w.is_active AND ${NM.user('w.user_id')}) AS watches_active,
+       (SELECT count(*) FROM subscriptions s
+         WHERE s.is_active AND s.ends_on >= CURRENT_DATE AND ${NM.user('s.user_id')}) AS subscriptions_active,
+       (SELECT count(*) FROM vehicle_reports r WHERE ${NM.user('r.user_id')}) AS reports_total,
        (SELECT count(*) FROM vehicle_reports r, bounds b
-         WHERE r.created_at ${IST} >= b.today)                             AS reports_today,
+         WHERE ${NM.user('r.user_id')} AND r.created_at ${IST} >= b.today) AS reports_today,
        (SELECT count(*) FROM whatsapp_messages m, bounds b
          WHERE m.created_at ${IST} >= b.today)                             AS messages_today,
        (SELECT count(*) FROM whatsapp_messages m, bounds b
@@ -229,7 +231,9 @@ async function finance({ from = null, to = null } = {}) {
        coalesce(sum(amount_paise) FILTER (WHERE status = 'refunded'), 0) AS refunded_paise,
        count(*) FILTER (WHERE status = 'created')                    AS abandoned
        FROM payments
-      WHERE ($1::date IS NULL OR coalesce(paid_at, created_at) ${IST} >= $1::date)
+      -- The books: every real payment, the owner's real ones too; TEST-mode ones never (2026-10-10).
+      WHERE (raw->>'test_mode') IS NULL
+        AND ($1::date IS NULL OR coalesce(paid_at, created_at) ${IST} >= $1::date)
         AND ($2::date IS NULL OR coalesce(paid_at, created_at) ${IST} < ($2::date + 1))`,
     [from, to]);
 
@@ -239,7 +243,7 @@ async function finance({ from = null, to = null } = {}) {
             count(*) AS payments, coalesce(sum(p.amount_paise), 0) AS gross_paise
        FROM payments p
        LEFT JOIN plans pl ON pl.id = p.plan_id
-      WHERE p.status = 'paid'
+      WHERE p.status = 'paid' AND (p.raw->>'test_mode') IS NULL
         AND ($1::date IS NULL OR p.paid_at ${IST} >= $1::date)
         AND ($2::date IS NULL OR p.paid_at ${IST} < ($2::date + 1))
       GROUP BY 1, 2, 3 ORDER BY gross_paise DESC`, [from, to]);
@@ -253,7 +257,8 @@ async function finance({ from = null, to = null } = {}) {
             coalesce(sum(igst_paise), 0) AS igst_paise,
             coalesce(sum(total_paise), 0) AS total_paise
        FROM invoices
-      WHERE ($1::date IS NULL OR invoice_date ${IST} >= $1::date)
+      WHERE invoice_number NOT LIKE 'TEST-%'
+        AND ($1::date IS NULL OR invoice_date ${IST} >= $1::date)
         AND ($2::date IS NULL OR invoice_date ${IST} < ($2::date + 1))
       GROUP BY place_of_supply ORDER BY total_paise DESC`, [from, to]);
 

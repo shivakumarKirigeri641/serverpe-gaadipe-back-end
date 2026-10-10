@@ -28,6 +28,8 @@ async function list({ days = 1, day = null, min = 1, limit = 500 } = {}) {
               (e.created_at AT TIME ZONE 'Asia/Kolkata')::date AS day
          FROM event_log e
         WHERE e.kind IN ('vehicle_check', 'vehicle_check_repeat') AND e.user_id IS NOT NULL
+          -- Not the owner's own checks (user, 2026-10-10).
+          AND e.user_id NOT IN (SELECT id FROM users WHERE is_internal)
           AND ($1::date IS NOT NULL AND (e.created_at AT TIME ZONE 'Asia/Kolkata')::date = $1::date
                OR $1::date IS NULL AND (e.created_at AT TIME ZONE 'Asia/Kolkata')::date
                     > (now() AT TIME ZONE 'Asia/Kolkata')::date - $2::int)

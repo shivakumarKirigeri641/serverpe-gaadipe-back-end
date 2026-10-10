@@ -704,11 +704,15 @@ router.get('/funnel', safe(async (req, res) => res.json(
 router.get('/sign-ins', safe(async (req, res) => {
   const q = String(req.query.q || '').trim();
   const term = q ? `%${q.replace(/[%_]/g, '')}%` : '';
+  // The owner's own sign-ins are left out (user, 2026-10-10) — unless searched for.
+  const NM = require('../admin/notMe');
+  const searched = Boolean(q || req.query.device_id || req.query.ip);
+  const mine = searched ? 'true' : `(${NM.user('s.user_id')} AND ${NM.mobile('s.mobile')} AND ${NM.device('s.device_id')})`;
   const { rows } = await db.query(
     `SELECT s.*, u.display_name, u.wa_profile_name, c.consent_at, c.consent, count(*) OVER () AS total_rows
        FROM site_sign_ins s LEFT JOIN users u ON u.id = s.user_id
        ${customers.CONSENT_OF("CASE WHEN s.event = 'signed_in' THEN s.user_id END", 's.created_at')}
-      WHERE ($1 = '' OR s.event = $1)
+      WHERE ${mine} AND ($1 = '' OR s.event = $1)
         AND ($2 = '' OR s.mobile ILIKE $2 OR s.ip ILIKE $2 OR s.device_id ILIKE $2
              OR s.device_model ILIKE $2 OR s.browser ILIKE $2 OR s.os ILIKE $2 OR s.city ILIKE $2)
         AND ($3 = '' OR s.device_id = $3)
@@ -722,8 +726,9 @@ router.get('/sign-ins', safe(async (req, res) => {
                                AND created_at > now() - interval '1 day')                         AS failures_today,
             count(DISTINCT device_id)                                                             AS devices,
             count(DISTINCT ip)                                                                    AS ips,
-            (SELECT count(*) FROM site_sessions WHERE ended_at IS NULL)                           AS open_sessions
-       FROM site_sign_ins`);
+            (SELECT count(*) FROM site_sessions ss WHERE ss.ended_at IS NULL AND ${NM.user('ss.user_id')}) AS open_sessions
+       FROM site_sign_ins s
+      WHERE ${NM.user('s.user_id')} AND ${NM.mobile('s.mobile')} AND ${NM.device('s.device_id')}`);
   res.json({
     total: rows[0] ? Number(rows[0].total_rows) : 0,
     summary: Object.fromEntries(Object.entries(summary).map(([k, v]) => [k, Number(v)])),
@@ -753,7 +758,9 @@ router.get('/sessions', safe(async (req, res) => {
          JOIN users u ON u.id = s.user_id
          LEFT JOIN site_sign_ins g ON g.id = s.sign_in_id
          ${customers.CONSENT_OF('s.user_id', 's.created_at')}
-        WHERE ($1 = '' OR u.mobile ILIKE $1 OR u.display_name ILIKE $1 OR u.wa_profile_name ILIKE $1
+        -- The owner's own sessions are left out (2026-10-10) — unless searched for.
+        WHERE ($1 <> '' OR NOT u.is_internal)
+          AND ($1 = '' OR u.mobile ILIKE $1 OR u.display_name ILIKE $1 OR u.wa_profile_name ILIKE $1
                OR s.ip ILIKE $1 OR s.device_id ILIKE $1)
      ) x
      WHERE ($2 = '' OR state = $2)
@@ -765,7 +772,8 @@ router.get('/sessions', safe(async (req, res) => {
             coalesce(round(avg(seconds)), 0) AS avg_seconds,
             coalesce(sum(seconds), 0) AS total_seconds,
             count(*) AS sessions
-       FROM (SELECT ${customers.SESSION_COLS} FROM site_sessions s) x`);
+       FROM (SELECT ${customers.SESSION_COLS} FROM site_sessions s
+              WHERE s.user_id NOT IN (SELECT id FROM users WHERE is_internal)) x`);
   res.json({
     total: rows[0] ? Number(rows[0].total_rows) : 0,
     totals: Object.fromEntries(Object.entries(totals).map(([k, v]) => [k, Number(v)])),

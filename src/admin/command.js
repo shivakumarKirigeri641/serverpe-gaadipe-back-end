@@ -127,17 +127,23 @@ const WEB_CHECKS = `
   count(*) FILTER (WHERE ${WEB_CHECK} AND coalesce(detail->>'found', 'true') <> 'false') AS retrieved,
   count(*) FILTER (WHERE kind = 'site_sign_in')                                         AS sign_ins`;
 const WEB_PAY = `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
+/* The owner's own visits, checks, sign-ins and payments (and every TEST-mode payment)
+   stay out of every figure here (user, 2026-10-10). */
+const NM = require('./notMe');
+const ME_E = NM.evt('e');                    // events e
+const ME_LOG = NM.event('event_log');        // event_log, unaliased
+const ME_PAY = NM.pay('p');                  // payments p
 
 async function totals(from, to) {
   const [ev, ck, rp, api, money] = await Promise.all([
-    db.one(`SELECT ${WEB_EVENTS} FROM events e WHERE e.occurred_at >= $1 AND e.occurred_at < $2`, [from, to]),
-    db.one(`SELECT ${WEB_CHECKS} FROM event_log WHERE created_at >= $1 AND created_at < $2
+    db.one(`SELECT ${WEB_EVENTS} FROM events e WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND ${ME_E}`, [from, to]),
+    db.one(`SELECT ${WEB_CHECKS} FROM event_log WHERE created_at >= $1 AND created_at < $2 AND ${ME_LOG}
               AND kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat', 'site_sign_in')`, [from, to]),
     db.one(`SELECT count(*)::int AS reports FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
-             WHERE r.created_at >= $1 AND r.created_at < $2 AND ${WEB_PAY}`, [from, to]),
+             WHERE r.created_at >= $1 AND r.created_at < $2 AND ${WEB_PAY} AND ${ME_PAY}`, [from, to]),
     db.one(`SELECT coalesce(sum(cost_paise), 0)::int AS api_cost_paise, count(*)::int AS api_calls
               FROM api_calls WHERE created_at >= $1 AND created_at < $2`, [from, to]),
-    ledger.periodMoney(from, to, null, { channel: 'website' }),
+    ledger.periodMoney(from, to, null, { channel: 'website', notMe: true }),
   ]);
   const n = Object.fromEntries(Object.entries({ ...ev, ...ck, ...rp }).map(([k, v]) => [k, Number(v || 0)]));
   return {
@@ -162,22 +168,22 @@ async function series(from, to, step) {
      )
      SELECT b.t,
             to_char(b.t AT TIME ZONE 'Asia/Kolkata', $4) AS label,
-            (SELECT count(DISTINCT e.visitor_id) FILTER (WHERE e.channel = 'web') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2) AS visitors,
-            (SELECT count(DISTINCT e.session_id) FILTER (WHERE e.name = 'session_started') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2) AS visits,
-            (SELECT count(*) FILTER (WHERE e.name = 'page_view') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2) AS page_views,
-            (SELECT count(*) FILTER (WHERE e.name = 'payment_page_viewed') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2) AS pay_views,
-            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WEB_CHECK}) AS searches,
-            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WEB_CHECK}
+            (SELECT count(DISTINCT e.visitor_id) FILTER (WHERE e.channel = 'web') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2 AND ${ME_E}) AS visitors,
+            (SELECT count(DISTINCT e.session_id) FILTER (WHERE e.name = 'session_started') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2 AND ${ME_E}) AS visits,
+            (SELECT count(*) FILTER (WHERE e.name = 'page_view') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2 AND ${ME_E}) AS page_views,
+            (SELECT count(*) FILTER (WHERE e.name = 'payment_page_viewed') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2 AND ${ME_E}) AS pay_views,
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WEB_CHECK} AND ${ME_LOG}) AS searches,
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WEB_CHECK} AND ${ME_LOG}
                 AND coalesce(detail->>'found', 'true') <> 'false') AS retrieved,
-            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND kind = 'site_sign_in') AS sign_ins,
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND kind = 'site_sign_in' AND ${ME_LOG}) AS sign_ins,
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
-              WHERE r.created_at >= b.t AND r.created_at < b.t2 AND ${WEB_PAY}) AS reports,
+              WHERE r.created_at >= b.t AND r.created_at < b.t2 AND ${WEB_PAY} AND ${ME_PAY}) AS reports,
             (SELECT coalesce(sum(cost_paise), 0) FROM api_calls a WHERE a.created_at >= b.t AND a.created_at < b.t2) AS api_cost_paise
        FROM b ORDER BY b.t`,
     [from, to, step === 'hour' ? '1 hour' : '1 day', step === 'hour' ? 'HH24:00' : 'DD Mon']);
   // Each bucket's payments, revenue and net from the ledger's own website payments,
   // less that bucket's API calls — the same arithmetic as the period's total.
-  const { rows: all } = await ledger.entries({ from, to });
+  const { rows: all } = await ledger.entries({ from, to, notMe: true });
   const pays = all.filter((p) => p.channel === 'website');
   const out = [];
   for (const r of rows) {
@@ -225,7 +231,7 @@ const webView = () => require('./consented').view.getStore()?.webOnly === true;
 const WA_CHECK = `(kind IN ('vehicle_check', 'vehicle_check_repeat') AND coalesce(detail->>'channel', 'whatsapp') = 'whatsapp')`;
 const WHO = `coalesce(e.mobile, u.mobile)`;
 const WA_PERSON = () => `${WHO} IS NOT NULL AND e.channel <> 'web' AND ${require('./consented').agreedSql(WHO)}
-  AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.id = e.payment_id AND ${WEB_PAY})`;
+  AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.id = e.payment_id AND ${WEB_PAY}) AND ${ME_E}`;
 const WA_EVENTS = `
   count(DISTINCT ${WHO}) FILTER (WHERE e.name = 'terms_accepted')                         AS agreed,
   count(DISTINCT ${WHO}) FILTER (WHERE e.name = 'whatsapp_message_received')              AS chatting,
@@ -237,11 +243,11 @@ async function waTotals(from, to) {
              WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND ${WA_PERSON()}`, [from, to]),
     db.one(`SELECT count(*) AS searches,
                    count(*) FILTER (WHERE coalesce(detail->>'found', 'true') <> 'false') AS retrieved
-              FROM event_log WHERE created_at >= $1 AND created_at < $2 AND ${WA_CHECK}`, [from, to]),
+              FROM event_log WHERE created_at >= $1 AND created_at < $2 AND ${WA_CHECK} AND ${ME_LOG}`, [from, to]),
     db.one(`SELECT count(*)::int AS reports FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
-             WHERE r.created_at >= $1 AND r.created_at < $2 AND NOT ${WEB_PAY}`, [from, to]),
+             WHERE r.created_at >= $1 AND r.created_at < $2 AND NOT ${WEB_PAY} AND ${ME_PAY}`, [from, to]),
     db.one(`SELECT count(*)::int AS api_calls FROM api_calls WHERE created_at >= $1 AND created_at < $2`, [from, to]),
-    ledger.periodMoney(from, to, null, { channel: 'whatsapp' }),
+    ledger.periodMoney(from, to, null, { channel: 'whatsapp', notMe: true }),
   ]);
   const n = Object.fromEntries(Object.entries({ ...ev, ...ck, ...rp }).map(([k, v]) => [k, Number(v || 0)]));
   return {
@@ -260,15 +266,15 @@ async function waSeries(from, to, step) {
      SELECT b.t, to_char(b.t AT TIME ZONE 'Asia/Kolkata', $4) AS label,
             (SELECT row_to_json(x) FROM (SELECT ${WA_EVENTS} FROM events e LEFT JOIN users u ON u.id = e.user_id
                WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2 AND ${WA_PERSON()}) x) AS ev,
-            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WA_CHECK}) AS searches,
-            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WA_CHECK}
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WA_CHECK} AND ${ME_LOG}) AS searches,
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WA_CHECK} AND ${ME_LOG}
                 AND coalesce(detail->>'found', 'true') <> 'false') AS retrieved,
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
-              WHERE r.created_at >= b.t AND r.created_at < b.t2 AND NOT ${WEB_PAY}) AS reports,
+              WHERE r.created_at >= b.t AND r.created_at < b.t2 AND NOT ${WEB_PAY} AND ${ME_PAY}) AS reports,
             (SELECT coalesce(sum(cost_paise), 0) FROM api_calls a WHERE a.created_at >= b.t AND a.created_at < b.t2) AS api_cost_paise
        FROM b ORDER BY b.t`,
     [from, to, step === 'hour' ? '1 hour' : '1 day', step === 'hour' ? 'HH24:00' : 'DD Mon']);
-  const { rows: all } = await ledger.entries({ from, to });
+  const { rows: all } = await ledger.entries({ from, to, notMe: true });
   const pays = all.filter((p) => p.channel === 'whatsapp');
   return rows.map((r) => {
     const n = { label: r.label, t: r.t, ...Object.fromEntries(Object.entries({ ...(r.ev || {}), searches: r.searches, retrieved: r.retrieved, reports: r.reports, api_cost_paise: r.api_cost_paise })
@@ -433,6 +439,8 @@ async function live({ since = null } = {}) {
           AND ($2::boolean IS NOT TRUE OR e.channel <> 'web')
           -- The web admin (2026-10-10): nothing from WhatsApp.
           AND ($3::boolean IS NOT TRUE OR e.channel <> 'whatsapp')
+          -- Not the owner's own activity (2026-10-10).
+          AND ${ME_E}
         ORDER BY e.id DESC LIMIT 40`, [sinceId, waView(), webView()]),
     db.one(
       `SELECT
@@ -440,11 +448,11 @@ async function live({ since = null } = {}) {
          count(*) FILTER (WHERE name = 'payment_success' AND occurred_at > now() - interval '60 minutes')::int AS paid_hour,
          count(*) FILTER (WHERE name IN ('vehicle_api_failed') AND occurred_at > now() - interval '15 minutes')::int AS api_errors,
          count(*) FILTER (WHERE name = 'report_delivered' AND status <> 'ok' AND occurred_at > now() - interval '60 minutes')::int AS delivery_errors
-       FROM events WHERE occurred_at > now() - interval '60 minutes'`),
+       FROM events e WHERE occurred_at > now() - interval '60 minutes' AND ${ME_E}`),
   ]);
   const paying = await db.one(
-    `SELECT count(*)::int AS n FROM payments
-      WHERE status = 'created' AND created_at > now() - interval '30 minutes'`);
+    `SELECT count(*)::int AS n FROM payments p
+      WHERE p.status = 'created' AND p.created_at > now() - interval '30 minutes' AND ${ME_PAY}`);
   /*
    * Checks and sign-ins in the last 15 minutes. WhatsApp is back (2026-10-09):
    * the main admin (X-View: whatsapp, admin/consented.js) counts WhatsApp checks,
@@ -456,7 +464,7 @@ async function live({ since = null } = {}) {
   const web = await db.one(
     `SELECT count(*) FILTER (WHERE ${wa ? WA_CHECK : WEB_CHECK})::int AS searches,
             count(DISTINCT detail->>'mobile') FILTER (WHERE kind = 'site_sign_in')::int AS signing_in
-       FROM event_log WHERE created_at > now() - interval '15 minutes'
+       FROM event_log WHERE created_at > now() - interval '15 minutes' AND ${ME_LOG}
         AND kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat', 'site_sign_in')`);
   now.searches = web.searches;
   if (!wa) now.signing_in = web.signing_in;
@@ -507,9 +515,11 @@ async function drill({ what, range, from, to, compare, previous = false, limit =
             count(*) OVER () AS total
        FROM events e LEFT JOIN users u ON u.id = e.user_id
       WHERE e.occurred_at >= $1 AND e.occurred_at < $2
-        AND (${sel.web ? `e.channel = 'web'` : `e.name = ANY($3::text[])`})
+        -- $3 is typed in both branches: an unused, untyped parameter is refused by Postgres.
+        AND (${sel.web ? `e.channel = 'web' AND $3::text[] IS NOT NULL` : `e.name = ANY($3::text[])`})
         ${waView() ? `AND ${WA_PERSON()}` : ''}
         ${webView() ? `AND e.channel <> 'whatsapp'` : ''}
+        AND ${ME_E}
       ORDER BY e.occurred_at DESC LIMIT $4`,
     sel.web ? [a, b, [], Math.min(1000, limit)] : [a, b, sel.names, Math.min(1000, limit)]);
   return {

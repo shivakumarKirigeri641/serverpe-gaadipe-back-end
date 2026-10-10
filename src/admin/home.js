@@ -25,6 +25,8 @@ const { config } = require('../config');
 
 /** IST, because "today" is a day in India. */
 const IST = "AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'";
+// The owner's own sign-ups, checks and test payments stay out of these numbers (2026-10-10).
+const NM = require('./notMe');
 
 /**
  * Everything waiting on a person.
@@ -43,15 +45,15 @@ async function attention() {
        (SELECT count(*)::int FROM contact_messages
          WHERE status = 'open' AND created_at < now() - interval '24 hours')         AS tickets_stale,
        (SELECT count(*)::int FROM feedback WHERE created_at > now() - interval '7 days') AS feedback_week,
-       (SELECT count(*)::int FROM payments
-         WHERE status = 'created' AND created_at > now() - interval '24 hours')      AS payments_stuck,
+       (SELECT count(*)::int FROM payments p
+         WHERE p.status = 'created' AND p.created_at > now() - interval '24 hours' AND ${NM.pay('p')}) AS payments_stuck,
        (SELECT count(*)::int FROM customer_emails
          WHERE status = 'failed' AND attempts >= 5)                                  AS emails_failed,
        (SELECT count(*)::int FROM whatsapp_broadcast_targets WHERE status = 'failed') AS broadcast_failed,
-       (SELECT count(*)::int FROM subscriptions
-         WHERE is_active AND ends_on BETWEEN CURRENT_DATE AND CURRENT_DATE + 3)      AS ending_soon,
-       (SELECT count(*)::int FROM vehicle_reports
-         WHERE created_at > now() - interval '24 hours')                             AS reports_today,
+       (SELECT count(*)::int FROM subscriptions s
+         WHERE s.is_active AND s.ends_on BETWEEN CURRENT_DATE AND CURRENT_DATE + 3 AND ${NM.user('s.user_id')}) AS ending_soon,
+       (SELECT count(*)::int FROM vehicle_reports r
+         WHERE r.created_at > now() - interval '24 hours' AND ${NM.user('r.user_id')}) AS reports_today,
        (SELECT count(*)::int FROM security_events
          WHERE created_at > now() - interval '24 hours')                             AS security_today,
        (SELECT count(*)::int FROM api_calls
@@ -127,28 +129,28 @@ async function today() {
               date_trunc('day', now() ${IST}) - interval '1 day' AS yesterday
      )
      SELECT
-       (SELECT count(*)::int FROM users u, b WHERE u.created_at ${IST} >= b.today)        AS signed_up,
+       (SELECT count(*)::int FROM users u, b WHERE NOT u.is_internal AND u.created_at ${IST} >= b.today) AS signed_up,
        (SELECT count(*)::int FROM users u, b
-         WHERE u.created_at ${IST} >= b.yesterday AND u.created_at ${IST} < b.today)      AS signed_up_before,
+         WHERE NOT u.is_internal AND u.created_at ${IST} >= b.yesterday AND u.created_at ${IST} < b.today) AS signed_up_before,
        (SELECT count(*)::int FROM event_log e, b
-         WHERE e.kind = 'vehicle_check' AND e.created_at ${IST} >= b.today)               AS checks,
+         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND e.created_at ${IST} >= b.today) AS checks,
        (SELECT count(*)::int FROM event_log e, b
-         WHERE e.kind = 'vehicle_check' AND e.created_at ${IST} >= b.yesterday
+         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND e.created_at ${IST} >= b.yesterday
            AND e.created_at ${IST} < b.today)                                             AS checks_before,
        (SELECT count(*)::int FROM payments p, b
-         WHERE p.status = 'paid' AND p.amount_paise > 0 AND p.paid_at ${IST} >= b.today)  AS paid,
+         WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.today) AS paid,
        (SELECT count(*)::int FROM payments p, b
-         WHERE p.status = 'paid' AND p.amount_paise > 0
+         WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')}
            AND p.paid_at ${IST} >= b.yesterday AND p.paid_at ${IST} < b.today)            AS paid_before,
        (SELECT coalesce(sum(amount_paise), 0)::int FROM payments p, b
-         WHERE p.status = 'paid' AND p.paid_at ${IST} >= b.today)                         AS earned_paise,
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.today)      AS earned_paise,
        (SELECT coalesce(sum(amount_paise), 0)::int FROM payments p, b
-         WHERE p.status = 'paid'
+         WHERE p.status = 'paid' AND ${NM.pay('p')}
            AND p.paid_at ${IST} >= b.yesterday AND p.paid_at ${IST} < b.today)            AS earned_before_paise,
-       (SELECT count(*)::int FROM subscriptions
-         WHERE is_active AND ends_on >= CURRENT_DATE)                                     AS monitoring,
-       -- Not counting anyone who replied STOP (user, 2026-09-30).
-       (SELECT count(*)::int FROM users u WHERE NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)) AS customers,
+       (SELECT count(*)::int FROM subscriptions s
+         WHERE s.is_active AND s.ends_on >= CURRENT_DATE AND ${NM.user('s.user_id')})     AS monitoring,
+       -- Not counting anyone who replied STOP (user, 2026-09-30), or the owner (2026-10-10).
+       (SELECT count(*)::int FROM users u WHERE NOT u.is_internal AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)) AS customers,
        (SELECT count(*)::int FROM whatsapp_sessions WHERE wa_opt_out_at IS NOT NULL)       AS customers_stopped,
        (SELECT count(*)::int FROM vehicles)                                               AS vehicles`);
 }
@@ -174,7 +176,7 @@ async function funnelToday() {
        ${step('buy_tapped')}  AS tapped_buy,
        ${step('link_sent')}   AS got_link,
        (SELECT count(DISTINCT p.user_id)::int FROM payments p, b
-         WHERE p.status = 'paid' AND p.amount_paise > 0 AND p.paid_at ${IST} >= b.today) AS paid`);
+         WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.today) AS paid`);
   return [
     { step: 'Said Hi', n: row.said_hi },
     { step: 'Agreed to terms', n: row.agreed },
@@ -195,12 +197,12 @@ async function recent() {
      )
      SELECT to_char(days.d, 'DD Mon')                                            AS label,
             (SELECT count(*)::int FROM users u
-              WHERE u.created_at ${IST} >= days.d AND u.created_at ${IST} < days.d + interval '1 day') AS signed_up,
+              WHERE NOT u.is_internal AND u.created_at ${IST} >= days.d AND u.created_at ${IST} < days.d + interval '1 day') AS signed_up,
             (SELECT count(*)::int FROM event_log e
-              WHERE e.kind = 'vehicle_check'
+              WHERE e.kind = 'vehicle_check' AND ${NM.event('e')}
                 AND e.created_at ${IST} >= days.d AND e.created_at ${IST} < days.d + interval '1 day') AS checks,
             (SELECT count(*)::int FROM payments p
-              WHERE p.status = 'paid' AND p.amount_paise > 0
+              WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')}
                 AND p.paid_at ${IST} >= days.d AND p.paid_at ${IST} < days.d + interval '1 day')       AS paid
        FROM days ORDER BY days.d`);
   return rows;
@@ -210,8 +212,8 @@ async function recent() {
 async function liveNow() {
   const row = await db.one(
     `SELECT
-       (SELECT count(*)::int FROM site_sessions
-         WHERE ended_at IS NULL AND last_used_at > now() - interval '5 minutes')  AS on_site,
+       (SELECT count(*)::int FROM site_sessions ss
+         WHERE ss.ended_at IS NULL AND ss.last_used_at > now() - interval '5 minutes' AND ${NM.user('ss.user_id')}) AS on_site,
        (SELECT count(*)::int FROM whatsapp_sessions
          WHERE modified_at > now() - interval '30 minutes')                       AS in_chat,
        (SELECT count(*)::int FROM whatsapp_messages
