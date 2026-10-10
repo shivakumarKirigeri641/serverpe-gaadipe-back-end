@@ -528,6 +528,26 @@ async function lifecycle() {
  * as above). Run first with dryRun: true to see who would get it:
  *   node -e "require('./src/jobs/watch').dailyStatus({ everyone: true, dryRun: true }).then(r=>{console.log(r);process.exit(0)})"
  */
+/*
+ * THE STATUS CADENCE (user, 2026-10-10: "first 7 days every day, then alternate days,
+ * then only when something changes — engaged, not spam; configurable in the admin").
+ * Per vehicle, counted from the day its monitoring started (paid or free):
+ *   days 1 – watch_status_daily_days (7)                    every day
+ *   then until day watch_status_alternate_until_day (28)    every other day (0 = while it runs)
+ *   after that                                              only real alerts (eveningDigest)
+ * One message per customer per evening, covering the vehicles due that day; never
+ * on an evening a real alert went out. By email, browser notification and — once its
+ * DLT template is approved (sms_tpl_status) — SMS; WhatsApp only if it is switched on.
+ */
+async function dueToday(w, { dailyDays, altUntil }) {
+  const startIst = new Date(new Date(w.created_at).getTime() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const age = Math.floor((Date.parse(istNow().toISOString().slice(0, 10)) - Date.parse(startIst)) / 86400e3);   // 0 = the first day
+  if (age < 0) return false;
+  if (age < dailyDays) return true;
+  if (altUntil > 0 && age >= altUntil) return false;
+  return (age - dailyDays) % 2 === 1;      // the day after the daily stretch is a rest day
+}
+
 async function dailyStatus({ mobile = null, everyone = false, dryRun = false, gapMs = 0, onEach = null } = {}) {
   const byHand = Boolean(mobile || everyone);
   if (!byHand && !await settings.bool('watch_daily_status_enabled', false)) return { sent: 0 };
@@ -537,40 +557,31 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
   if (!byHand && (hour < from || hour >= until)) return { sent: 0 };
 
   const today = istNow().toISOString().slice(0, 10);
-  // The first IST date that still counts as "recent": every 2 days → yesterday.
-  const every = Math.max(1, await settings.num('watch_daily_status_every_days', 2));
-  const since = new Date(istNow().getTime() - (every - 1) * 86400000).toISOString().slice(0, 10);
-  const { rows } = await db.query(
-    `SELECT w.id, w.user_id, w.vehicle_id, w.last_checked_at, w.created_at, v.reg_no,
-            u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name
+  const cadence = { dailyDays: Math.max(0, await settings.num('watch_status_daily_days', 7)),
+                    altUntil: Math.max(0, await settings.num('watch_status_alternate_until_day', 28)) };
+  const { rows: all } = await db.query(
+    `SELECT w.id, w.user_id, w.vehicle_id, w.last_checked_at, w.created_at, w.subscription_id, v.reg_no,
+            u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
+            u.email, u.email_verified_at, u.email_unsubscribed_at, u.email_token
        FROM watches w
        JOIN vehicles v ON v.id = w.vehicle_id
        JOIN users u    ON u.id = w.user_id
       WHERE w.is_active AND (w.expires_at IS NULL OR w.expires_at > now()) AND NOT u.is_paused
-        -- Paid for THIS vehicle (user, 2026-09-27): dates and challans are
-        -- what the ₹19 buys, so a free watch on another vehicle of a paying
-        -- customer must never get them.
-        AND EXISTS (SELECT 1 FROM payments p WHERE p.user_id = w.user_id AND p.status = 'paid' AND p.amount_paise > 0
-                      AND p.raw->>'vehicle_id' = w.vehicle_id::text)
+        AND u.deactivated_at IS NULL
+        -- Removed from My vehicles: no status for it.
+        AND NOT EXISTS (SELECT 1 FROM user_vehicles uv WHERE uv.user_id = w.user_id AND uv.vehicle_id = w.vehicle_id AND uv.hidden_at IS NOT NULL)
+        -- Nothing twice in an evening: a status or a real alert already went today.
         AND NOT EXISTS (SELECT 1 FROM event_log e WHERE e.user_id = w.user_id
-                          AND e.kind IN ('watch_status', 'watch_digest') AND e.detail->>'ist_date' BETWEEN $4 AND $1
+                          AND e.kind IN ('watch_status', 'watch_digest') AND e.detail->>'ist_date' = $1
                           AND coalesce(e.detail->>'failed', 'false') <> 'true')
         AND ($2::text IS NULL OR u.mobile = $2)
-        -- "Only alert changes" / "Keep me updated" (2026-10-09): the latest tap counts.
+        -- "Only alert changes" / "Keep me updated" (2026-10-09): the latest choice counts.
         AND (SELECT so.kind FROM event_log so WHERE so.user_id = w.user_id
                AND so.kind IN ('watch_status_off', 'watch_status_on')
              ORDER BY so.created_at DESC, so.id DESC LIMIT 1) IS DISTINCT FROM 'watch_status_off'
-        -- Strictly the first N days after the customer FIRST tapped "Agree &
-        -- continue" (user, 2026-09-27) — not from when a vehicle was enrolled,
-        -- so a second vehicle does not restart it. A website buyer who never
-        -- saw the WhatsApp terms counts from when their account was made.
-        -- 0 = every day, as long as monitoring runs.
-        AND ($3::int <= 0 OR coalesce(
-              (SELECT min(c.created_at) FROM event_log c
-                WHERE c.kind = 'consent_accepted' AND c.detail->>'mobile' = u.mobile),
-              u.created_at) > now() - make_interval(days => $3::int))
-      ORDER BY w.user_id, v.reg_no`, [today, mobile ? String(mobile).replace(/\D/g, '').slice(-10) : null,
-                                      everyone ? 0 : await settings.num('watch_daily_status_days', 7), since]);
+      ORDER BY w.user_id, v.reg_no`, [today, mobile ? String(mobile).replace(/\D/g, '').slice(-10) : null]);
+  const rows = [];
+  for (const w of all) if (everyone || mobile || await dueToday(w, cadence)) rows.push(w);
 
   const people = new Map();
   for (const r of rows) {
@@ -579,11 +590,13 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
   }
   if (dryRun) {
     const would = [];
-    for (const [, list] of people) {
-      const m = list[0].mobile;
-      const why = await send.optedOut(m) ? 'STOP' : (await send.consentGate(m, await settings.get('template_daily_status', 'gp_monitoring_alert_en_v1'))).error || null;
-      would.push({ mobile: `••${String(m).slice(-4)}`, name: list[0].name || null, vehicles: list.map((w) => w.reg_no),
-                   goes_as: why ? `NOT SENT (${why})` : (await send.windowOpen(m) ? 'free message' : 'template') });
+    for (const [userId, list] of people) {
+      const f = list[0];
+      const devices = (await db.one(`SELECT count(*)::int AS n FROM customer_push_subscriptions WHERE user_id = $1`, [userId]))?.n || 0;
+      const ways = [f.email && f.email_verified_at && !f.email_unsubscribed_at ? 'email' : null, devices ? `notification (${devices})` : null,
+        String(await settings.get('sms_tpl_status', '') || '').trim() && await settings.bool('sms_alerts_enabled', false) ? 'sms' : null].filter(Boolean);
+      would.push({ mobile: `••${String(f.mobile).slice(-4)}`, name: f.name || null, vehicles: list.map((w) => w.reg_no),
+                   goes_as: ways.length ? ways.join(' + ') : 'NOT SENT (no confirmed email, no notification device, SMS not approved)' });
     }
     return { dryRun: true, people: would.length, would };
   }
@@ -609,9 +622,30 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
     const checked = list.map((w) => new Date(w.last_checked_at || w.created_at)).sort((a, b) => b - a)[0];
     const name = String(first.name || 'there').split(' ')[0];
 
-    let out;
-    if (await send.optedOut(first.mobile)) {
-      out = { ok: false, error: 'opted_out' }; // STOP (user, 2026-09-30) — see notify()
+    /* EMAIL, NOTIFICATION, SMS (2026-10-10) — WhatsApp is gone; any one delivered counts. */
+    let out = { ok: false, error: 'no confirmed email, no notification device, SMS not approved' };
+    const errors = [];
+    if (first.email && first.email_verified_at && !first.email_unsubscribed_at) {
+      const C = require('../mail/customer');
+      const m = await C.deliver(first.email, statusMail(first, lines, checked), first.email_token).catch((e) => ({ ok: false, error: e.message }));
+      if (m.ok) out = { ok: true, channel: 'email' };
+      else errors.push(m.skipped ? 'email held (test mode)' : `email: ${m.error}`);
+    }
+    const pushed = await require('../site/push').toCustomer(userId, {
+      title: lines.length === 1 ? `✅ ${first.reg_no}: today's update` : `✅ Today's update on ${lines.length} vehicles`,
+      body: lines.map((l) => (lines.length > 1 ? `${l.reg}: ${l.text}` : l.text)).join(' · ').slice(0, 300),
+      url: lines.length === 1 ? `/chat?reg=${encodeURIComponent(first.reg_no)}` : '/chat', tag: `status-${today}`, kind: 'status',
+    }).catch((e) => { errors.push(`push: ${e.message}`); return 0; });
+    if (pushed) out = { ok: true, channel: out.ok ? `${out.channel}+push` : 'push' };
+    // SMS once the 'status' DLT template is approved: [vehicle, short status].
+    const sms = await require('../util/sms').sendTemplate('status', first.mobile,
+      [lines.length === 1 ? first.reg_no : `${first.reg_no} +${lines.length - 1}`, lines.map((l) => (l.expired.length ? `${l.expired.join(', ')} expired` : l.challans ? 'challans pending' : 'all clear')).join('; ')]);
+    if (sms.ok) out = { ok: true, channel: out.ok ? `${out.channel}+sms` : 'sms' };
+    if (!out.ok && errors.length) out.error = errors.join('; ');
+    if (out.ok || !require('../config').config.whatsapp.enabled) {
+      // Delivered already, or WhatsApp off: WhatsApp is only ever the fallback now.
+    } else if (await send.optedOut(first.mobile)) {
+      if (!out.ok) out = { ok: false, error: 'opted_out' }; // STOP (user, 2026-09-30) — see notify()
     } else if (await send.windowOpen(first.mobile)) {
       out = await send.text(first.mobile, '✅ *Today\'s update from GaadiPe*\n\n'
         + lines.map((l) => `🚗 *${l.reg}*\n${l.text.split(' · ').map((t) => `• ${t}`).join('\n')}`).join('\n\n')
@@ -642,6 +676,35 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
   }
   if (sent) console.log('[watch] daily all-clear sent to %d customer(s)', sent);
   return { sent };
+}
+
+/*
+ * The status update as an email (2026-10-10): one card per vehicle with its
+ * challans and each document's date, from the last check — no extra lookup.
+ */
+function statusMail(person, lines, checked) {
+  const C = require('../mail/customer');
+  const T = require('../mail/templates');
+  const name = String(person.name || '').split(' ')[0] || 'there';
+  const cards = lines.map((l) => T.vehicleCard({
+    reg: l.reg, items: l.text.split(' · ').map((t) => ({ label: /challan/i.test(t) ? 'Challans' : t.split(' ')[0], text: t,
+      tone: /expired/i.test(t) ? 'bad' : /pending challan/i.test(t) ? 'warn' : 'info' })),
+  }));
+  const bad = lines.some((l) => l.expired.length || l.challans);
+  const out = T.layout({
+    tagline: 'Your vehicles today',
+    preheader: lines.map((l) => `${l.reg}: ${l.text}`).join(' · ').slice(0, 140),
+    badge: { text: bad ? 'Needs your attention' : 'All clear', tone: bad ? 'watch' : 'good' },
+    title: lines.length === 1 ? `Today's update on ${lines[0].reg}` : `Today's update on your ${lines.length} vehicles`,
+    lead: `Hi ${name}, here is where your vehicle${lines.length === 1 ? ' stands' : 's stand'} as of the last check (${fmtDate(checked)}). We tell you at once if anything changes.`,
+    intro: cards.map((c) => c.html),
+    textBlocks: cards.map((c) => c.text),
+    cta: { label: lines.length === 1 ? `Open ${lines[0].reg} in GaadiPe` : 'Open GaadiPe', url: `${C.SITE()}/chat${lines.length === 1 ? `?reg=${encodeURIComponent(lines[0].reg)}` : ''}` },
+    footer: 'You get this every day in the first week of monitoring, then every other day, and later only when something changes.',
+    footerHtml: person.email_token
+      ? `<a href="${T.esc(`${C.API()}/email/unsubscribe/${person.email_token}`)}" style="color:#0f766e;">Unsubscribe</a>` : '',
+  });
+  return { subject: lines.length === 1 ? `✅ ${lines[0].reg}: today's update — GaadiPe` : `✅ Today's update on your ${lines.length} vehicles — GaadiPe`, ...out };
 }
 
 /** "No pending challans · Insurance valid till 12 Mar 2027 · PUC expired 2 months ago" — one line, no newlines. */

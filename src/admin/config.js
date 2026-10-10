@@ -58,8 +58,12 @@ const GROUPS = [
     ['whatsapp_sending_enabled', 'WhatsApp: sending on (true / false)', 'The master switch. false: nothing at all is sent on WhatsApp — replies, alerts, broadcasts. Turn it off at once if anything looks wrong.'],
     ['whatsapp_marketing_per_day', 'WhatsApp: marketing messages a day (all customers)', 'At most this many MARKETING-template messages a day, and only to customers who opted in to offers (25).'],
     ['whatsapp_templates_paused_until', 'WhatsApp: templates paused until', 'Set by itself when Meta says "spam rate limit hit" (24 hours). While set, no alert, reminder or broadcast template goes; replies still go. Clear it to end the pause early.'],
-    ['watch_daily_status_enabled', 'Monitoring: "today\'s update" on (true / false)', 'The all-clear message to paying customers in their first days, even when nothing changed. false: they hear only when something happens.'],
-    ['watch_daily_status_every_days', 'Monitoring: "today\'s update" every N days', '2 = alternate days (since 9 Oct 2026, after Meta\'s spam-limit warning); 1 = every day. A real alert counts as that day\'s message.'],
+    ['watch_daily_status_enabled', 'Monitoring: "today\'s update" on (true / false)', 'The status update (email, notification, SMS once approved) to everyone monitoring a vehicle, paid or free, even when nothing changed. false: they hear only when something happens.'],
+    // The cadence (user, 2026-10-10: "first 7 days every day, then alternate days, then only when changes").
+    ['watch_status_daily_days', 'Monitoring update: every day for the first N days', '7: counted per vehicle from the day its monitoring started.'],
+    ['watch_status_alternate_until_day', 'Monitoring update: every other day until day N', '28: after the daily days, every other day until this day of monitoring; after it, only when something changes. 0 = every other day while monitoring runs.'],
+    ['sms_tpl_status', 'SMS template id: monitoring update', '2 values: vehicle, short status ("all clear", "PUC expired"). Empty = not sent by SMS.'],
+    ['watch_daily_status_every_days', 'Monitoring: "today\'s update" every N days (retired)', 'Replaced on 10 Oct 2026 by the daily / every-other-day settings above.'],
     ['whatsapp_marketing_gap_days', 'WhatsApp: days between marketing to one person', 'No second marketing message to the same customer within this many days (7).'],
     ['nudge_enabled', 'WhatsApp: remind people who said Hi to agree (true / false)', 'Off since 2026-10-09: someone who only said Hi hears from GaadiPe again only if they write.'],
     // The free check before sign-in (migrations 142–143).

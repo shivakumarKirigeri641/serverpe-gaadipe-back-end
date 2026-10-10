@@ -20,7 +20,7 @@ const sms = require('../util/sms');
 
 const n = (v) => Number(v || 0);
 const ten = (m) => String(m || '').replace(/\D/g, '').slice(-10);
-const SMS_KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers', 'manual'];
+const SMS_KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers', 'manual', 'status'];
 const MANUAL_SMS = ['manual', 'service'];          // what the admin may send by hand
 
 async function overview() {

@@ -176,7 +176,8 @@ async function send(mobile, text, { variables = {}, templateId = null } = {}) {
  * to a deactivated account or a blocked number. Never throws.
  */
 // 'manual' (2026-10-10): the web admin's own SMS to chosen customers — a placeholder template until approved.
-const KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers', 'manual'];
+// 'status' (2026-10-10): the status update on the cadence in jobs/watch.js — [vehicle, short status].
+const KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers', 'manual', 'status'];
 async function sendTemplate(kind, mobile, values = [], meta = {}) {
   const out = await sendTemplateRaw(kind, mobile, values);
   await logSms({ kind, mobile, out, values: values.map((v) => String(v ?? '')), queueId: meta.queueId || null, adminId: meta.adminId || null });
