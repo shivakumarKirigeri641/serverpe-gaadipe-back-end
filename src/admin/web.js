@@ -428,6 +428,10 @@ const EMAILS = [
   ['notify_web_checks', 'web_check', 'A vehicle is checked on the website', 'After signing in: new vehicle or repeat, found or not'],
   ['notify_chat_checks', 'free_check', 'A free check before sign-in', 'Full details: vehicle, what was shown, place, IP, device, ids, consent — one per lookup'],
   ['notify_push_on', 'push_on', 'A customer allows notifications', 'On a phone or computer'],
+  // 2026-10-10 (migration 155).
+  ['notify_free_monitor', 'free_monitor', 'A customer starts free monitoring', 'The 14 days on one vehicle — who, which vehicle, when it ends'],
+  ['notify_checks_month', 'checks_month', 'A customer uses up the month\'s checks', 'Once a month per customer — a heavy user and a likely buyer'],
+  ['notify_reach_done', 'reach_done', 'A manual SMS or notification has gone out', 'Sent, failed and skipped, once the whole send is done'],
   ['notify_payments', 'payment', 'A payment succeeds', 'With the invoice PDF'],
   ['notify_contact', 'contact', 'A Contact us message', ''],
   ['notify_feedback', 'feedback', 'A feedback note', ''],

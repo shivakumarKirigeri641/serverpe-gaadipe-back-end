@@ -907,6 +907,26 @@ router.get('/web/free-checks/audit', needs('dashboard.view'), safe(async (req, r
        FROM anon_checks WHERE created_at > now() - ($1 || ' days')::interval`, [String(days)]);
   res.json({ days, totals, rows: rows.map((r) => ({ ...r, id: String(r.id), user_id: r.user_id ? String(r.user_id) : null })) });
 }));
+/* SMS & NOTIFICATIONS (src/admin/reach.js, migration 155): status for every customer,
+   and manual sends — queued, sent by jobs/reach.js, audited. */
+const reach = require('../admin/reach');
+router.get('/web/reach', needs('customers.view'), safe(async (_req, res) => res.json(await reach.overview())));
+router.get('/web/reach/users', needs('customers.view'), safe(async (req, res) => res.json(await reach.users({
+  q: req.query.q, filter: req.query.filter, limit: req.query.limit }))));
+router.get('/web/reach/users/:id', needs('customers.view'), safe(async (req, res) => res.json(await reach.history(String(req.params.id).replace(/\D/g, '')))));
+router.post('/web/reach/send', needs('settings'), safe(async (req, res) => {
+  const b = req.body || {};
+  const out = await reach.queue({ channel: b.channel, kind: b.kind, userIds: b.user_ids, vals: b.vals, title: b.title, body: b.body,
+    url: b.url, sendAt: b.send_at, adminId: req.admin.id, note: b.note });
+  if (out.ok) await auth.audit({ adminId: req.admin.id, action: 'reach_queued', ip: ipOf(req),
+    detail: { channel: b.channel, kind: b.kind, customers: out.queued, send_at: out.send_at, title: b.title || undefined } });
+  res.status(out.ok ? 200 : 400).json(out);
+}));
+router.post('/web/reach/queue/:id/cancel', needs('settings'), safe(async (req, res) => {
+  const out = await reach.cancel(String(req.params.id).replace(/\D/g, ''));
+  if (out.ok) await auth.audit({ adminId: req.admin.id, action: 'reach_cancelled', ip: ipOf(req), detail: { queue_id: req.params.id } });
+  res.status(out.ok ? 200 : 404).json(out);
+}));
 router.get('/web/log', needs('customers.view'), safe(async (req, res) => res.json(await web.log({
   range: req.query.range, kind: req.query.kind, q: req.query.q, pages: req.query.pages === '1', limit: req.query.limit }))));
 router.get('/web/emails', needs('dashboard.view'), safe(async (_req, res) => res.json(await web.emails())));

@@ -114,6 +114,25 @@ async function sendViaTwilio({ mobile, text }) {
  * @param {string} text       the whole message, for providers that take text
  * @param {object} variables  template variables, for providers that take those
  */
+/*
+ * THE RECORD (migration 155, user 2026-10-10: "SMS status for every user"). Every
+ * SMS, whatever became of it, is written to notify_log for the web admin's SMS &
+ * notifications page. A sign-in code is logged as 'otp' with no content. Never throws.
+ */
+async function logSms({ kind, mobile, out, values = null, queueId = null, adminId = null }) {
+  try {
+    const db = require('../db');
+    const m = String(mobile || '').replace(/\D/g, '').slice(-10);
+    const u = m ? await db.one(`SELECT id FROM users WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $1 LIMIT 1`, [m]) : null;
+    const status = out.simulated ? 'simulated' : out.ok ? 'sent' : out.skipped ? 'skipped' : 'failed';
+    await db.query(
+      `INSERT INTO notify_log (channel, kind, user_id, mobile, status, error, provider_id, preview, queue_id, admin_id)
+            VALUES ('sms', $1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [kind, u?.id || null, m || null, status, out.ok ? null : String(out.error || '').slice(0, 300) || null,
+        out.id || null, values && kind !== 'otp' ? values.join(' | ').slice(0, 300) : null, queueId, adminId]);
+  } catch (e) { console.error('[sms] log failed: %s', e.message); }
+}
+
 async function send(mobile, text, { variables = {}, templateId = null } = {}) {
   const m = String(mobile || '').replace(/\D/g, '').slice(-10);
   if (m.length !== 10) return { ok: false, error: 'bad_mobile' };
@@ -121,7 +140,9 @@ async function send(mobile, text, { variables = {}, templateId = null } = {}) {
   if (!configured()) {
     // Never the text: it carries the code.
     console.warn('[sms] no SMS_PROVIDER set — would have sent a message to ••••%s', m.slice(-4));
-    return { ok: true, simulated: true };
+    const out = { ok: true, simulated: true };
+    await logSms({ kind: 'otp', mobile: m, out });
+    return out;
   }
 
   try {
@@ -130,9 +151,11 @@ async function send(mobile, text, { variables = {}, templateId = null } = {}) {
       : PROVIDER === 'twilio' ? await sendViaTwilio({ mobile: m, text })
       : (() => { throw new Error(`Unknown SMS_PROVIDER "${PROVIDER}"`); })();
     console.log('[sms] sent to ••••%s via %s', m.slice(-4), PROVIDER);
+    await logSms({ kind: 'otp', mobile: m, out: { ok: true, id: out.id } });
     return { ok: true, id: out.id };
   } catch (e) {
     console.error('[sms] send to ••••%s failed: %s', m.slice(-4), e.message);
+    await logSms({ kind: 'otp', mobile: m, out: { ok: false, error: e.message } });
     return { ok: false, error: e.message };
   }
 }
@@ -152,11 +175,18 @@ async function send(mobile, text, { variables = {}, templateId = null } = {}) {
  * DLT allows about 30 characters per variable, so each is cut to fit. Never sent
  * to a deactivated account or a blocked number. Never throws.
  */
-const KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers'];
-async function sendTemplate(kind, mobile, values = []) {
+// 'manual' (2026-10-10): the web admin's own SMS to chosen customers — a placeholder template until approved.
+const KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers', 'manual'];
+async function sendTemplate(kind, mobile, values = [], meta = {}) {
+  const out = await sendTemplateRaw(kind, mobile, values);
+  await logSms({ kind, mobile, out, values: values.map((v) => String(v ?? '')), queueId: meta.queueId || null, adminId: meta.adminId || null });
+  return out;
+}
+async function sendTemplateRaw(kind, mobile, values = []) {
   if (!KINDS.includes(kind)) return { ok: false, error: 'unknown_kind' };
   const settings = require('./settings');
-  if (!(await settings.bool('sms_alerts_enabled', false))) return { ok: false, skipped: true, error: 'sms_alerts_off' };
+  // The master switch is for the automatic SMS; a manual send from the web admin is a decision of its own.
+  if (kind !== 'manual' && !(await settings.bool('sms_alerts_enabled', false))) return { ok: false, skipped: true, error: 'sms_alerts_off' };
   const messageId = String(await settings.get(`sms_tpl_${kind}`, '') || '').trim();
   if (!messageId) return { ok: false, skipped: true, error: `no approved template for ${kind}` };
   const m = String(mobile || '').replace(/\D/g, '').slice(-10);

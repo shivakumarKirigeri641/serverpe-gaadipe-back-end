@@ -240,6 +240,8 @@ app.listen(config.port, () => {
   require('./jobs/renewal').start(Number(process.env.RENEWAL_TICK_SECONDS) || 6 * 3600);
   // Broadcasts, sent a few a minute (back 2026-10-09; manual and strict — admin/broadcasts.js, whatsapp/send.js).
   require('./jobs/broadcast').start(Number(process.env.BROADCAST_TICK_SECONDS) || 60);
+  // SMS and notifications queued from the web admin (migration 155, 2026-10-10).
+  require('./jobs/reach').start(Number(process.env.REACH_TICK_SECONDS) || 60);
   // The command center's alert rules (records API, WhatsApp, payments, jobs…).
   require('./jobs/alerts').start(Number(process.env.ALERTS_TICK_SECONDS) || 60);
   // Payments against Razorpay, once a day after 03:00 IST (operations module).

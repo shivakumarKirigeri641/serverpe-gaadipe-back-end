@@ -84,6 +84,12 @@ const GROUPS = [
     ['sms_tpl_monitor_end', 'SMS template id: monitoring ending', '2 values: vehicle, end date. Empty = not sent.'],
     ['sms_tpl_service', 'SMS template id: one-time service notice', 'No values — "GaadiPe is now on gaadipe.in" (scripts/sms-notice.js). Empty = not sent.'],
     ['sms_tpl_offers', 'SMS template id: offers (promotional)', '1 value: the tip. Only to customers who opted in, 9 am – 9 pm. Empty = not sent.'],
+    // Manual SMS from the web admin's SMS & notifications page (migration 155).
+    ['sms_tpl_manual', 'SMS template id: manual (sent by hand)', 'The approved DLT message id. Empty = a placeholder; the page will not send it.'],
+    ['sms_tpl_manual_text', 'Manual SMS: the approved wording', 'Shown beside the box when sending, e.g. "Dear customer, {#var#} - GaadiPe".'],
+    ['sms_tpl_manual_vars', 'Manual SMS: how many values', 'How many {#var#} the approved template has (1).'],
+    ['reach_sms_per_tick', 'Queued SMS sent per minute', '20.'],
+    ['reach_push_per_tick', 'Queued notifications sent per minute', '50.'],
     // Like CarInfo (2026-10-10, migration 148).
     ['free_check_show_variant', 'Free check before sign-in: show the variant (true / false)', 'true: the full model, e.g. "SPLENDOR PLUS"; false: only the first word, the rest hidden.'],
     ['free_check_show_owner', 'Free check before sign-in: show the owner name, masked (true / false)', 'The name masked as the Government masks it (R****H) — lets a buyer confirm it is the seller\'s vehicle.'],

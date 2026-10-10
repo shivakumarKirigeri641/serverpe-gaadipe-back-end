@@ -253,7 +253,7 @@ async function chatChecks() {
           badge: { text: `Free check before sign-in · ${a.outcome === 'shown' ? 'record found' : a.outcome === 'not_found' ? 'no record' : 'failed'}`,
                    tone: a.outcome === 'shown' ? 'good' : a.outcome === 'not_found' ? 'watch' : 'wrong' },
           title: `A visitor checked ${a.reg_no || 'a vehicle'} without signing in`,
-          lead: `${T.ist(a.created_at)} · from ${place} · ${a.source ? `came from ${sourceName(a.source)}` : 'came directly'}. They agreed to the Terms first.`,
+          lead: `${T.ist(a.created_at)} · from ${place} · ${a.source ? `came from ${sourceName(a.source)}` : 'came directly'}. They agreed to the Terms by entering the number. If they sign in on this browser, this check is linked to them and the vehicle goes into their My vehicles.`,
           stats: [['Vehicle', a.reg_no || '—'], ['Shown', a.outcome === 'shown' ? 'Yes' : 'No'], ['Free checks today', String(day?.lookups ?? 0)], ['Refused today', String(day?.refused ?? 0)]],
           sections: [
             { heading: 'Vehicle', rows: [
@@ -277,7 +277,8 @@ async function chatChecks() {
               ['Record', `#${a.id}`], ['Device id', a.device_id], ['Visitor id', a.visitor_id], ['Session id', a.session_id],
             ] },
             { heading: 'Consent', rows: [
-              ['Agreed', k.agreed ? `Yes — tapped “Agree & check” (${k.language === 'hi' ? 'Hindi' : 'English'})` : 'No'],
+              // How they agreed (2026-10-10): by entering the number now, the button before.
+              ['Agreed', k.agreed ? `Yes — ${k.method === 'entered_vehicle_number' ? 'by entering the vehicle number' : 'tapped “Agree & check”'} (${k.language === 'hi' ? 'Hindi' : 'English'})` : 'No'],
               ['Words shown', k.words], ['Policy versions', k.versions ? Object.entries(k.versions).map(([x, y]) => `${x} ${y}`).join(' · ') : null],
               ['Lawful purpose', k.lawful_purpose_confirmed ? 'Confirmed' : null],
             ] },
@@ -315,6 +316,108 @@ async function pushOn() {
         }),
       };
     }) ? 1 : 0;
+  }
+  return n;
+}
+
+/*
+ * THREE MORE FOR THE WEBSITE + SMS PLATFORM (user, 2026-10-10: "I hope you have handled
+ * the mailing to me as well"), each with its own switch:
+ *   free_monitor     a customer started the 14 days of free monitoring   notify_free_monitor
+ *   checks_month     a customer used up the month's checks — a buyer     notify_checks_month
+ *   reach_done       a manual SMS / notification send has gone out       notify_reach_done
+ */
+async function freeMonitorStarted() {
+  if (!(await on('notify_free_monitor'))) return 0;
+  const { rows } = await db.query(
+    `SELECT e.id, e.user_id, e.created_at, e.detail, v.reg_no, v.maker, v.model
+       FROM event_log e LEFT JOIN vehicles v ON v.id = e.vehicle_id
+      WHERE e.kind = 'free_monitor_started' AND e.created_at > now() - interval '1 hour'
+        AND ${notDone('free_monitor', 'e.id::text')} ORDER BY e.id LIMIT 20`).catch(() => ({ rows: [] }));
+  let n = 0;
+  for (const e of rows) {
+    n += await deliver('free_monitor', e.id, async () => {
+      const u = await db.one(`SELECT mobile, coalesce(display_name, wa_profile_name) AS name FROM users WHERE id = $1`, [e.user_id]);
+      const who = u?.name || T.mobile(u?.mobile);
+      const d = e.detail || {};
+      return {
+        subject: `👁 Free monitoring started · ${e.reg_no || 'a vehicle'} · ${who}`,
+        ...T.layout({
+          badge: { text: 'Free monitoring · 14 days', tone: 'good' },
+          title: `${who} started free monitoring of ${e.reg_no || 'a vehicle'}`,
+          lead: `${T.ist(e.created_at)}. When the 14 days end they are offered 28 more days for ₹19.`,
+          sections: [{ heading: 'Who and what', rows: [
+            ['Name', u?.name || 'Not given'], ['Mobile', T.mobile(u?.mobile)],
+            ['Vehicle', [e.reg_no, e.maker, e.model].filter(Boolean).join(' · ')],
+            ['Ends', d.ends_at ? T.ist(d.ends_at) : null], ['Came from', await sourceOfUser(e.user_id)],
+          ] }],
+          cta: { label: 'Open the customer', url: `${WEBADMIN()}/web/customers/${e.user_id}` },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
+async function checksMonthUsed() {
+  if (!(await on('notify_checks_month'))) return 0;
+  const { rows } = await db.query(
+    `SELECT e.id, e.user_id, e.created_at, e.detail FROM event_log e
+      WHERE e.kind = 'checks_month_used' AND e.created_at > now() - interval '1 day'
+        AND ${notDone('checks_month', 'e.id::text')} ORDER BY e.id LIMIT 20`).catch(() => ({ rows: [] }));
+  let n = 0;
+  for (const e of rows) {
+    n += await deliver('checks_month', e.id, async () => {
+      const u = await db.one(`SELECT mobile, coalesce(display_name, wa_profile_name) AS name FROM users WHERE id = $1`, [e.user_id]);
+      const who = u?.name || T.mobile(u?.mobile);
+      const d = e.detail || {};
+      return {
+        subject: `🔢 Used up the month's checks · ${who}`,
+        ...T.layout({
+          badge: { text: 'Monthly checks used', tone: 'watch' },
+          title: `${who} used all ${d.limit || ''} checks this month`,
+          lead: `${T.ist(e.created_at)}. They were told that buying any report adds ${(await settings.num('checks_per_report_bonus', 5))} more checks — a heavy user, and a likely buyer.`,
+          sections: [{ heading: 'Who', rows: [
+            ['Name', u?.name || 'Not given'], ['Mobile', T.mobile(u?.mobile)],
+            ['Checks this month', String(d.used ?? '')], ['Of which from reports bought', d.bonus ? `+${d.bonus}` : 'none'],
+            ['Tried to check', d.reg_no], ['Came from', await sourceOfUser(e.user_id)],
+          ] }],
+          cta: { label: 'Open the customer', url: `${WEBADMIN()}/web/customers/${e.user_id}` },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
+async function reachDone() {
+  if (!(await on('notify_reach_done'))) return 0;
+  // A send is the rows queued together (same channel, kind, admin and minute); mailed once none is left to go.
+  const { rows } = await db.query(
+    `SELECT channel, kind, admin_id, date_trunc('minute', created_at) AS at,
+            count(*)::int AS total, count(*) FILTER (WHERE status = 'sent')::int AS sent,
+            count(*) FILTER (WHERE status = 'failed')::int AS failed, count(*) FILTER (WHERE status = 'skipped')::int AS skipped,
+            count(*) FILTER (WHERE status = 'cancelled')::int AS cancelled,
+            (array_agg(coalesce(title, vals::text) ORDER BY id))[1] AS what, max(sent_at) AS done_at
+       FROM notify_queue WHERE created_at > now() - interval '3 days'
+      GROUP BY 1, 2, 3, 4
+     HAVING count(*) FILTER (WHERE status IN ('queued', 'sending')) = 0`).catch(() => ({ rows: [] }));
+  let n = 0;
+  for (const b of rows) {
+    const ref = `${b.channel}:${b.kind}:${b.admin_id || 0}:${new Date(b.at).toISOString()}`;
+    const done = await db.one(`SELECT 1 FROM admin_notifications WHERE kind = 'reach_done' AND ref = $1 AND (status = 'sent' OR attempts >= ${MAX_ATTEMPTS})`, [ref]);
+    if (done) continue;
+    n += await deliver('reach_done', ref, async () => ({
+      subject: `${b.channel === 'sms' ? '💬 SMS' : '🔔 Notification'} sent · ${b.sent} of ${b.total}${b.failed ? ` · ${b.failed} failed` : ''}`,
+      ...T.layout({
+        badge: { text: b.channel === 'sms' ? 'Manual SMS' : 'Manual notification', tone: b.failed ? 'watch' : 'good' },
+        title: `${b.channel === 'sms' ? 'Your SMS' : 'Your notification'} has gone out`,
+        lead: `Queued ${T.ist(b.at)}${b.done_at ? `, finished ${T.ist(b.done_at)}` : ''}.`,
+        stats: [['Customers', String(b.total)], ['Sent', String(b.sent)], ['Failed', String(b.failed)], ['Skipped', String(b.skipped)]],
+        sections: [{ heading: 'What', rows: [['Kind', b.kind], ['Message', String(b.what || '').slice(0, 200)], ['Cancelled', b.cancelled ? String(b.cancelled) : null]] }],
+        cta: { label: 'Open SMS & notifications', url: `${WEBADMIN()}/web/reach` },
+      }),
+    })) ? 1 : 0;
   }
   return n;
 }
@@ -1122,7 +1225,7 @@ async function runOnce() {
      from WhatsApp"). WhatsApp is retired: "said hi", WhatsApp checks, STOP and its
      reason, left at the WhatsApp payment link and the WhatsApp summary no longer
      run; payments and alerts below mail only the website's. */
-  for (const [k, fn] of Object.entries({ visits, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback,
+  for (const [k, fn] of Object.entries({ visits, signIns, webChecks, chatChecks, pushOn, freeMonitorStarted, checksMonthUsed, reachDone, payments, contacts, feedback,
                                             alertMails, security, dailySummary, weeklyMoney, weeklyDigest })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }

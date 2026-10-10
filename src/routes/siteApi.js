@@ -629,7 +629,7 @@ router.post('/me/mobile/change', safe(async (req, res) => {
 
 /*
  * A CODE BY EMAIL (user, 2026-10-07: "mail must be mandatory, with verification,
- * before pay"). Six digits, ten minutes, five tries — the address is confirmed
+ * before pay"). Four digits (was six until 2026-10-10), ten minutes, five tries — the address is confirmed
  * without leaving the payment window. Off the production server the code is not
  * emailed but written to the server's log, so testing never mails anyone.
  */
@@ -639,7 +639,8 @@ router.post('/me/email/code', safe(async (req, res) => {
   if (!chk.ok) return res.status(400).json({ error: chk.error, message: chk.message, suggestion: chk.suggestion || null });
   const recent = await db.one(`SELECT 1 FROM email_codes WHERE user_id = $1 AND created_at > now() - interval '45 seconds'`, [req.user.id]);
   if (recent) return res.status(429).json({ error: 'wait', message: 'A code was just sent. Please wait a moment before asking again.' });
-  const code = String(require('crypto').randomInt(100000, 1000000));
+  // Four digits (user, 2026-10-10), typed in the profile conversation; ten minutes, five tries.
+  const code = String(require('crypto').randomInt(1000, 10000));
   const hash = require('crypto').createHash('sha256').update(code).digest('hex');
   await db.query(`INSERT INTO email_codes (user_id, email, code_hash, expires_at) VALUES ($1, $2, $3, now() + interval '10 minutes')`, [req.user.id, email, hash]);
   if (String(process.env.NODE_ENV).toLowerCase() !== 'production') {
@@ -865,6 +866,15 @@ router.post('/check', safe(async (req, res) => {
   }
 
   const q = await quota.check(req.user.id, parsed.regNo);
+  // Out of the month's checks: recorded once a month, so the admin is emailed — a likely buyer (2026-10-10).
+  if (!q.allowed && q.reason === 'monthly') {
+    await db.query(
+      `INSERT INTO event_log (user_id, kind, detail)
+       SELECT $1, 'checks_month_used', $2
+        WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE user_id = $1 AND kind = 'checks_month_used'
+                            AND created_at >= date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`,
+      [req.user.id, JSON.stringify({ limit: q.limit, used: q.used, bonus: q.bonus || 0, reg_no: parsed.regNo })]).catch(() => {});
+  }
   if (!q.allowed) {
     return res.status(429).json({
       error: 'quota',

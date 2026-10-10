@@ -138,7 +138,7 @@ async function noticeDue() {
     const pushed = await require('./push').toCustomer(r.user_id, {
       title: `${r.reg_no}: free monitoring ends ${day(r.ends_at)}`,
       body: `Continue the alerts for ${plan?.duration_days || 28} days at ${price} — the full report included.`,
-      url, tag: `free-end-${r.reg_no}`,
+      url, tag: `free-end-${r.reg_no}`, kind: 'monitor_end',
     }).catch(() => 0);
     if (pushed) channels.push('push');
     if (r.email && r.email_verified_at && !r.email_unsubscribed_at) {

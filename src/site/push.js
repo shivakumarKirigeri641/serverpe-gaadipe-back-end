@@ -45,9 +45,25 @@ async function status(userId) {
 }
 
 /** One notification to each of this customer's devices. Returns how many were delivered to the push service. */
-async function toCustomer(userId, { title, body, url = '/chat', tag }) {
+async function toCustomer(userId, { title, body, url = '/chat', tag, kind, queueId = null, adminId = null }) {
+  const sent = await toCustomerRaw(userId, { title, body, url, tag });
+  /* THE RECORD (migration 155): every notification, for the web admin's SMS & notifications page. */
+  try {
+    const devices = sent === -1 ? 0 : sent;
+    await db.query(
+      `INSERT INTO notify_log (channel, kind, user_id, status, error, preview, devices, queue_id, admin_id)
+            VALUES ('push', $1, $2, $3, $4, $5, $6, $7, $8)`,
+      [String(kind || tag || 'notification').replace(/[-:].*$/, '').slice(0, 40), userId,
+        sent === -1 ? 'no_device' : sent > 0 ? 'sent' : 'failed', sent === -1 ? 'no notification device' : sent > 0 ? null : 'no device accepted it',
+        `${String(title || '').slice(0, 100)} — ${String(body || '').slice(0, 180)}`, devices, queueId, adminId]);
+  } catch (e) { console.error('[customer-push] log failed: %s', e.message); }
+  return Math.max(0, sent);
+}
+
+/** -1 when the customer has no notification device. */
+async function toCustomerRaw(userId, { title, body, url = '/chat', tag }) {
   const { rows } = await db.query(`SELECT id, endpoint, keys FROM customer_push_subscriptions WHERE user_id = $1`, [userId]);
-  if (!rows.length) return 0;
+  if (!rows.length) return -1;
   await adminPush.publicKey();                       // sets the VAPID details
   const payload = JSON.stringify({ title: String(title || 'GaadiPe').slice(0, 120), body: String(body || '').slice(0, 400),
                                    url: String(url || '/chat').startsWith('/') ? url : '/chat', tag: tag || undefined });
