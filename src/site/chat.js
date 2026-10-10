@@ -208,10 +208,21 @@ const TODAY = `(date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZON
  */
 async function linkAnonChecks(userId, deviceId) {
   if (!userId || !deviceId) return;
-  await db.query(
+  const { rows } = await db.query(
     `UPDATE anon_checks SET user_id = $1, linked_at = now()
-      WHERE device_id = $2 AND user_id IS NULL AND created_at > now() - interval '30 days'`,
-    [userId, String(deviceId).slice(0, 64)]).catch(() => {});
+      WHERE device_id = $2 AND user_id IS NULL AND created_at > now() - interval '30 days'
+      RETURNING reg_no, outcome`,
+    [userId, String(deviceId).slice(0, 64)]).catch(() => ({ rows: [] }));
+  /* …and the vehicles they saw go into My vehicles (user, 2026-10-10: "same user
+     if sign in, attach that vehicle to this user"). Only ones actually shown — the
+     record was saved by the check itself. Not a check of its own: nothing counts
+     towards the signed-in daily limit. One removed earlier comes back, as it does
+     when it is checked again. */
+  const store = require('../vehicle/store');
+  for (const reg of new Set(rows.filter((r) => r.outcome === 'shown').map((r) => r.reg_no))) {
+    const v = await db.one(`SELECT id FROM vehicles WHERE reg_no = $1`, [reg]).catch(() => null);
+    if (v) await store.linkUserVehicle(userId, v.id).catch((e) => console.error('[chat] link %s: %s', reg, e.message));
+  }
 }
 
 /* ─────────────────────────────────────────── the WhatsApp history ── */
