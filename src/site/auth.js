@@ -176,7 +176,10 @@ async function requestCodeInner({ mobile, ip }) {
 /* The words beside the sign-in, kept with every agreement record (2026-10-08). */
 const SIGN_IN_NOTICE = 'By signing in, you agree to GaadiPe’s Terms of use, Privacy policy and Refund policy.';
 
-const PROMO_CONSENT ='Send me vehicle tips, new features and GaadiPe offers by SMS, WhatsApp or email. I can stop this any time in my Profile or by replying STOP.';
+/* OFFERS AND NEWSLETTERS (user, 2026-10-10: "include the word offers/newsletters for user
+   consent") — the words the chat and the Profile show, recorded as they are. WhatsApp
+   and STOP are gone from them: WhatsApp is no longer used. */
+const PROMO_CONSENT = 'Send me offers and newsletters from GaadiPe (vehicle tips, new features and offers) by SMS and email. I can stop them any time in my Profile.';
 
 /* `text`: the exact words the customer said yes to — WhatsApp asks in its own words (2026-10-09). */
 async function setPromoConsent(userId, agree, { ip = null, userAgent = null, channel = 'web', text = PROMO_CONSENT } = {}) {
