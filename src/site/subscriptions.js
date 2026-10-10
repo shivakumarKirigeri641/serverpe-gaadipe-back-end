@@ -60,12 +60,17 @@ async function forUser(userId) {
     }
     alerts.sort((a, b) => a.at - b.at);
     const next = alerts[0] || null;
-    const priced = await billing.reportPriceFor(userId, r.vehicle_id).catch(() => null);
+    const daysLeft = active && r.expires_at ? Math.max(0, Math.ceil((new Date(r.expires_at) - Date.now()) / 86400e3)) : null;
+    // No renew button on paid monitoring that is running (user, 2026-10-10: "I subscribed with
+    // ₹11, why is Renew 28 days · ₹11 showing?") — only in its last renewal_notice_days, the
+    // days the "renew" reminder goes out. Free monitoring keeps its upgrade; ended ones, renew.
+    const renewDue = !(active && paid) || (daysLeft != null && daysLeft <= renewalDays);
+    const priced = renewDue ? await billing.reportPriceFor(userId, r.vehicle_id).catch(() => null) : null;
     out.push({
       reg_no: r.reg_no, maker: r.maker, model: r.model,
       plan: paid ? 'paid' : 'free', active,
       started_at: r.created_at, ends_at: r.expires_at,
-      days_left: active && r.expires_at ? Math.max(0, Math.ceil((new Date(r.expires_at) - Date.now()) / 86400e3)) : null,
+      days_left: daysLeft,
       report_until: r.report_until && new Date(r.report_until) > new Date() ? r.report_until : null,
       // Stopped before its end date (removed, or switched off) — not "ended".
       stopped: !active && Boolean(r.expires_at) && new Date(r.expires_at) > new Date(),
