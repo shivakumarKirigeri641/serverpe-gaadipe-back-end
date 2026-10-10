@@ -298,8 +298,12 @@ async function history(user, { before = null, limit = 50 } = {}) {
 async function summary(user) {
   const row = await db.one(
     `SELECT (SELECT count(*) FROM user_vehicles WHERE user_id = $1 AND hidden_at IS NULL)::int AS vehicles,
+            -- Only reports for vehicles still in My vehicles: one the customer removed
+            -- is gone for them, and so is its report from the welcome (user, 2026-10-10).
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
-              WHERE r.user_id = $1 AND p.status = 'paid')::int AS reports,
+              WHERE r.user_id = $1 AND p.status = 'paid'
+                AND EXISTS (SELECT 1 FROM user_vehicles uv WHERE uv.user_id = $1
+                  AND uv.vehicle_id = r.vehicle_id AND uv.hidden_at IS NULL))::int AS reports,
             (SELECT count(*) FROM whatsapp_messages WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $2
                 AND created_at >= $3::timestamptz - interval '5 minutes')::int AS wa_messages,
             (SELECT v.reg_no FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
