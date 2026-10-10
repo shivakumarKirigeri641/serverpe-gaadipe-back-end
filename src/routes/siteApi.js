@@ -290,7 +290,8 @@ router.post('/session/verify', safe(async (req, res) => {
   const vid = String(req.body?.client?.visitor_id || '').slice(0, 64);
   if (/^v_[a-z0-9]{8,40}$/.test(vid) && out.user?.id) {
     require('../db').query(
-      `UPDATE visitors SET user_id = $2, mobile = $3 WHERE visitor_id = $1 AND user_id IS NULL`,
+      // linked_at: the moment this browser signed in — the web admin's trail shows it (2026-10-10).
+      `UPDATE visitors SET user_id = $2, mobile = $3, linked_at = now() WHERE visitor_id = $1 AND user_id IS NULL`,
       [vid, out.user.id, String(out.user.mobile || '').slice(-10) || null]).catch(() => {});
   }
   // A free check made on this browser before signing in now belongs to this account (migration 142).
@@ -869,7 +870,12 @@ router.post('/check', safe(async (req, res) => {
       error: 'quota',
       message: q.reason === 'burst'
         ? 'That is a lot of checks very quickly — please wait a minute and try again.'
-        : `You have used your ${q.limit} free checks for today. They reset tomorrow.`,
+        : q.reason === 'monthly'
+          // Buying unlocks more (user, 2026-10-10): every report adds checks_per_report_bonus.
+          ? `You have used this month’s ${q.limit} checks. Buy a full report for any vehicle — ₹19, or ₹11 to renew one you bought — and get ${q.perReport} more checks this month.`
+          : `You have used your ${q.limit} free checks for today. They reset tomorrow.`,
+      reason: q.reason,
+      quota: await quota.left(req.user.id).catch(() => null),
     });
   }
 
@@ -899,8 +905,13 @@ router.post('/check', safe(async (req, res) => {
     vehicle: await withRto(paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, { detail: await freeDetail() })),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     ...(await offerFor(req, plan, paid, parsed.regNo)),
+    // Checks left, shown under the typing box (2026-10-10).
+    quota: await quota.left(req.user.id).catch(() => null),
   });
 }));
+
+/* Checks left today and this month — for the chat (user, 2026-10-10). */
+router.get('/checks/left', safe(async (req, res) => res.json(await quota.left(req.user.id))));
 
 /**
  * Buy the full report for a vehicle.

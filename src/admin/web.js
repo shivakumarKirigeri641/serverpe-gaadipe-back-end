@@ -177,9 +177,36 @@ async function trail(visitorId) {
   if (!v) return { visitor: null, rows: [] };
   const { rows } = await db.query(
     `SELECT occurred_at, name, page, source, campaign, reg_no, status, amount_paise,
-            metadata->>'label' AS label, metadata->>'referrer' AS referrer
-       FROM events WHERE visitor_id = $1 ORDER BY occurred_at DESC LIMIT 300`, [id]);
-  return { visitor: { ...v, user_id: v.user_id ? String(v.user_id) : null }, rows: rows.reverse() };
+            metadata->>'label' AS label, metadata->>'referrer' AS referrer, metadata->>'kind' AS kind
+       FROM events WHERE visitor_id = $1 ORDER BY occurred_at DESC LIMIT 500`, [id]);
+  /* PIN TO PIN (user, 2026-10-10: "complete tracking of what the user taps or types,
+     the vehicle checks before sign-in with full device details, and that the vehicle
+     is linked to the user once they sign in"). The free checks this browser made
+     (anon_checks: device, network, consent), whom they now belong to and whether the
+     vehicle is in that customer's My vehicles; then the checks made after signing in. */
+  const { rows: free } = await db.query(
+    `SELECT a.id, a.created_at, a.reg_no, a.outcome, a.refusal, a.data_source, a.latency_ms, a.shown,
+            a.device_id, a.session_id, a.ip, a.user_agent, a.device, a.place, a.referrer, a.page, a.source, a.campaign,
+            a.consent->>'method' AS consent_method, a.user_id, a.linked_at,
+            coalesce(u.display_name, u.wa_profile_name) AS linked_name, u.mobile AS linked_mobile,
+            EXISTS (SELECT 1 FROM user_vehicles uv JOIN vehicles ve ON ve.id = uv.vehicle_id
+                     WHERE uv.user_id = a.user_id AND ve.reg_no = a.reg_no AND uv.hidden_at IS NULL) AS in_my_vehicles
+       FROM anon_checks a LEFT JOIN users u ON u.id = a.user_id
+      WHERE a.visitor_id = $1 ORDER BY a.created_at`, [id]);
+  const signed = v.user_id ? (await db.query(
+    `SELECT created_at, kind, detail->>'reg_no' AS reg_no, (detail->>'found')::boolean AS found, detail->>'channel' AS channel
+       FROM event_log WHERE user_id = $1 AND kind IN ('vehicle_check', 'vehicle_check_repeat')
+        AND created_at >= $2 ORDER BY created_at LIMIT 300`, [v.user_id, v.first_seen_at])).rows : [];
+  // The fullest device description this browser gave: its latest free check, else the visit's own.
+  const last = free[free.length - 1];
+  const device = last ? { ...(last.device || {}), user_agent: last.user_agent, ip: last.ip, place: last.place, device_id: last.device_id } : null;
+  return {
+    visitor: { ...v, user_id: v.user_id ? String(v.user_id) : null },
+    rows: rows.reverse(),
+    free_checks: free.map((f) => ({ ...f, id: String(f.id), user_id: f.user_id ? String(f.user_id) : null })),
+    signed_checks: signed,
+    device,
+  };
 }
 
 /*
@@ -272,10 +299,20 @@ async function customers({ range, q = '', channel = 'all', reach = 'all', active
 async function freeChecks({ range, limit = 200 } = {}) {
   const r = rangeOf(range);
   const { rows } = await db.query(
-    `SELECT id, created_at, detail->>'reg_no' AS reg_no, (detail->>'found')::boolean AS found,
-            left(coalesce(nullif(detail->>'device', ''), '—'), 8) AS device, left(detail->>'ip', 8) AS ip
-       FROM event_log WHERE kind = 'chat_anon_check' AND created_at >= ${FROM}
-      ORDER BY id DESC LIMIT $2`, [RANGES[r], Math.min(500, Number(limit) || 200)]);
+    // With the customer it belongs to once that browser signed in, and its visitor (the full trail) — 2026-10-10.
+    `SELECT e.id, e.created_at, e.detail->>'reg_no' AS reg_no, (e.detail->>'found')::boolean AS found,
+            left(coalesce(nullif(e.detail->>'device', ''), '—'), 8) AS device, left(e.detail->>'ip', 8) AS ip,
+            a.visitor_id, a.user_id, a.linked_at, coalesce(u.display_name, u.wa_profile_name) AS linked_name, u.mobile AS linked_mobile,
+            a.device->>'model' AS model, a.device->>'os' AS os, a.device->>'browser' AS browser, a.place->>'city' AS city
+       FROM event_log e
+       LEFT JOIN LATERAL (
+         SELECT x.visitor_id, x.user_id, x.linked_at, x.device, x.place FROM anon_checks x
+          WHERE x.device_id = e.detail->>'device' AND x.reg_no = e.detail->>'reg_no'
+            AND x.created_at BETWEEN e.created_at - interval '2 minutes' AND e.created_at + interval '2 minutes'
+          ORDER BY abs(extract(epoch FROM x.created_at - e.created_at)) LIMIT 1) a ON true
+       LEFT JOIN users u ON u.id = a.user_id
+      WHERE e.kind = 'chat_anon_check' AND e.created_at >= ${FROM}
+      ORDER BY e.id DESC LIMIT $2`, [RANGES[r], Math.min(500, Number(limit) || 200)]);
   const s = await db.one(
     `SELECT count(*) AS checks, count(*) FILTER (WHERE (detail->>'found')::boolean) AS found,
             count(DISTINCT coalesce(nullif(detail->>'device', ''), detail->>'ip')) AS devices,
@@ -291,7 +328,7 @@ async function freeChecks({ range, limit = 200 } = {}) {
   return {
     range: r,
     summary: { checks: n(s.checks), found: n(s.found), devices: n(s.devices), vehicles: n(s.vehicles), then_signed_in: n(conv.n) },
-    rows: rows.map((x) => ({ ...x, id: String(x.id) })),
+    rows: rows.map((x) => ({ ...x, id: String(x.id), user_id: x.user_id ? String(x.user_id) : null })),
   };
 }
 

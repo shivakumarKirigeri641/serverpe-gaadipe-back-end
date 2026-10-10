@@ -895,7 +895,11 @@ router.get('/web/free-checks', needs('dashboard.view'), safe(async (req, res) =>
 router.get('/web/free-checks/audit', needs('dashboard.view'), safe(async (req, res) => {
   const days = Math.min(90, Math.max(1, Number(req.query.days) || 7));
   const { rows } = await db.query(
-    `SELECT a.*, u.mobile AS linked_mobile FROM anon_checks a LEFT JOIN users u ON u.id = a.user_id
+    // Whom it belongs to after signing in, and whether the vehicle is in their My vehicles (2026-10-10).
+    `SELECT a.*, u.mobile AS linked_mobile, coalesce(u.display_name, u.wa_profile_name) AS linked_name,
+            EXISTS (SELECT 1 FROM user_vehicles uv JOIN vehicles ve ON ve.id = uv.vehicle_id
+                     WHERE uv.user_id = a.user_id AND ve.reg_no = a.reg_no AND uv.hidden_at IS NULL) AS in_my_vehicles
+       FROM anon_checks a LEFT JOIN users u ON u.id = a.user_id
       WHERE a.created_at > now() - ($1 || ' days')::interval ORDER BY a.id DESC LIMIT 300`, [String(days)]);
   const totals = await db.one(
     `SELECT count(*)::int AS attempts, count(*) FILTER (WHERE outcome = 'shown')::int AS shown,

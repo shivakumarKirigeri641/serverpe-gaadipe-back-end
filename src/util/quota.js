@@ -109,7 +109,61 @@ async function check(userId, regNo) {
              used: today.n, limit: dailyLimit, repeat: false, enforced };
   }
 
+  // The month too (user, 2026-10-10): 30, and 5 more for every report bought this month.
+  const month = await monthOf(userId, tier);
+  if (month && month.used >= month.limit) {
+    return { allowed: !enforced, reason: 'monthly', tier, used: month.used, limit: month.limit,
+             bonus: month.bonus, perReport: month.perReport, repeat: false, enforced };
+  }
+
   return { allowed: true, tier, used: today.n, limit: dailyLimit, repeat: false, enforced };
+}
+
+/** The calendar month in IST, as SQL. */
+const MONTH = `date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'`;
+
+/*
+ * THE MONTHLY ALLOWANCE (user, 2026-10-10: "pay a report to unlock more — 5").
+ * free_checks_per_month (30) for a free customer, plus checks_per_report_bonus (5)
+ * for every report paid this month — ₹19 or ₹11. A partner or internal account
+ * has no monthly cap. Null when there is none.
+ */
+async function monthOf(userId, tier) {
+  if (!['stranger', 'trial'].includes(tier)) return null;
+  const base = await settings.num('free_checks_per_month', 30);
+  if (base <= 0) return null;
+  const perReport = await settings.num('checks_per_report_bonus', 5);
+  const row = await db.one(
+    `SELECT (SELECT count(*) FROM event_log WHERE kind = 'vehicle_check' AND user_id = $1
+               AND created_at >= ${MONTH})::int AS used,
+            (SELECT count(*) FROM payments p JOIN plans pl ON pl.id = p.plan_id
+              WHERE p.user_id = $1 AND p.status = 'paid' AND p.amount_paise > 0 AND pl.kind = 'report'
+                AND coalesce(p.paid_at, p.created_at) >= ${MONTH})::int AS reports`, [userId]);
+  const bonus = row.reports * perReport;
+  return { used: row.used, limit: base + bonus, base, bonus, perReport, reports: row.reports };
+}
+
+/**
+ * What this customer has left — for the chat to show (user, 2026-10-10: "show the
+ * vehicle check count to users when they sign in, updated when they purchase").
+ *   { unlimited } or { today: {used, limit, left}, month: {used, limit, left, bonus, per_report} }
+ */
+async function left(userId) {
+  const tier = await tierOf(userId);
+  if (tier === 'subscriber' || tier === 'internal') return { unlimited: true, tier };
+  const dailyLimit = await settings.num(DAILY_KEY[tier] || DAILY_KEY.stranger, 20);
+  const today = await db.one(
+    `SELECT count(*)::int AS n FROM event_log
+      WHERE kind = 'vehicle_check' AND user_id = $1
+        AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'`, [userId]);
+  const m = await monthOf(userId, tier);
+  const day = { used: today.n, limit: dailyLimit, left: Math.max(0, dailyLimit - today.n) };
+  // A day's checks can never be more than the month has left.
+  if (m) day.left = Math.min(day.left, Math.max(0, m.limit - m.used));
+  return {
+    tier, enforced: await settings.bool('checks_enforce', false), today: day,
+    month: m ? { used: m.used, limit: m.limit, left: Math.max(0, m.limit - m.used), bonus: m.bonus, per_report: m.perReport, base: m.base } : null,
+  };
 }
 
 /**
@@ -131,4 +185,4 @@ async function record(userId, regNo, { repeat = false, found = true, channel = n
   } catch { /* the log never stops a check */ }
 }
 
-module.exports = { check, record, tierOf };
+module.exports = { check, record, tierOf, left };

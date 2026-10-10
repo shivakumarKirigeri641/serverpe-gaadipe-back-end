@@ -4,8 +4,8 @@
  *
  * Monitoring runs 28 days and then stops, both halves of it: new challans and
  * the document-expiry warnings. Three days before the end (renewal_notice_days)
- * the customer is told, once, and offered the same vehicle for ₹9 + GST instead
- * of ₹19.
+ * the customer is told, once, and offered the same vehicle for ₹11 instead
+ * of ₹19 (plans.renewal_paise, migration 154).
  *
  * WHY THREE DAYS AND NOT ON THE DAY. On the last day there is nothing to
  * decide — it has already stopped being useful. Three days is long enough to
@@ -96,7 +96,7 @@ function mailFor(person, { regNo, endsOn, paise, days }) {
     stats: [['Vehicle', regNo], ['Ends', istDay(endsOn)], ['Renew for', money(paise)]],
     blocks: [`<div style="font-size:13px;line-height:1.7;color:#0b1f1c;background:#f6faf9;
       border:1px solid #e3ecea;border-radius:10px;padding:14px 16px;">
-      <b>Another ${T.esc(String(days))} days for ${T.esc(money(paise))}</b> — less than half what the first report cost,
+      <b>Another ${T.esc(String(days))} days for ${T.esc(money(paise))}</b> — less than a new vehicle's ₹19,
       because the report is already yours. You keep getting told the moment a new challan appears,
       and before any document runs out.</div>`,
       `<div style="font-size:13px;line-height:1.6;color:#41514e;">

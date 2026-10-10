@@ -44,7 +44,7 @@ const reportPlan = async () => {
 /**
  * What a full report costs THIS customer for THIS vehicle (user, 2026-09-23).
  *
- * ₹19 the first time, ₹9 + GST to renew the same vehicle — because a renewal
+ * ₹19 the first time, ₹11 to renew the same vehicle (was ₹9 + GST until 2026-10-10) — because a renewal
  * buys 28 more days of the same watching but issues no report, no PDF and no
  * lookup for one. Roughly half the price for roughly seven-eighths of the
  * cost, which is a real discount rather than a trick.
@@ -62,11 +62,18 @@ async function reportPriceFor(userId, vehicleId, { creditPaise = null } = {}) {
   const plan = await reportPlan();
   if (!plan) return null;
 
+  /* ₹11 TO RENEW (user, 2026-10-10: "₹11 for a repeat vehicle, ₹19 for a new one"):
+     paid for this vehicle before, and its last paid report ended no more than
+     report_renewal_window_days ago (30; 0 = any time). Older than that is a new
+     look at the vehicle, at ₹19. */
+  const windowDays = await require('../util/settings').num('report_renewal_window_days', 30);
   const priorPaid = vehicleId ? await db.one(
-    `SELECT 1 FROM payments
-      WHERE user_id = $1 AND status = 'paid' AND amount_paise > 0
-        AND (raw->>'vehicle_id')::bigint = $2
-      LIMIT 1`, [userId, vehicleId]) : null;
+    `SELECT 1 FROM payments p
+       LEFT JOIN vehicle_reports r ON r.payment_id = p.id
+      WHERE p.user_id = $1 AND p.status = 'paid' AND p.amount_paise > 0
+        AND (p.raw->>'vehicle_id')::bigint = $2
+        AND ($3::int <= 0 OR coalesce(r.valid_until, p.paid_at + interval '28 days') >= now() - ($3::int * interval '1 day'))
+      LIMIT 1`, [userId, vehicleId, windowDays]) : null;
 
   const renewal = Boolean(priorPaid) && Number(plan.renewal_paise) > 0;
   const listed = renewal ? Number(plan.renewal_paise) : Number(plan.price_paise);

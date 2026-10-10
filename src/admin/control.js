@@ -196,6 +196,17 @@ async function customer(id) {
        FROM payments WHERE user_id = $1 ORDER BY id DESC LIMIT 50`, [uid]);
   const { rows: reports } = await db.query(
     `SELECT id, created_at, report_number, reg_no, valid_until FROM vehicle_reports WHERE user_id = $1 ORDER BY id DESC LIMIT 50`, [uid]);
+  /* Checked BEFORE signing in (user, 2026-10-10): the free checks this customer's
+     browsers made while not signed in, linked at sign-in — with the device each
+     came from, and whether the vehicle is in their My vehicles now. */
+  const { rows: beforeSignIn } = await db.query(
+    `SELECT a.id, a.created_at, a.linked_at, a.reg_no, a.outcome, a.shown, a.device_id, a.visitor_id, a.ip, a.place, a.device, a.user_agent,
+            a.source, a.campaign, a.consent->>'method' AS consent_method,
+            EXISTS (SELECT 1 FROM user_vehicles uv JOIN vehicles ve ON ve.id = uv.vehicle_id
+                     WHERE uv.user_id = a.user_id AND ve.reg_no = a.reg_no AND uv.hidden_at IS NULL) AS in_my_vehicles
+       FROM anon_checks a WHERE a.user_id = $1 ORDER BY a.created_at DESC LIMIT 100`, [uid]);
+  // Checks left today and this month, as the customer sees them.
+  const checksLeft = await require('../util/quota').left(uid).catch(() => null);
   // The newest visit's whole story, for the control room's live column.
   const latest = sessionsList[0] ? await session(sessionsList[0].session_id) : null;
   const regs = vehicles.map((v) => v.reg_no).slice(0, 20);
@@ -211,6 +222,8 @@ async function customer(id) {
     sign_in_devices: signIns.map((d) => ({ ...d, sign_ins: n(d.sign_ins) })),
     open_sign_ins: openSites.map((s) => ({ ...s, id: String(s.id) })),
     vehicles, payments: payments.map((p) => ({ ...p, id: String(p.id) })), reports: reports.map((r) => ({ ...r, id: String(r.id) })),
+    before_sign_in: beforeSignIn.map((a) => ({ ...a, id: String(a.id) })),
+    checks_left: checksLeft,
     latest: latest ? { session_id: latest.session.session_id, stages: latest.stages, timeline: allTl.slice(-200) } : null,
     api: api.slice(-60),
   };

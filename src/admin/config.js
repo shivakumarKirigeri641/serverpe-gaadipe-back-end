@@ -70,6 +70,10 @@ const GROUPS = [
     ['chat_anon_checks_per_day', 'Free checks before sign-in: per browser a day', '2 (migration 153): a visitor may check this many vehicles a day without signing in.'],
     ['chat_anon_checks_per_day_ip', 'Free checks before sign-in: per network a day', '2: the same limit per internet address, so clearing the browser does not reset it.'],
     ['free_checks_per_day', 'Checks after sign-in: per customer a day', '10.'],
+    // Migration 154 (2026-10-10).
+    ['free_checks_per_month', 'Checks after sign-in: per customer a month', '30 (0 = no monthly cap). Each report bought adds the bonus below.'],
+    ['checks_per_report_bonus', 'Checks added per report bought (that month)', '5: every paid report — ₹19 or ₹11 — adds this many checks to the month.'],
+    ['report_renewal_window_days', 'Renewal price (₹11): days after the last report ended', '30: a vehicle bought before, whose report ended within this many days, renews at the plan\'s renewal price. 0 = any time.'],
     ['free_monitor_enabled', 'Free monitoring: offered (true / false)', 'After sign-in, one vehicle monitored free — once per mobile number and per browser.'],
     ['free_monitor_days', 'Free monitoring: days', '14.'],
     ['free_monitor_notice_days', 'Free monitoring: tell them this many days before it ends', '2 — "continue for ₹19", by notification, email and SMS.'],
