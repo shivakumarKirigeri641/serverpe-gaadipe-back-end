@@ -928,6 +928,9 @@ router.post('/check', safe(async (req, res) => {
   });
 }));
 
+/* My subscriptions — monitoring, its dates and the next alert (user, 2026-10-10; site/subscriptions.js). */
+router.get('/subscriptions', safe(async (req, res) => res.json(await require('../site/subscriptions').forUser(req.user.id))));
+
 /* Checks left today and this month — for the chat (user, 2026-10-10). */
 router.get('/checks/left', safe(async (req, res) => res.json(await quota.left(req.user.id))));
 
