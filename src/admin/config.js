@@ -82,6 +82,8 @@ const GROUPS = [
     ['free_monitor_days', 'Free monitoring: days', '14.'],
     ['free_monitor_notice_days', 'Free monitoring: tell them this many days before it ends', '2 — "continue for ₹19", by notification, email and SMS.'],
     ['site_session_after_monitor_days', 'Sign-in: days it lasts after monitoring ends', '7 — so the renewal reminder still opens their account without a code. Otherwise a sign-in lasts site_session_days (30) from the last visit.'],
+    // 2026-10-10.
+    ['site_single_session', 'Sign-in: one device at a time (true / false)', 'true: signing in ends the account\'s other sign-ins (they are told "you signed in on another device") and their notification subscriptions. false: several devices stay signed in.'],
     ['sms_alerts_enabled', 'SMS alerts and notices: on (true / false)', 'The master switch for every SMS other than sign-in codes. Each kind also needs its approved DLT template id below.'],
     ['sms_tpl_expiry', 'SMS template id: document expiry', 'Fast2SMS message id of the approved DLT template — 3 values: document, vehicle, date. Empty = not sent.'],
     ['sms_tpl_challan', 'SMS template id: new challan', '2 values: vehicle, what was found. Empty = not sent.'],

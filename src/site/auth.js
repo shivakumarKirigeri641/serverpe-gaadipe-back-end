@@ -263,6 +263,24 @@ async function verifyCodeInner({ mobile, code, ip, userAgent, ctx, quizpeConsent
     `INSERT INTO site_sessions (user_id, token_hash, ip, user_agent, device_id, last_ip)
           VALUES ($1,$2,$3,$4,$5,$3) RETURNING id`,
     [user.id, sha256(token), ip || null, userAgent || null, ctx.device_id || null]);
+  /*
+   * ONE SIGN-IN AT A TIME (user, 2026-10-10: "when a user signs in, clear off other
+   * signed-in sessions and cookies automatically"). Every other open session of this
+   * account ends now — that browser's sealed token stops working on its next request
+   * and it is told why — and the notification subscriptions of the other devices go
+   * too, so another phone stops getting this account's alerts (this browser
+   * subscribes itself again right after signing in). site_single_session: false to allow several.
+   */
+  if (await settings.bool('site_single_session', true)) {
+    const ended = await db.query(
+      `UPDATE site_sessions SET ended_at = now(), ended_reason = 'signed_in_elsewhere', current_action = 'signed_out', current_at = now()
+        WHERE user_id = $1 AND id <> $2 AND ended_at IS NULL RETURNING id`, [user.id, session.id]);
+    const pushGone = await db.query(`DELETE FROM customer_push_subscriptions WHERE user_id = $1`, [user.id]).catch(() => ({ rowCount: 0 }));
+    if (ended.rowCount || pushGone.rowCount) {
+      await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'other_sessions_ended', $2)`,
+        [user.id, JSON.stringify({ sessions: ended.rowCount, push_devices: pushGone.rowCount, new_session: String(session.id), device_id: ctx.device_id || null })]);
+    }
+  }
   const signInId = await track('signed_in', { mobile: m, userId: user.id, sessionId: session.id, ctx,
     outcome: user.deactivated_at ? 'reactivated' : (user.created_at && Date.now() - new Date(user.created_at) < 60000 ? 'new_customer' : null) });
   if (signInId) await db.query(`UPDATE site_sessions SET sign_in_id = $2 WHERE id = $1`, [session.id, signInId]);
@@ -373,6 +391,13 @@ async function sessionFor(token, ctx = {}) {
   return { sessionId: row.session_id, id: String(row.session_id), userId: String(row.id), user: row };
 }
 
+/** Why a token no longer works — 'signed_in_elsewhere', 'signed_out', 'expired'… — or null. */
+async function endedReason(token) {
+  if (!token) return null;
+  const r = await db.one(`SELECT ended_reason FROM site_sessions WHERE token_hash = $1 AND ended_at IS NOT NULL`, [sha256(token)]).catch(() => null);
+  return r?.ended_reason || null;
+}
+
 async function signOut(token, ctx = {}) {
   const s = await sessionFor(token, ctx);
   if (!s) return;
@@ -434,4 +459,4 @@ async function deactivate(userId, { reason } = {}) {
   return { ok: true };
 }
 
-module.exports = { requestCode, verifyCode, sessionFor, signOut, signOutAll, deactivate, publicUser, localMobile, setPromoConsent, PROMO_CONSENT };
+module.exports = { requestCode, verifyCode, sessionFor, endedReason, signOut, signOutAll, deactivate, publicUser, localMobile, setPromoConsent, PROMO_CONSENT };

@@ -331,7 +331,10 @@ router.get('/r/:code', safe(async (req, res) => {
 router.use(safe(async (req, res, next) => {
   const session = await auth.sessionFor(tokenOf(req), { ip: req.ip, user_agent: req.get('user-agent'), device_id: req.get('x-gp-device') });
   if (!session) {
-    return res.status(401).json({ error: 'signed_out', message: 'Please sign in again.' });
+    // Signed in on another device (one sign-in at a time, 2026-10-10): said so, not just "sign in again".
+    const reason = await auth.endedReason(tokenOf(req)).catch(() => null);
+    return res.status(401).json({ error: 'signed_out', reason,
+      message: reason === 'signed_in_elsewhere' ? 'You signed in on another device, so you were signed out here.' : 'Please sign in again.' });
   }
   req.user = session.user;
   req.siteSession = session;
