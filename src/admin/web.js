@@ -24,6 +24,7 @@
 
 const db = require('../db');
 const notMe = require('./notMe');
+const settings = require('../util/settings');
 
 const RANGES = { today: 0, '7d': 6, '30d': 29 };
 const rangeOf = (r) => (Object.prototype.hasOwnProperty.call(RANGES, r) ? r : 'today');
@@ -254,6 +255,13 @@ async function customers({ range, q = '', channel = 'all', reach = 'all', active
                                               AND created_at >= ${FROM}) AS checks,
             (SELECT count(*) FROM user_vehicles WHERE user_id = b.id) AS vehicles,
             (SELECT count(*) FROM watches WHERE user_id = b.id AND is_active) AS watching,
+            -- This month's checks against the allowance (2026-10-10, util/quota.js): used, and reports bought this month.
+            (SELECT count(*) FROM event_log WHERE user_id = b.id AND kind = 'vehicle_check'
+               AND created_at >= date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata') AS month_used,
+            (SELECT count(*) FROM payments p JOIN plans pl ON pl.id = p.plan_id
+              WHERE p.user_id = b.id AND p.status = 'paid' AND p.amount_paise > 0 AND pl.kind = 'report'
+                AND coalesce(p.paid_at, p.created_at) >= date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata') AS month_reports,
+            b.is_internal,
             (SELECT count(*) FROM payments WHERE user_id = b.id AND status = 'paid') AS paid,
             (SELECT coalesce(sum(amount_paise), 0) FROM payments WHERE user_id = b.id AND status = 'paid') AS revenue_paise,
             b.push_devices,
@@ -286,12 +294,18 @@ async function customers({ range, q = '', channel = 'all', reach = 'all', active
             count(*) FILTER (WHERE NOT push AND NOT email_ok) AS unreachable,
             count(*) FILTER (WHERE on_wa AND NOT push AND NOT email_ok) AS whatsapp_unreachable
        FROM b`);
+  const monthBase = await settings.num('free_checks_per_month', 30);
+  const perReport = await settings.num('checks_per_report_bonus', 5);
   return {
     range: r, total: rows[0] ? n(rows[0].total_rows) : 0,
     summary: Object.fromEntries(Object.entries(s).map(([k, v]) => [k, n(v)])),
+    checks_rule: { month: monthBase, per_report: perReport },
     rows: rows.map(({ total_rows, ...x }) => ({ ...x, user_id: String(x.user_id), open_sessions: n(x.open_sessions),
       checks: n(x.checks), vehicles: n(x.vehicles), watching: n(x.watching), paid: n(x.paid),
-      revenue_paise: n(x.revenue_paise), push_devices: n(x.push_devices) })),
+      revenue_paise: n(x.revenue_paise), push_devices: n(x.push_devices),
+      // null limit = no monthly cap (internal accounts, or the cap switched off).
+      month_used: n(x.month_used), month_bonus: n(x.month_reports) * perReport,
+      month_limit: x.is_internal || monthBase <= 0 ? null : monthBase + n(x.month_reports) * perReport })),
   };
 }
 
