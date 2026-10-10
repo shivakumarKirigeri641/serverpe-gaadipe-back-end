@@ -27,14 +27,15 @@ const configured = () => Boolean(PROVIDER);
  * The key goes in the `authorization` HEADER: sent in the POST body Fast2SMS
  * answers 401, which reads exactly like a wrong key.
  */
-async function sendViaFast2sms({ mobile, variables }) {
+async function sendViaFast2sms({ mobile, variables, messageId: givenId = null, values: givenValues = null }) {
   const key = process.env.FAST2SMSAPIKEY || process.env.FAST2SMS_API_KEY || '';
   const sender = process.env.FAST2SMS_SENDER_ID || '';
-  const messageId = process.env.FAST2SMS_DLT_MESSAGE_ID || '';
+  // The OTP template unless another approved template (alerts, 2026-10-10) is named.
+  const messageId = givenId || process.env.FAST2SMS_DLT_MESSAGE_ID || '';
   if (!key || !sender || !messageId) {
     throw new Error('Fast2SMS is not configured (FAST2SMSAPIKEY, FAST2SMS_SENDER_ID, FAST2SMS_DLT_MESSAGE_ID)');
   }
-  const values = [variables.code, variables.brand || 'GaadiPe', `${variables.minutes || 10} minutes`]
+  const values = (givenValues || [variables.code, variables.brand || 'GaadiPe', `${variables.minutes || 10} minutes`])
     .map((v) => String(v).replace(/\|/g, ' ')).join('|');
   const res = await fetch('https://www.fast2sms.com/dev/bulkV2', {
     method: 'POST',
@@ -136,4 +137,50 @@ async function send(mobile, text, { variables = {}, templateId = null } = {}) {
   }
 }
 
-module.exports = { send, configured, PROVIDER };
+/*
+ * THE OTHER SMS — ALERTS, REMINDERS, NOTICES, OFFERS (user, 2026-10-10: "SMS and
+ * web based"). Each kind is its own DLT-approved template; its Fast2SMS message
+ * id is a setting (sms_tpl_<kind>), empty until the user has it approved, and
+ * then nothing is sent of that kind. sms_alerts_enabled is the master switch.
+ *
+ *   expiry       [document, vehicle, date]       "Insurance for KA01AB1234 expires on 12 Oct 2026"
+ *   challan      [vehicle, what]                 "New challan found on KA01AB1234: 1 pending, Rs 500"
+ *   monitor_end  [vehicle, date]                 "Monitoring for KA01AB1234 ends on 24 Oct 2026"
+ *   service      []                              the one-time "GaadiPe is now on gaadipe.in" notice
+ *   offers       [tip]                           only to people who opted in (promotional route)
+ *
+ * DLT allows about 30 characters per variable, so each is cut to fit. Never sent
+ * to a deactivated account or a blocked number. Never throws.
+ */
+const KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers'];
+async function sendTemplate(kind, mobile, values = []) {
+  if (!KINDS.includes(kind)) return { ok: false, error: 'unknown_kind' };
+  const settings = require('./settings');
+  if (!(await settings.bool('sms_alerts_enabled', false))) return { ok: false, skipped: true, error: 'sms_alerts_off' };
+  const messageId = String(await settings.get(`sms_tpl_${kind}`, '') || '').trim();
+  if (!messageId) return { ok: false, skipped: true, error: `no approved template for ${kind}` };
+  const m = String(mobile || '').replace(/\D/g, '').slice(-10);
+  if (m.length !== 10) return { ok: false, error: 'bad_mobile' };
+  if (await require('../admin/blocks').isBlocked('mobile', m).catch(() => false)) return { ok: false, error: 'blocked' };
+  // Promotional SMS only 9 am – 9 pm IST (TRAI).
+  if (kind === 'offers') {
+    const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours();
+    if (h < 9 || h >= 21) return { ok: false, skipped: true, error: 'outside 9 am - 9 pm' };
+  }
+  const cut = values.map((v) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 30));
+  if (!configured()) {
+    console.warn('[sms] no SMS_PROVIDER set — would have sent %s to ••••%s', kind, m.slice(-4));
+    return { ok: true, simulated: true };
+  }
+  try {
+    if (PROVIDER !== 'fast2sms') throw new Error(`template SMS is set up for Fast2SMS only (provider ${PROVIDER})`);
+    const out = await sendViaFast2sms({ mobile: m, messageId, values: cut });
+    console.log('[sms] %s sent to ••••%s', kind, m.slice(-4));
+    return { ok: true, id: out.id };
+  } catch (e) {
+    console.error('[sms] %s to ••••%s failed: %s', kind, m.slice(-4), e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+module.exports = { send, sendTemplate, configured, PROVIDER, KINDS };

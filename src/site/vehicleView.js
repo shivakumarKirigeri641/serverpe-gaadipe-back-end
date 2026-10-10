@@ -189,6 +189,8 @@ function publicView(data) {
       expired: docs.filter((d) => d.days < 0).map((d) => d.label),
       due_soon: docs.filter((d) => d.days >= 0 && d.days <= 60).map((d) => d.label),
       challans_pending: c.pending_count ?? 0,
+      // How much in all (2026-10-10) — the list itself, offence by offence, is in the ₹19 report.
+      challans_amount_paise: c.pending_amount_paise ?? null,
       documents_total: docs.length,
       has_record: docs.length > 0,
     },

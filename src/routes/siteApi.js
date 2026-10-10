@@ -141,9 +141,13 @@ router.post('/feedback', safe(async (req, res) => {
   const user = mobile ? await db.one(`SELECT id FROM users WHERE mobile = $1`, [mobile]) : null;
 
   recent.push(now); feedbackHits.set(ip, recent);
+  /* Where it was asked (2026-10-10): first_check, report, free_end, menu — and the
+     vehicle it was about, so the admin reads it in context. */
+  const reg = String(b.reg_no || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+  const text = body || `${'★'.repeat(rating)} (no message)`;
   await db.query(
     `INSERT INTO feedback (user_id, mobile, body, rating, name, channel) VALUES ($1, $2, $3, $4, $5, $6)`,
-    [user?.id || null, mobile, body || `${'★'.repeat(rating)} (no message)`, rating, name, src ? `web:${src}` : 'web']);
+    [user?.id || null, mobile, reg ? `[${reg}] ${text}` : text, rating, name, src ? `web:${src}` : 'web']);
   // 1–2 stars, or angry words, reach the admin at once (util/unhappy.js).
   const why = Number(rating) <= 2 ? 'low rating' : require('../util/unhappy').kind(body);
   if (why && mobile) require('../util/unhappy').flag({ mobile, said: body || `${rating}★`, why, source: 'the website feedback page', rating }).catch(() => {});
@@ -534,8 +538,14 @@ router.post('/me/email/resend', safe(async (req, res) => {
  */
 router.post('/me/deactivate', safe(async (req, res) => {
   // A reason is asked for (user, 2026-10-07) — what made someone leave is worth knowing.
-  const reason = String(req.body?.reason || '').trim().slice(0, 500);
-  if (reason.length < 3) return res.status(400).json({ error: 'reason_required', message: 'Please tell us why you are leaving.' });
+  const picked = String(req.body?.reason || '').trim().slice(0, 500);
+  if (picked.length < 3) return res.status(400).json({ error: 'reason_required', message: 'Please tell us why you are leaving.' });
+  // "Anything we could have done better?" — optional (2026-10-10); kept with the reason and in Feedback.
+  const comment = String(req.body?.comment || '').trim().slice(0, 1000);
+  const reason = comment ? `${picked} — ${comment}`.slice(0, 1200) : picked;
+  await db.query(
+    `INSERT INTO feedback (user_id, mobile, body, rating, name, channel) VALUES ($1, $2, $3, NULL, NULL, 'web:deactivate')`,
+    [req.user.id, req.user.mobile, `Deactivated: ${reason}`]).catch((e) => console.error('[account] deactivation feedback:', e.message));
   await auth.deactivate(req.user.id, { reason });
   // No more notifications to any of their devices (2026-10-07).
   await require('../site/push').forget(req.user.id).catch(() => {});
@@ -546,6 +556,33 @@ router.post('/me/deactivate', safe(async (req, res) => {
       + 'have been signed out. Your tax invoices are kept, as the law requires. '
       + 'If you sign in again with this number, you start a fresh account — your old vehicles and reports are not brought back.',
   });
+}));
+
+/* Before deactivating (2026-10-10): paid monitoring days that would end — no refund, said plainly. */
+router.get('/me/deactivate-check', safe(async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT v.reg_no, w.expires_at,
+            GREATEST(0, ceil(extract(epoch FROM (w.expires_at - now())) / 86400))::int AS days_left,
+            w.subscription_id IS NOT NULL AS paid
+       FROM watches w JOIN vehicles v ON v.id = w.vehicle_id
+      WHERE w.user_id = $1 AND w.is_active AND w.expires_at > now()
+      ORDER BY w.expires_at DESC`, [req.user.id]);
+  res.json({ monitoring: rows });
+}));
+
+/* Sign out of all devices (2026-10-10): every session ends, notifications stop on every phone. */
+router.delete('/session/all', safe(async (req, res) => {
+  const out = await auth.signOutAll(req.user.id, device.contextOf(req));
+  res.json({ ok: true, ended: out.ended });
+}));
+
+/* Free monitoring for one vehicle (site/freeMonitor.js, 2026-10-10). */
+router.get('/monitor/free', safe(async (req, res) => {
+  res.json(await require('../site/freeMonitor').status(req.user, device.contextOf(req)));
+}));
+router.post('/monitor/free', safe(async (req, res) => {
+  const out = await require('../site/freeMonitor').start(req.user, req.body?.reg_no, device.contextOf(req));
+  res.status(out.ok ? 200 : 409).json(out);
 }));
 
 /*

@@ -359,6 +359,17 @@ async function runOnce({ limit = 20 } = {}) {
     }).catch((e) => { console.warn('[expiry] push failed for %s: %s', row.reg_no, e.message); return 0; });
     if (pushed) warned += 1;
 
+    /* SMS (user, 2026-10-10: "SMS and web") on the approved 'expiry' template —
+       one per vehicle: which documents, the vehicle, and the earliest date. */
+    {
+      const first = [...claimed].sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+      const sms = await require('../util/sms').sendTemplate('expiry', row.mobile, [
+        claimed.map((d) => d.doc.label).join(', '), row.reg_no,
+        new Date(first.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }),
+      ]);
+      if (sms.ok) warned += 1;
+    }
+
     // WhatsApp, once GaadiPe has a number: the approved template, one message,
     // every document on one line because a parameter may not contain a newline.
     if (config.whatsapp.enabled) {

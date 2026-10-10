@@ -347,7 +347,19 @@ async function sessionFor(token, ctx = {}) {
       WHERE s.token_hash = $1 AND s.ended_at IS NULL`, [sha256(token)]);
 
   if (!row || row.deactivated_at) return null;
-  if (Date.now() - new Date(row.session_last_used_at).getTime() > days * 24 * 60 * 60 * 1000) {
+  /*
+   * SIGNED IN AS LONG AS MONITORING RUNS (user, 2026-10-10: "one-time sign in…
+   * expires when the monitoring expires"). Idle for site_session_days (30) ends
+   * a session — unless a vehicle of theirs is monitored, or was until
+   * site_session_after_monitor_days (7) ago: then a notification tap still opens
+   * their chat without a code, renewal reminder included.
+   */
+  const idle = Date.now() - new Date(row.session_last_used_at).getTime() > days * 24 * 60 * 60 * 1000;
+  const monitored = idle && await db.one(
+    `SELECT 1 AS x FROM watches WHERE user_id = $1
+        AND ((is_active AND expires_at IS NULL) OR expires_at > now() - make_interval(days => $2::int)) LIMIT 1`,
+    [row.id, await settings.num('site_session_after_monitor_days', 7)]).catch(() => null);
+  if (idle && !monitored) {
     await db.query(`UPDATE site_sessions SET ended_at = now(), ended_reason = 'expired' WHERE id = $1`, [row.session_id]);
     await track('session_expired', { mobile: row.mobile, userId: row.id, sessionId: row.session_id, ctx });
     return null;
@@ -389,8 +401,22 @@ async function signOut(token, ctx = {}) {
  * sign-in with that number creates a new, empty account, and nothing that matches
  * the last ten digits finds the old and the new account together.
  */
+/* SIGN OUT OF ALL DEVICES (user, 2026-10-10) — every session of this customer ends; their phones' notifications stop. */
+async function signOutAll(userId, ctx = {}) {
+  const { rowCount } = await db.query(
+    `UPDATE site_sessions SET ended_at = now(), ended_reason = 'signed_out_all', current_action = 'signed_out', current_at = now()
+      WHERE user_id = $1 AND ended_at IS NULL`, [userId]);
+  await require('./push').forget(userId).catch(() => {});
+  activity.log('👋', `Signed out of all devices (${rowCount})`, { who: `customer #${userId}` });
+  await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'signed_out_all', $2)`,
+    [userId, JSON.stringify({ sessions: rowCount, ip: ctx.ip || null })]).catch(() => {});
+  return { ended: rowCount };
+}
+
 async function deactivate(userId, { reason } = {}) {
   activity.log('🗑', 'Account deactivated by the customer', { who: `customer #${userId}`, detail: reason ? `reason: ${String(reason).slice(0, 120)}` : null });
+  // No more offers on any channel, SMS included (2026-10-10) — withdrawn with its record, before archiving.
+  await setPromoConsent(userId, false, { channel: 'web', text: 'Withdrawn: account deactivated' }).catch(() => {});
   await db.tx(async (c) => {
     await c.query(
       `UPDATE users SET deactivated_at = now(), deactivated_reason = $2,
@@ -408,4 +434,4 @@ async function deactivate(userId, { reason } = {}) {
   return { ok: true };
 }
 
-module.exports = { requestCode, verifyCode, sessionFor, signOut, deactivate, publicUser, localMobile, setPromoConsent, PROMO_CONSENT };
+module.exports = { requestCode, verifyCode, sessionFor, signOut, signOutAll, deactivate, publicUser, localMobile, setPromoConsent, PROMO_CONSENT };

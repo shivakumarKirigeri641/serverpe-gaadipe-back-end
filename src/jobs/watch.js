@@ -302,6 +302,16 @@ async function eveningDigest() {
       body: summary.slice(0, 300), url: regs.length === 1 ? `/chat?reg=${encodeURIComponent(regs[0])}` : '/chat', tag: `watch-${today}`,
     }).catch((e) => { errors.push(`push: ${e.message}`); return 0; });
     if (pushed) r = { ok: true, channel: r.ok ? `${r.channel}+push` : 'push' };
+    /* SMS FOR NEW CHALLANS (user, 2026-10-10: "SMS and web"). Document expiry
+       goes by SMS from jobs/expiryWatch.js, so only challans here — one SMS per
+       vehicle with new challans, on the approved 'challan' template. */
+    for (const [reg, list] of byVehicle) {
+      const ch = list.filter((i) => /challan/i.test(`${i.key || ''} ${i.label || ''}`));
+      if (!ch.length) continue;
+      const sms = await require('../util/sms').sendTemplate('challan', person.mobile, [reg, ch.map((i) => i.text).join(', ')]);
+      if (sms.ok) r = { ok: true, channel: r.ok ? `${r.channel}+sms` : 'sms' };
+      else if (!sms.skipped) errors.push(`sms: ${sms.error}`);
+    }
     if (require('../config').config.whatsapp.enabled) {
       const wa = await notify(w, ok, summary, byVehicle);
       if (wa?.ok) r = { ok: true, channel: r.ok ? 'email+whatsapp' : 'whatsapp' };

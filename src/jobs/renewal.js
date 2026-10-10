@@ -102,7 +102,7 @@ function mailFor(person, { regNo, endsOn, paise, days }) {
       `<div style="font-size:13px;line-height:1.6;color:#41514e;">
         Nothing renews automatically and nothing has been charged. If you would rather stop, do nothing —
         monitoring simply ends on ${T.esc(istDay(endsOn))}.</div>`],
-    cta: { label: `Renew for ${money(paise)}`, url: `${site}/app/vehicle/${encodeURIComponent(regNo)}` },
+    cta: { label: `Renew for ${money(paise)}`, url: `${site}/chat?reg=${encodeURIComponent(regNo)}` },
     footer: 'You are receiving this because you bought GaadiPe monitoring for this vehicle.',
     footerHtml: person.email_token
       ? `<a href="${T.esc(`${C.API()}/email/unsubscribe/${person.email_token}`)}" style="color:#0f766e;">Unsubscribe</a>`
@@ -180,6 +180,8 @@ function start(everySeconds = 6 * 3600) {
     if (running) return;
     running = true;
     try { await runOnce(); } catch (e) { console.error('[renewal] pass failed:', e.message); }
+    // The free 14-day monitoring ending: "continue for Rs 19" (site/freeMonitor.js, 2026-10-10).
+    try { await require('../site/freeMonitor').noticeDue(); } catch (e) { console.error('[free-monitor] notice pass failed:', e.message); }
     finally { running = false; }
   };
   // Heartbeat: System health and the alert checker see when this last ran.
