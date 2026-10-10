@@ -686,15 +686,23 @@ router.get('/vehicles', safe(async (req, res) => {
                      WHERE w.user_id = uv.user_id AND w.vehicle_id = v.id AND w.is_active) AS watched,
             (SELECT max(w.expires_at) FROM watches w
               WHERE w.user_id = uv.user_id AND w.vehicle_id = v.id AND w.is_active) AS watched_until,
+            -- Paid monitoring (a ₹19 / ₹11 subscription) vs the free 14 days (no subscription) — the list's badge (2026-10-10).
+            (SELECT max(w.expires_at) FROM watches w
+              WHERE w.user_id = uv.user_id AND w.vehicle_id = v.id AND w.is_active AND w.subscription_id IS NOT NULL) AS paid_until,
             (SELECT r.id FROM vehicle_reports r
               WHERE r.user_id = uv.user_id AND r.reg_no = v.reg_no
                 AND r.valid_until > now() ORDER BY r.id DESC LIMIT 1) AS report_id,
             (SELECT r.valid_until FROM vehicle_reports r
               WHERE r.user_id = uv.user_id AND r.reg_no = v.reg_no
-                AND r.valid_until > now() ORDER BY r.id DESC LIMIT 1) AS report_until
+                AND r.valid_until > now() ORDER BY r.id DESC LIMIT 1) AS report_until,
+            -- Bought before and since ended, still inside the ₹11 renewal window (pay/billing.reportPriceFor):
+            -- the list says "Basic" with "renew ₹11" (2026-10-10). Outside it, plain Basic — it is ₹19 again.
+            EXISTS (SELECT 1 FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
+                     WHERE r.user_id = uv.user_id AND r.reg_no = v.reg_no AND p.status = 'paid' AND p.amount_paise > 0
+                       AND ($2::int <= 0 OR coalesce(r.valid_until, p.paid_at + interval '28 days') >= now() - ($2::int * interval '1 day'))) AS paid_before
        FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
       WHERE uv.user_id = $1 AND uv.hidden_at IS NULL
-      ORDER BY uv.last_checked_at DESC NULLS LAST`, [req.user.id]);
+      ORDER BY uv.last_checked_at DESC NULLS LAST`, [req.user.id, await settings.num('report_renewal_window_days', 30)]);
 
   /*
    * THE LIST OBEYS THE PAYWALL TOO. It used to send every expiry date for every
