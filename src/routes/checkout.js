@@ -33,7 +33,7 @@ const fs = require('fs');
 
 const router = express.Router();
 
-const WA_NUMBER = process.env.WHATSAPP_BUSINESS_PHONENUMBER || '916363271302';
+const WA_NUMBER = process.env.WHATSAPP_BUSINESS_PHONENUMBER || '919739622631';
 const SITE_URL = (process.env.PUBLIC_SITE_URL || 'https://gaadipe.in').replace(/\/+$/, '');
 const { config } = require('../config');
 
