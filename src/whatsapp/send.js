@@ -393,8 +393,11 @@ async function document(mobile, filePath, { filename, caption } = {}) {
  * @param {string[]} params  body variables, in order. Newlines are stripped:
  *   Meta rejects a parameter containing one (error #132018), and the failure
  *   comes back as a whole-message rejection rather than anything obvious.
+ * @param {string[]} [buttons]  a payload per quick-reply button, in the template's
+ *   order — it comes back on the tap (message.button.payload), so the reply knows
+ *   which vehicle and document the button was under (2026-10-12).
  */
-async function template(mobile, name, params = [], { language = 'en' } = {}) {
+async function template(mobile, name, params = [], { language = 'en', buttons = [] } = {}) {
   const clean = params.map(p => String(p ?? '').replace(/\s*\n\s*/g, ' · ').trim());
 
   // STOP (user, 2026-09-25). The Terms say that after STOP we stop messaging
@@ -454,9 +457,11 @@ async function template(mobile, name, params = [], { language = 'en' } = {}) {
     template: {
       name,
       language: { code: language },
-      components: values.length
-        ? [{ type: 'body', parameters: values.map(text => ({ type: 'text', text })) }]
-        : [],
+      components: [
+        ...(values.length ? [{ type: 'body', parameters: values.map(text => ({ type: 'text', text })) }] : []),
+        ...buttons.map((payload, i) => ({ type: 'button', sub_type: 'quick_reply', index: String(i),
+                                          parameters: [{ type: 'payload', payload: String(payload).slice(0, 128) }] })),
+      ],
     },
   }, { mobile, type: 'template', body: `${name}(${values.join(' | ')})`, templateName: name });
 }

@@ -851,6 +851,14 @@ router.post('/customers/:id/pause', needs('block'), safe(async (req, res) => {
   res.json({ ok: true, is_paused: row.is_paused });
 }));
 
+/* The customer paused a vehicle's alerts from WhatsApp; the admin turns them back on (2026-10-12). */
+router.post('/customers/:id/vehicles/:vehicleId/resume-alerts', needs('block'), safe(async (req, res) => {
+  const resumed = await customers.resumeVehicleAlerts(req.params.id, req.params.vehicleId);
+  await auth.audit({ adminId: req.admin.id, action: 'resume_vehicle_alerts', ip: ipOf(req),
+                     detail: { user_id: req.params.id, vehicle_id: req.params.vehicleId, resumed } });
+  res.json({ ok: true, resumed });
+}));
+
 /* ------------------------------------------------------------------ live */
 
 router.get('/live/conversations', safe(async (req, res) => res.json({

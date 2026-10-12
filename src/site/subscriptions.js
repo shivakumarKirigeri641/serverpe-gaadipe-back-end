@@ -28,7 +28,10 @@ async function forUser(userId) {
     `SELECT DISTINCT ON (w.vehicle_id) w.id, w.vehicle_id, w.subscription_id, w.is_active, w.created_at, w.expires_at,
             least(w.challan_next_check_at, w.rc_next_check_at) AS next_check_at, w.last_checked_at,
             v.reg_no, v.maker, v.model, v.insurance_upto, v.pucc_upto, v.tax_upto, v.fitness_upto, v.permit_upto,
-            (SELECT max(r.valid_until) FROM vehicle_reports r WHERE r.user_id = w.user_id AND r.reg_no = v.reg_no) AS report_until
+            (SELECT max(r.valid_until) FROM vehicle_reports r WHERE r.user_id = w.user_id AND r.reg_no = v.reg_no) AS report_until,
+            -- "Pause this alert" on WhatsApp (2026-10-12, whatsapp/monitorAlert.js).
+            (SELECT max(sz.until) FROM alert_snoozes sz WHERE sz.user_id = w.user_id AND sz.vehicle_id = w.vehicle_id
+                AND sz.until > now()) AS paused_until
        FROM watches w JOIN vehicles v ON v.id = w.vehicle_id
       WHERE w.user_id = $1 AND (w.is_active OR w.expires_at > now() - interval '30 days')
         AND NOT EXISTS (SELECT 1 FROM user_vehicles uv WHERE uv.user_id = w.user_id AND uv.vehicle_id = w.vehicle_id AND uv.hidden_at IS NOT NULL)
@@ -79,10 +82,20 @@ async function forUser(userId) {
       next_check_at: active ? r.next_check_at : null,
       last_checked_at: r.last_checked_at,
       renew_paise: priced?.paise ?? null, renewal: Boolean(priced?.renewal),
+      paused_until: active && r.paused_until ? r.paused_until : null,
     });
   }
   out.sort((a, b) => (b.active - a.active) || (new Date(a.ends_at) - new Date(b.ends_at)));
   return { rows: out, checks: await require('../util/quota').left(userId).catch(() => null) };
 }
 
-module.exports = { forUser };
+/** "Resume alerts" on the website: every pause on this vehicle ends now (2026-10-12). */
+async function resume(userId, regNo) {
+  const { rowCount } = await db.query(
+    `DELETE FROM alert_snoozes sz USING vehicles v
+      WHERE sz.vehicle_id = v.id AND sz.user_id = $1 AND v.reg_no = $2 AND sz.until > now()`,
+    [userId, String(regNo || '').toUpperCase().replace(/[^A-Z0-9]/g, '')]);
+  return { ok: true, resumed: rowCount };
+}
+
+module.exports = { forUser, resume };

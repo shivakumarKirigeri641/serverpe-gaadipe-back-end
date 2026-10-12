@@ -265,7 +265,9 @@ async function eveningDigest() {
     // Blocked vehicles are left out, and their findings set aside for good.
     const ok = [];
     for (const i of items) {
-      if (await blocks.isBlocked('vehicle', i.reg_no)) {
+      // A paused vehicle ("Pause this alert", 2026-10-12): its findings are set aside too, not saved up.
+      if (await blocks.isBlocked('vehicle', i.reg_no)
+          || await require('../whatsapp/monitorAlert').snoozed(person.user_id, i.vehicle_id, 'all')) {
         await db.query(`UPDATE pending_alerts SET sent_at = now() WHERE id = $1`, [i.id]);
       } else ok.push(i);
     }
@@ -407,19 +409,21 @@ async function notify(w, items, summary, byVehicle = null) {
   }
 
   /*
-   * ONE APPROVED TEMPLATE (user, 2026-09-29). The per-language and v2 alert
-   * templates are not on the account (#132001) and are gone from here; alerts
-   * go out as gp_monitoring_alert_en_v1 — 1 name, 2 vehicle, 3 what was found,
-   * 4 what to do.
+   * ONE APPROVED TEMPLATE (user, 2026-10-12): gp_monitoringalert_en_v1 —
+   * 1 name, 2 vehicle, 3 document, 4 expiry date, 5 status — with the
+   * "Thanks for remembering / Check vehicle / Pause this alert" buttons (whatsapp/monitorAlert.js).
+   * A document's date comes from its finding's key ("Insurance:2026-11-15:expiring").
    */
-  const checkedOn = fmtDate(new Date());
-  const tpl = await settings.get('template_daily_status', 'gp_monitoring_alert_en_v1');
-  const r = await send.template(w.mobile, tpl,
-    [name, w.reg_no, `${summary} (checked ${checkedOn})`.slice(0, 900),
-     `Please take a look at the ${what.toLowerCase() || 'change'} — the details are in your GaadiPe report. We will keep watching and tell you when anything changes.`],
-    { language: await settings.get('wa_template_language', 'en') });
-  if (r.ok) return { ok: true, template: tpl };
-  console.warn('[watch] alert template %s failed: %s', tpl, r.error);
+  const dates = [...new Set(items.map((i) => /^[^:]+:(\d{4}-\d{2}-\d{2}):/.exec(i.key || '')?.[1]).filter(Boolean))]
+    .map((d) => fmtDate(new Date(`${d}T00:00:00+05:30`)));
+  const vehicleIds = [...new Set(items.map((i) => i.vehicle_id).filter(Boolean))];
+  const r = await require('../whatsapp/monitorAlert').sendAlert(w.mobile, {
+    name, vehicle: w.reg_no, vehicleId: vehicleIds.length === 1 ? vehicleIds[0] : null,
+    document: what || 'Vehicle record', expiry: dates.join(', '),
+    status: `${summary} (checked ${fmtDate(new Date())})`, settingKey: 'template_daily_status',
+  });
+  if (r.ok) return { ok: true, template: r.template };
+  console.warn('[watch] alert template %s failed: %s', r.template, r.error);
   return { ok: false, error: r.error };
 }
 
@@ -579,6 +583,9 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
         AND (SELECT so.kind FROM event_log so WHERE so.user_id = w.user_id
                AND so.kind IN ('watch_status_off', 'watch_status_on')
              ORDER BY so.created_at DESC, so.id DESC LIMIT 1) IS DISTINCT FROM 'watch_status_off'
+        -- "Pause this alert" on the WhatsApp alert (2026-10-12, whatsapp/monitorAlert.js).
+        AND NOT EXISTS (SELECT 1 FROM alert_snoozes sz WHERE sz.user_id = w.user_id AND sz.vehicle_id = w.vehicle_id
+                          AND sz.document = 'all' AND sz.until > now())
       ORDER BY w.user_id, v.reg_no`, [today, mobile ? String(mobile).replace(/\D/g, '').slice(-10) : null]);
   const rows = [];
   for (const w of all) if (everyone || mobile || await dueToday(w, cadence)) rows.push(w);
@@ -653,17 +660,16 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
     } else {
       const summary = (lines.map((l) => (lines.length > 1 ? `${l.reg}: ${l.text}` : l.text)).join(' · ')
         + ` (last checked ${fmtDate(checked)})`).slice(0, 900);
-      // The approved gp_monitoring_alert_en_v1: 1 name, 2 vehicle, 3 status, 4 action.
+      // gp_monitoringalert_en_v1 (2026-10-12): 1 name, 2 vehicle, 3 document, 4 expiry date, 5 status.
       const expired = [...new Set(lines.flatMap((l) => l.expired))];
       const challans = lines.some((l) => l.challans);
-      const todo = [expired.length ? `renew your ${expired.join(', ')}` : null, challans ? 'clear the pending challans' : null].filter(Boolean);
-      const action = todo.length
-        ? `Please ${todo.join(' and ')}. We will keep watching and tell you when anything changes.`
-        : 'Nothing to do. We will keep watching and tell you if anything changes.';
-      out = await send.template(first.mobile,
-        await settings.get('template_daily_status', 'gp_monitoring_alert_en_v1'),
-        [name, lines.length === 1 ? first.reg_no : `${first.reg_no} +${lines.length - 1} more`, summary, action],
-        { language: await settings.get('wa_template_language', 'en') });
+      out = await require('../whatsapp/monitorAlert').sendAlert(first.mobile, {
+        name, vehicle: lines.length === 1 ? first.reg_no : `${first.reg_no} +${lines.length - 1} more`,
+        vehicleId: list.length === 1 ? first.vehicle_id : null,
+        document: [expired.length ? expired.join(', ') : null, challans ? 'Challans' : null].filter(Boolean).join(', ') || 'All documents',
+        expiry: expired.length ? 'Expired' : 'Not applicable',
+        status: summary, settingKey: 'template_daily_status',
+      });
     }
     if (out?.ok) sent += 1;
     else {

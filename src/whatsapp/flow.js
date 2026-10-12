@@ -1489,6 +1489,16 @@ async function handle(session, message, mobile) {
     await stopped(mobile, 'Done ✅ — GaadiPe will not message you any more.');
     return;
   }
+  // The monitoring alert's buttons — "Thanks for remembering", "Check vehicle",
+  // "Pause this alert" — and "Resume alerts" (2026-10-12, monitorAlert.js).
+  const tapped = await require('./monitorAlert').handleTap(mobile, intent)
+    .catch((e) => { console.error('[wa] alert button for %s: %s', mobile, e.message); return null; });
+  if (tapped) {
+    await funnel(mobile, tapped.step, tapped.open && tapped.open !== 'list' ? { reg_no: tapped.open } : {});
+    if (tapped.open === 'list') await myVehicles(mobile, message);
+    else if (tapped.open) await openVehicle(mobile, tapped.open, message, 'alert button');
+    return;
+  }
   // The alert template's "Only alert changes" / "Keep me updated" — tapped or typed.
   if (await alertChoice(mobile, intent.text, message)) return;
   /*

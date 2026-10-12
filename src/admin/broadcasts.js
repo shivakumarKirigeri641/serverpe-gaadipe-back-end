@@ -55,6 +55,15 @@ let cache = { at: 0, rows: null };
  * anything else cannot be sent from GaadiPe at all.
  */
 const OURS = (name) => /^gp_/i.test(String(name || ''));
+/*
+ * SENT BY THE MONITORING JOBS ONLY (user, 2026-10-12). gp_monitoringalert_en_v1 is
+ * one vehicle's alert, with buttons that carry that vehicle back
+ * (whatsapp/monitorAlert.js). Listed — so Meta's decision can be recorded here —
+ * but never broadcast: a broadcast would fill vehicle, document and date with
+ * the same words for everyone.
+ */
+const AUTOMATED = (name) => /^gp_monitoringalert_/i.test(String(name || ''));
+const AUTOMATED_BUTTONS = ['Thanks for remembering', 'Check vehicle', 'Pause this alert'];
 
 async function stored() {
   const { rows } = await db.query(
@@ -70,7 +79,8 @@ async function stored() {
     footer: t.footer_text || '',
     header_format: t.header_text ? 'TEXT' : null,
     header_text: t.header_text || null,
-    buttons: [],
+    buttons: AUTOMATED(t.template_name) ? AUTOMATED_BUTTONS : [],
+    automated: AUTOMATED(t.template_name),
     // What each {{n}} means, recorded when the template was written down.
     fills: Array.isArray(t.variables) ? t.variables : [],
     variables: [...new Set((t.body_text || '').match(/\{\{\s*\d+\s*\}\}/g) || [])]
@@ -129,6 +139,7 @@ async function templates({ refresh = false } = {}) {
       body, footer, header_format: header?.format || null,
       buttons: buttons.map((b) => b.text).filter(Boolean),
       variables: vars,
+      automated: AUTOMATED(t.name),
       // A media header needs a handle per send, which this panel does not do.
       sendable: t.status === 'APPROVED' && (!header || header.format === 'TEXT'),
     };
@@ -381,6 +392,10 @@ async function preview({ template_name, language = 'en', variables = [], mobiles
   const list = await templates();
   const tpl = list.ok && list.templates.find((t) => t.name === template_name && t.language === language);
   if (!tpl) return { ok: false, error: 'template', message: 'Choose an approved template.' };
+  if (AUTOMATED(tpl.name)) {
+    return { ok: false, error: 'template',
+             message: `${tpl.name} is sent automatically by monitoring, one vehicle at a time — it cannot be broadcast.` };
+  }
   if (!tpl.sendable) {
     return { ok: false, error: 'template',
              message: `${tpl.name} is ${tpl.status}${tpl.header_format && tpl.header_format !== 'TEXT'

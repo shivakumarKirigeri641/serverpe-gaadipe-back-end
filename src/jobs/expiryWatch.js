@@ -156,6 +156,8 @@ async function owedAll(row, list) {
           AND valid_until = $4::date AND days_before = $5`,
       [row.vehicle_id, row.user_id, doc.key, istKey(date), step]);
     if (already) continue;
+    // "Pause this alert" on the WhatsApp alert (2026-10-12): held back, on every channel, while paused.
+    if (await require('../whatsapp/monitorAlert').snoozed(row.user_id, row.vehicle_id, doc.key)) continue;
 
     all.push({ doc, date, days, step });
   }
@@ -378,11 +380,17 @@ async function runOnce({ limit = 20 } = {}) {
       // Inside the 24-hour window (they wrote or tapped a button): a free message,
       // not a template (user, 2026-10-09).
       const open = await send.windowOpen(row.mobile).catch(() => false) && !(await send.optedOut(row.mobile).catch(() => true));
+      // gp_monitoringalert_en_v1 (2026-10-12): 3 the documents, 4 their dates, 5 how each stands;
+      // its buttons carry the vehicle and documents back (monitorAlert.js).
       const out = open
         ? await send.text(row.mobile, `🔔 *${row.reg_no}*\n\n${documentLine(claimed)}\n\n${adviceLine(claimed)}`).catch(() => ({ ok: false }))
-        : await send.template(row.mobile, await settings.get('wa_template_monitoring', 'gp_monitoring_alert_en_v1'),
-        [name, row.reg_no, documentLine(claimed), adviceLine(claimed)],
-        { language: await settings.get('wa_template_language', 'en') }).catch(() => ({ ok: false }));
+        : await require('../whatsapp/monitorAlert').sendAlert(row.mobile, {
+          name, vehicle: row.reg_no, vehicleId: row.vehicle_id, kind: 'exp', docs: claimed.map((d) => d.doc.key),
+          document: claimed.map((d) => d.doc.label).join(', '),
+          expiry: claimed.map((d) => istDay(d.date)).join(', '),
+          status: claimed.map((d) => `${claimed.length > 1 ? `${d.doc.label} ` : ''}${phrase(d).replace(/\s*\(.*\)$/, '')}`)
+            .join(' · ').replace(/^./, (c) => c.toUpperCase()),
+        }).catch(() => ({ ok: false }));
       if (out.ok) warned += 1;
     }
   }

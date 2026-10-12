@@ -11,8 +11,8 @@
  *   2. the answer is stored as the vehicle's snapshot, so monitoring compares
  *      against it and does not announce the same challans a second time
  *   3. the customer is told: a free message inside the 24-hour window, else
- *      the approved gp_monitoring_alert_en_v1 (1 name, 2 vehicle, 3 status,
- *      4 action)
+ *      gp_monitoringalert_en_v1 (1 name, 2 vehicle, 3 document, 4 expiry date,
+ *      5 status; whatsapp/monitorAlert.js)
  *
  * Only for reports still inside their download window. Nothing at night (IST
  * 21:00–08:00): the check waits for the morning, so the news never lands at
@@ -92,12 +92,12 @@ async function tellOnWhatsApp(r, c) {
       + `${line.split(' · ').map((t) => `• ${t}`).join('\n')}\n\n`
       + `Your report ${r.report_number} now includes them${link ? ` — download it again:\n${link}` : '.'}`);
   }
+  // gp_monitoringalert_en_v1 (2026-10-12): 3 document, 4 expiry date, 5 status (whatsapp/monitorAlert.js).
   const name = String(r.name || 'there').split(' ')[0];
-  const action = (c.pending_count > 0 ? 'Please clear the pending challans. ' : 'Nothing to do. ')
-    + `Your report ${r.report_number} has been updated with the challan details${link ? `: ${link}` : '.'}`;
-  return send.template(r.mobile, await settings.get('template_daily_status', 'gp_monitoring_alert_en_v1'),
-    [name, r.reg_no, `Challan check completed: ${line}`, action],
-    { language: await settings.get('wa_template_language', 'en') });
+  return require('../whatsapp/monitorAlert').sendAlert(r.mobile, {
+    name, vehicle: r.reg_no, vehicleId: r.vehicle_id, document: 'Challans', expiry: 'Not applicable',
+    status: `${line}. Report ${r.report_number} updated${link ? `: ${link}` : ''}`, settingKey: 'template_daily_status',
+  });
 }
 
 async function tick() {

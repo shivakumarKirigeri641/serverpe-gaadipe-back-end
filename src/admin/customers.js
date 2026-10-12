@@ -363,7 +363,12 @@ async function detail(userId) {
                          WHERE b.kind = 'vehicle' AND b.value = v.reg_no
                            AND b.released_at IS NULL) AS blocked,
                 (SELECT max(ends_on) FROM subscriptions s
-                  WHERE s.user_id = uv.user_id AND s.vehicle_id = v.id AND s.is_active) AS watched_until
+                  WHERE s.user_id = uv.user_id AND s.vehicle_id = v.id AND s.is_active) AS watched_until,
+                -- "Pause this alert" on the WhatsApp alert (2026-10-12, whatsapp/monitorAlert.js).
+                (SELECT max(sz.until) FROM alert_snoozes sz
+                  WHERE sz.user_id = uv.user_id AND sz.vehicle_id = v.id AND sz.until > now()) AS alerts_paused_until,
+                (SELECT string_agg(DISTINCT sz.document, ', ') FROM alert_snoozes sz
+                  WHERE sz.user_id = uv.user_id AND sz.vehicle_id = v.id AND sz.until > now()) AS alerts_paused_what
            FROM user_vehicles uv
            JOIN vehicles v ON v.id = uv.vehicle_id
           WHERE uv.user_id = $1
@@ -453,6 +458,13 @@ async function detail(userId) {
   };
 }
 
+/** The customer's own "Pause this alert" on one vehicle, ended by the admin (2026-10-12). */
+async function resumeVehicleAlerts(userId, vehicleId) {
+  const { rowCount } = await db.query(
+    `DELETE FROM alert_snoozes WHERE user_id = $1 AND vehicle_id = $2 AND until > now()`, [userId, vehicleId]);
+  return rowCount;
+}
+
 /** Pause or resume a customer's alerts without blocking them outright. */
 async function setPaused(userId, paused) {
   const { rows } = await db.query(
@@ -500,4 +512,4 @@ function summarise(rows) {
   };
 }
 
-module.exports = { list, detail, setPaused, SORTS, SESSION_COLS, CONSENT_OF, sessionOut, summarise };
+module.exports = { list, detail, setPaused, resumeVehicleAlerts, SORTS, SESSION_COLS, CONSENT_OF, sessionOut, summarise };
