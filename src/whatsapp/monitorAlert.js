@@ -23,6 +23,22 @@ const db = require('../db');
 const settings = require('../util/settings');
 const send = require('./send');
 
+/*
+ * Every reply here ends with reply buttons (user, 2026-10-12: "incorporate 1 or 2
+ * or 3 replies to engage user"); plain text only if they cannot go. The ids are
+ * flow.js's BTN values (check_another, menu, my_reports).
+ */
+async function say(mobile, body, list) {
+  const out = await send.buttons(mobile, body, list).catch(() => ({ ok: false }));
+  return out.ok ? out : send.text(mobile, body);
+}
+const B = {
+  check: { id: 'check_another', title: 'Check vehicle' },
+  menu: { id: 'menu', title: 'Menu' },
+  reports: { id: 'my_reports', title: 'My vehicle reports' },
+  resume: { id: 'mon_resume', title: 'Resume alerts' },
+};
+
 const NAME = 'gp_monitoringalert_en_v1';
 const KEYS = ['insurance', 'pucc', 'tax', 'fitness', 'permit'];   // jobs/expiryWatch.js DOCUMENTS
 const LABEL = { insurance: 'Insurance', pucc: 'PUC', tax: 'Road tax', fitness: 'Fitness', permit: 'Permit' };
@@ -103,9 +119,9 @@ async function handleTap(mobile, intent) {
 
   if (action === 'r') {
     const { rowCount } = await db.query(`DELETE FROM alert_snoozes WHERE user_id = $1 AND until > now()`, [user.id]);
-    await send.text(mobile, rowCount
+    await say(mobile, rowCount
       ? '✅ Alerts are back on — we will tell you before anything expires or a new challan appears.'
-      : 'Your alerts are already on ✅');
+      : 'Your alerts are already on ✅', [B.check, B.reports, B.menu]);
     return { step: 'alert_resumed' };
   }
 
@@ -121,23 +137,26 @@ async function handleTap(mobile, intent) {
   }
 
   if (action === 't') {
-    await send.text(mobile, `You're welcome 🙏 — we will keep watching${reg ? ` *${reg}*` : ' your vehicles'} `
-      + 'and tell you before anything expires or a new challan appears.');
+    // "See it now" opens this same vehicle, as the alert's own Check vehicle does.
+    await say(mobile, `You're welcome 🙏 — we will keep watching${reg ? ` *${reg}*` : ' your vehicles'} `
+      + 'and tell you before anything expires or a new challan appears.',
+    [reg ? { id: `mon|c|${tap.vehicleId}|chg|all`, title: `See ${reg}`.slice(0, 20) } : B.check, B.reports, B.menu]);
     return { step: 'alert_thanks' };
   }
 
   if (action === 'c') return { step: 'alert_check', open: reg || 'list' };
 
   if (action === 'pn') {
-    await send.text(mobile, `👍 Alerts stay on — we will keep watching${reg ? ` *${reg}*` : ''} for you.`);
+    await say(mobile, `👍 Alerts stay on — we will keep watching${reg ? ` *${reg}*` : ''} for you.`,
+      [reg ? { id: `mon|c|${tap.vehicleId}|chg|all`, title: `See ${reg}`.slice(0, 20) } : B.check, B.reports, B.menu]);
     return { step: 'alert_pause_cancelled' };
   }
 
   // "Pause this alert" (or typed "pause alerts")
   if (!reg) {
     if (intent.kind !== 'button') return null;   // typed, with no alert behind it: not ours
-    await send.text(mobile, 'Which alert should be paused? Reply with the vehicle number and *pause*, '
-      + 'or open gaadipe.in to manage your alerts.');
+    await say(mobile, 'Which alert should be paused? Reply with the vehicle number and *pause*, '
+      + 'or open gaadipe.in to manage your alerts.', [B.reports, B.menu]);
     return { step: 'alert_pause_unknown' };
   }
   const days = await settings.num('alert_pause_days', 30);
@@ -168,8 +187,8 @@ async function handleTap(mobile, intent) {
       `INSERT INTO alert_snoozes (user_id, vehicle_id, document, reason, until)
        VALUES ($1, $2, $3, 'paused', now() + ($4 || ' days')::interval)`, [user.id, tap.vehicleId, d, String(days)]);
   }
-  await send.text(mobile, `⏸️ Paused — no ${what} for *${reg}* for the next ${days} days.\n\n`
-    + '_Changed your mind? Reply *Resume alerts*._');
+  await say(mobile, `⏸️ Paused — no ${what} for *${reg}* for the next ${days} days.\n\n`
+    + '_Changed your mind? Tap *Resume alerts*._', [B.resume, B.check, B.menu]);
   return { step: 'alert_paused' };
 }
 

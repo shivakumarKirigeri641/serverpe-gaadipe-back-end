@@ -130,11 +130,30 @@ const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';
    feedback — was only ever reached from two rare error messages. Support is
    its first row. */
 async function doors(mobile, body) {
-  return send.buttons(mobile, body, [
-    { id: BTN.CHECK_ANOTHER, title: 'Check vehicle' },
-    { id: BTN.MY_REPORTS,    title: 'My vehicle reports' },
-    { id: BTN.MENU,          title: 'More' },
-  ]);
+  return reply(mobile, body, ['check', 'reports', 'more']);
+}
+
+/*
+ * EVERY REPLY ENDS WITH A WAY ON (user, 2026-10-12: "whatever the replies you have,
+ * incorporate 1 or 2 or 3 replies to engage user"). A message that is not waiting
+ * for something typed — a number, a photo, feedback — carries reply buttons. They
+ * need the 24-hour window and a body of at most 1024 characters; otherwise the
+ * same words go as plain text, so nothing is ever lost.
+ */
+const NEXT = {
+  check:   { id: BTN.CHECK_ANOTHER, title: 'Check vehicle' },
+  other:   { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' },
+  reports: { id: BTN.MY_REPORTS,    title: 'My vehicle reports' },
+  menu:    { id: BTN.MENU,          title: 'Menu' },
+  more:    { id: BTN.MENU,          title: 'More' },
+  support: { id: BTN.SUPPORT,       title: 'Support' },
+};
+async function reply(mobile, body, keys = ['check', 'menu']) {
+  const list = keys.map((k) => (typeof k === 'string' ? NEXT[k] : k)).filter(Boolean).slice(0, 3);
+  const out = String(body).length <= 1024
+    ? await send.buttons(mobile, body, list).catch(() => ({ ok: false }))
+    : { ok: false };
+  return out.ok ? out : send.text(mobile, body);
 }
 
 /* GaadiPe for fleets (user, 2026-09-29): by email only. The owner writes to
@@ -712,8 +731,8 @@ async function sendInvoices(mobile) {
       ORDER BY i.id DESC LIMIT 3`, [user.id]);
 
   if (!rows.length) {
-    await send.text(mobile,
-      'You do not have any invoices yet — they are issued when a payment is made.');
+    await reply(mobile,
+      'You do not have any invoices yet — they are issued when a payment is made.', ['check', 'reports', 'menu']);
     return;
   }
 
@@ -778,9 +797,9 @@ async function sendReports(mobile) {
       ORDER BY r.id DESC LIMIT 4`, [user.id]);
 
   if (!rows.length) {
-    await send.text(mobile,
+    await reply(mobile,
       'You do not have any reports yet.\n\n'
-      + 'Send me a vehicle number — after the basic check you can get the full report.');
+      + 'Send me a vehicle number — after the basic check you can get the full report.', ['check', 'menu']);
     return;
   }
 
@@ -966,11 +985,11 @@ async function receiveRcPhoto(mobile, message) {
   if (r.ok) {
     await setState(mobile, 'owner_menu', 'RC photo received');
     await funnel(mobile, 'owner_photo_sent', { reg_no: r.regNo });
-    await send.text(mobile,
+    await reply(mobile,
       '📸 *Got it — thank you!* 🙏\n\n'
       + `Your RC for *${r.regNo}* is now *being checked*. You will get a message here as soon as it is done — usually within a few hours.\n\n`
       + '🔒 It is kept locked, seen only by GaadiPe, and *deleted as soon as it is checked*.\n\n'
-      + 'Meanwhile, you can send any vehicle number to check it.');
+      + 'Meanwhile, you can send any vehicle number to check it.', ['check', 'reports', 'menu']);
     return;
   }
   await send.text(mobile, {
@@ -1044,8 +1063,9 @@ async function deliverReport(mobile, regNo, message) {
   if (await require('../admin/blocks').isBlocked('vehicle', regNo) || await owners.hiddenFrom(mobile, regNo)) {
     await setState(mobile, 'owner_start', 'vehicle private');
     await funnel(mobile, 'vehicle_private', { reg_no: regNo });
-    await send.text(mobile, `🔒 The owner of *${regNo}* keeps its details private, so GaadiPe cannot show them.\n\n`
-      + 'If this vehicle is yours, write to support@gaadipe.in. You can send another vehicle number any time.');
+    await reply(mobile, `🔒 The owner of *${regNo}* keeps its details private, so GaadiPe cannot show them.\n\n`
+      + 'If this vehicle is yours, write to support@gaadipe.in. You can send another vehicle number any time.',
+    ['other', 'support', 'menu']);
     return;
   }
 
@@ -1091,9 +1111,9 @@ async function deliverReport(mobile, regNo, message) {
     await funnel(mobile, 'lookup_failed', { reg_no: regNo, reason: notFound ? 'not_found' : 'service_error' });
     await setState(mobile, 'owner_start', notFound ? 'vehicle not found' : 'lookup failed');
     if (notFound) {
-      await send.text(mobile, `I could not find any Government record for *${regNo}*.\n\n`
+      await reply(mobile, `I could not find any Government record for *${regNo}*.\n\n`
         + 'Please check the number and send it again. Very new vehicles can take '
-        + 'a few weeks to appear.');
+        + 'a few weeks to appear.', ['other', 'support', 'menu']);
       return;
     }
     /*
@@ -1132,10 +1152,11 @@ async function deliverReport(mobile, regNo, message) {
       await send.buttons(mobile, `${downText}\n\n`
         + `⚡ *Need it right now?* Get the *full report* for *${regNo}* immediately for *₹${Math.round(plan.price_paise / 100)}* — `
         + 'we fetch it from our backup source, with insurance, PUC, tax, fitness and challans.',
-      [{ id: BTN.BUY_REPORT, title: `Full report ₹${Math.round(plan.price_paise / 100)}` }]);
+      [{ id: BTN.BUY_REPORT, title: `Full report ₹${Math.round(plan.price_paise / 100)}` },
+       NEXT.other, NEXT.menu]);
       return;
     }
-    await send.text(mobile, downText);
+    await reply(mobile, downText, ['other', 'reports', 'menu']);
     return;
   }
 
@@ -1406,9 +1427,11 @@ async function alertChoice(mobile, text, message) {
     [u.id, off ? 'watch_status_off' : 'watch_status_on', JSON.stringify({ mobile, text, at: new Date().toISOString() })]);
   await funnel(mobile, off ? 'watch_status_off' : 'watch_status_on');
   if (off) {
-    await send.text(mobile, '👍 Done. No more routine updates — I will message you *only when something changes* '
+    // "Keep me updated" is read by its words (alertChoice), so the button needs no id of its own.
+    await reply(mobile, '👍 Done. No more routine updates — I will message you *only when something changes* '
       + 'on your vehicle: a new challan, or a document about to expire.\n\n'
-      + '_Changed your mind? Reply *Keep me updated*._');
+      + '_Changed your mind? Tap *Keep me updated*._',
+    [{ id: 'keep_updated', title: 'Keep me updated' }, 'check', 'menu']);
   } else {
     await send.text(mobile, '✅ You are set — I will keep you updated on your vehicle here.');
     await myVehicles(mobile, message);
@@ -1729,9 +1752,10 @@ async function handle(session, message, mobile) {
         await db.query(
           `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
           [mobile, JSON.stringify({ offers_answer: yes ? 'yes' : 'no', offers_answered_at: new Date().toISOString() })]);
-        await send.text(mobile, yes
+        await reply(mobile, yes
           ? '✅ Thank you — you will get occasional tips & offers here, at most one a week. Reply *STOP* any time to stop them.'
-          : '👍 No problem — no offers. You will still get your reports and the alerts you asked for.');
+          : '👍 No problem — no offers. You will still get your reports and the alerts you asked for.',
+        ['check', 'reports', 'menu']);
         return;
       }
 
@@ -1763,9 +1787,9 @@ async function handle(session, message, mobile) {
         const offered = await offerToWatch(mobile, user.id);
         if (!offered) {
           await setState(mobile, 'owner_start', 'nothing left to watch');
-          await send.text(mobile,
+          await reply(mobile,
             'You are already watching every vehicle you have checked.\n\n'
-            + 'Send me another vehicle number to check it first.');
+            + 'Send me another vehicle number to check it first.', ['other', 'reports', 'menu']);
         }
         return;
       }
@@ -1798,9 +1822,9 @@ async function handle(session, message, mobile) {
         const shown = await showEnrolled(mobile, user.id);
         if (!shown) {
           await setState(mobile, 'owner_start', 'nothing enrolled');
-          await send.text(mobile,
+          await reply(mobile,
             'You are not watching any vehicle yet.\n\n'
-            + 'Send me a vehicle number and I will check it for you.');
+            + 'Send me a vehicle number and I will check it for you.', ['check', 'menu']);
         }
         return;
       }
@@ -1880,8 +1904,8 @@ async function handle(session, message, mobile) {
           return;
         }
         if (!razorpay.configured() || !(await require('../util/flags').on('payments'))) {
-          await send.text(mobile,
-            'Payment is not available right now. Please try again shortly.');
+          await reply(mobile,
+            'Payment is not available right now. Please try again shortly.', ['support', 'menu']);
           console.error('[pay] asked to charge but Razorpay is not configured');
           return;
         }
@@ -1914,8 +1938,8 @@ async function handle(session, message, mobile) {
           });
         } catch (e) {
           console.error('[pay] order creation failed:', e.message);
-          await send.text(mobile,
-            'Sorry, I could not start the payment just now. Please try again in a minute.');
+          await reply(mobile,
+            'Sorry, I could not start the payment just now. Please try again in a minute.', ['support', 'menu']);
           return;
         }
 
@@ -1928,18 +1952,18 @@ async function handle(session, message, mobile) {
         const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
         if (!base) {
           console.error('[pay] PUBLIC_BASE_URL is not set — cannot host a checkout page');
-          await send.text(mobile, 'Payment is not available right now. Please try again shortly.');
+          await reply(mobile, 'Payment is not available right now. Please try again shortly.', ['support', 'menu']);
           return;
         }
 
         await setState(mobile, 'awaiting_payment', `order ${order.id}`);
-        await send.text(mobile,
+        await reply(mobile,
           `*${vehicle.reg_no}* — ₹${Math.round(paise / 100)} for ${plan.duration_days} days\n\n`
           + `Review and pay here:\n${base}/pay/${token}\n\n`
           + 'You will come straight back here, and I will confirm the moment the '
           + 'payment goes through.\n\n'
           + '_One vehicle per payment for now. To add another, just send me its '
-          + 'number — I will send a separate link._');
+          + 'number — I will send a separate link._', ['support', 'other']);
         return;
       }
 
@@ -2039,9 +2063,10 @@ async function handle(session, message, mobile) {
           const g = await gifts.use(user.id, vehicle.reg_no);
           if (g.ok) {
             await funnel(mobile, 'gift_used', { reg_no: vehicle.reg_no, left: g.left });
-            await send.text(mobile, g.left
+            await reply(mobile, g.left
               ? `🎁 That was a free report from GaadiPe — you have *${g.left}* more to use. Send any vehicle number to use the next one.`
-              : '🎁 That was your last free report from GaadiPe. Thank you for being with us! 🙏');
+              : '🎁 That was your last free report from GaadiPe. Thank you for being with us! 🙏',
+            ['other', { id: BTN.FEEDBACK, title: 'Feedback' }, 'menu']);
             return;
           }
           console.error('[wa] gift report for %s failed: %s — offering the paid one', vehicle.reg_no, g.error);
@@ -2053,7 +2078,7 @@ async function handle(session, message, mobile) {
         if (!plan || !razorpay.configured() || !baseUrl() || !(await require('../util/flags').on('payments'))) {
           console.error('[pay] cannot sell a report: plan=%s razorpay=%s PUBLIC_BASE_URL=%s',
             Boolean(plan), razorpay.configured(), Boolean(baseUrl()));
-          await send.text(mobile, 'Payment is not available right now. Please try again shortly.');
+          await reply(mobile, 'Payment is not available right now. Please try again shortly.', ['support', 'menu']);
           return;
         }
 
@@ -2094,8 +2119,8 @@ async function handle(session, message, mobile) {
             if (!order?.id) throw new Error('no order id returned');
           } catch (e) {
             console.error('[pay] order creation failed:', e.message);
-            await send.text(mobile,
-              'Sorry, I could not start the payment just now. Please try again in a minute.');
+            await reply(mobile,
+              'Sorry, I could not start the payment just now. Please try again in a minute.', ['support', 'menu']);
             return;
           }
 
@@ -2109,10 +2134,11 @@ async function handle(session, message, mobile) {
 
         await setState(mobile, 'awaiting_payment', `order ${row.order_id}`);
         await funnel(mobile, 'link_sent', { reg_no: vehicle.reg_no, payment_row: row.id });
-        await send.text(mobile,
+        // The link stays the message; Support and Other vehicle sit under it (2026-10-12).
+        await reply(mobile,
           `*${vehicle.reg_no}* — full report · ₹${Math.round(row.amount_paise / 100)}\n\n`
           + `Pay securely here (UPI, card, netbanking):\n${baseUrl()}/pay/${row.checkout_token}\n\n`
-          + 'The report arrives in this chat the moment the payment goes through.');
+          + 'The report arrives in this chat the moment the payment goes through.', ['support', 'other']);
         return;
       }
 
