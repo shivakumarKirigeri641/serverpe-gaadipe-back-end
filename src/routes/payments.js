@@ -273,7 +273,8 @@ async function notifyReportPaid(result, user, veh, { ends, amount }) {
     await send.buttons(user.mobile,
       'The Government records service is slow right now, so your report is not ready yet. '
       + 'Tap below in a few minutes and I will send it. Your payment is safe.',
-      [{ id: 'download_report', title: 'Send my report' }]);
+      [{ id: 'download_report', title: 'Send my report' },
+       { id: 'menu',            title: 'Menu' }]);
   }
 
   await send.buttons(user.mobile,

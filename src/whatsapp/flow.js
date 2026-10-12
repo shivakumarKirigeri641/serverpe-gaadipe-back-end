@@ -791,7 +791,7 @@ async function sendReports(mobile) {
 
   for (const r of live) {
     if (r.valid_until) {
-      await sendValidReport(mobile, r);
+      await sendValidReport(mobile, r, { next: false });   // the buttons once, after the last
       continue;
     }
     const sent = r.pdf_path
@@ -805,6 +805,8 @@ async function sendReports(mobile) {
     }
   }
 
+  if (live.length) await afterReport(mobile, live.length === 1 ? live[0].reg_no : null);
+
   if (!live.length) {
     const reg = rows[0].reg_no;
     await db.query(
@@ -814,7 +816,9 @@ async function sendReports(mobile) {
     await send.buttons(mobile,
       `Your report for *${reg}* can no longer be downloaded — its download period has ended.\n\n`
       + 'Send the vehicle number again to check today\'s records.',
-      [{ id: BTN.CHECK_ANOTHER, title: 'Check a vehicle' }]);
+      [{ id: BTN.CHECK_ANOTHER, title: 'Check a vehicle' },
+       { id: BTN.FEEDBACK,      title: 'Feedback' },
+       { id: BTN.MENU,          title: 'Menu' }]);
   }
 }
 
@@ -1285,8 +1289,22 @@ async function start(mobile) {
   await setState(mobile, 'owner_consent', 'terms shown');
 }
 
-/** Send a still-valid report: the PDF, and a link that works until it lapses. */
-async function sendValidReport(mobile, r) {
+/*
+ * NEVER A DEAD END (user, 2026-10-12: "if report present you reply with report but
+ * always make sure to keep at least 2 or 3 reply buttons to keep engaging"). After
+ * a report is handed over, three ways on. Reply buttons need the 24-hour window,
+ * which a tap or a message has just opened; shut, they are simply not sent.
+ */
+async function afterReport(mobile, regNo) {
+  await send.buttons(mobile,
+    `${regNo ? `✅ That is your full report for *${regNo}*.` : '✅ Those are your reports.'} What would you like to do next?`,
+    [{ id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' },
+     { id: BTN.FEEDBACK,      title: 'Feedback' },
+     { id: BTN.MENU,          title: 'Menu' }]).catch(() => {});
+}
+
+/** Send a still-valid report: the PDF, and a link that works until it lapses — then the next steps. */
+async function sendValidReport(mobile, r, { next = true } = {}) {
   const ends = fmt(new Date(r.valid_until));
   const link = baseUrl() && r.access_token ? `${baseUrl()}/report/${r.access_token}` : null;
   const caption = `📋 ${r.report_number} — ${r.reg_no}\nDownload again until ${ends}`
@@ -1303,6 +1321,7 @@ async function sendValidReport(mobile, r) {
   if (!sent.ok) {
     await send.text(mobile, `${caption}\n\n_The file could not be attached${link ? ' — use the link above' : ''}._`);
   }
+  if (next) await afterReport(mobile, r.reg_no);
 }
 
 async function welcome(mobile) {
