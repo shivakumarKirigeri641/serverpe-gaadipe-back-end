@@ -118,9 +118,19 @@ async function summary() {
               FROM admin_alerts WHERE status IN ('open', 'acknowledged')`),
   ]);
   const pick = ['website', 'database', 'records_api', 'payment_gateway', 'jobs'];
+  /* WHATSAPP CHATS TODAY (user, 2026-10-13: "WhatsApp chats says '—', why?" — the figure
+     went with WhatsApp on 7 Oct and is back with it). People who wrote to GaadiPe on
+     WhatsApp since IST midnight — customers who agreed, never STOP, not the owner. */
+  const wa = await db.one(
+    `SELECT count(DISTINCT right(m.mobile, 10))::int AS n FROM whatsapp_messages m
+      WHERE m.direction = 'in' AND m.created_at >= $1
+        AND ${require('./consented').agreedSql('m.mobile', { whatsappOnly: true })}
+        AND NOT EXISTS (SELECT 1 FROM users ui WHERE right(ui.mobile, 10) = right(m.mobile, 10) AND ui.is_internal)`,
+    [r.from]).catch(() => null);
   return {
     at: new Date(),
     today: {
+      conversations: wa ? wa.n : null,
       visitors: today.visitors, searches: today.searches, sign_ins: today.sign_ins, reports: today.reports,
       paid: today.paid, revenue: today.revenue, gst: today.gst, gateway_cost: today.gateway_cost,
       api_cost: today.api_cost, messaging_cost: today.messaging_cost, refunds: today.refunds, net: today.net,
