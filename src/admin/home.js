@@ -27,6 +27,14 @@ const { config } = require('../config');
 const IST = "AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata'";
 // The owner's own sign-ups, checks and test payments stay out of these numbers (2026-10-10).
 const NM = require('./notMe');
+/*
+ * A CUSTOMER IS SOMEONE WHO AGREED (user, 2026-10-13: "customer count must be those
+ * who agreed in WhatsApp earlier, not those who just said hi, or web customers").
+ * The same rule as the Customers list (consented.agreedSql): agreed in this
+ * panel's channel, never STOP — so the main admin counts WhatsApp agreements and
+ * the web admin website ones.
+ */
+const AGREED = (col) => require('./consented').agreedSql(col);
 
 /**
  * Everything waiting on a person.
@@ -129,9 +137,9 @@ async function today() {
               date_trunc('day', now() ${IST}) - interval '1 day' AS yesterday
      )
      SELECT
-       (SELECT count(*)::int FROM users u, b WHERE NOT u.is_internal AND u.created_at ${IST} >= b.today) AS signed_up,
+       (SELECT count(*)::int FROM users u, b WHERE NOT u.is_internal AND ${AGREED('u.mobile')} AND u.created_at ${IST} >= b.today) AS signed_up,
        (SELECT count(*)::int FROM users u, b
-         WHERE NOT u.is_internal AND u.created_at ${IST} >= b.yesterday AND u.created_at ${IST} < b.today) AS signed_up_before,
+         WHERE NOT u.is_internal AND ${AGREED('u.mobile')} AND u.created_at ${IST} >= b.yesterday AND u.created_at ${IST} < b.today) AS signed_up_before,
        (SELECT count(*)::int FROM event_log e, b
          WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND e.created_at ${IST} >= b.today) AS checks,
        (SELECT count(*)::int FROM event_log e, b
@@ -149,8 +157,8 @@ async function today() {
            AND p.paid_at ${IST} >= b.yesterday AND p.paid_at ${IST} < b.today)            AS earned_before_paise,
        (SELECT count(*)::int FROM subscriptions s
          WHERE s.is_active AND s.ends_on >= CURRENT_DATE AND ${NM.user('s.user_id')})     AS monitoring,
-       -- Not counting anyone who replied STOP (user, 2026-09-30), or the owner (2026-10-10).
-       (SELECT count(*)::int FROM users u WHERE NOT u.is_internal AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)) AS customers,
+       -- Only those who agreed, never STOP (2026-09-30, 2026-10-13), and not the owner (2026-10-10).
+       (SELECT count(*)::int FROM users u WHERE NOT u.is_internal AND ${AGREED('u.mobile')}) AS customers,
        (SELECT count(*)::int FROM whatsapp_sessions WHERE wa_opt_out_at IS NOT NULL)       AS customers_stopped,
        (SELECT count(*)::int FROM vehicles)                                               AS vehicles`);
 }
@@ -197,7 +205,7 @@ async function recent() {
      )
      SELECT to_char(days.d, 'DD Mon')                                            AS label,
             (SELECT count(*)::int FROM users u
-              WHERE NOT u.is_internal AND u.created_at ${IST} >= days.d AND u.created_at ${IST} < days.d + interval '1 day') AS signed_up,
+              WHERE NOT u.is_internal AND ${AGREED('u.mobile')} AND u.created_at ${IST} >= days.d AND u.created_at ${IST} < days.d + interval '1 day') AS signed_up,
             (SELECT count(*)::int FROM event_log e
               WHERE e.kind = 'vehicle_check' AND ${NM.event('e')}
                 AND e.created_at ${IST} >= days.d AND e.created_at ${IST} < days.d + interval '1 day') AS checks,

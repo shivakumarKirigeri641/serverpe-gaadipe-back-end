@@ -73,12 +73,12 @@ async function dashboard() {
               date_trunc('day', now() ${IST}) - interval '1 day' AS yesterday
      )
      SELECT
-       -- Not counting anyone who replied STOP (user, 2026-09-30).
-       (SELECT count(*) FROM users u WHERE NOT u.is_internal AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)) AS users_total,
+       -- Only those who agreed in this panel's channel, never STOP (2026-09-30, 2026-10-13; consented.agreedSql).
+       (SELECT count(*) FROM users u WHERE NOT u.is_internal AND ${require('./consented').agreedSql('u.mobile')}) AS users_total,
        (SELECT count(*) FROM users u, bounds b
-         WHERE NOT u.is_internal AND u.created_at ${IST} >= b.today)       AS users_today,
+         WHERE NOT u.is_internal AND ${require('./consented').agreedSql('u.mobile')} AND u.created_at ${IST} >= b.today)       AS users_today,
        (SELECT count(*) FROM users u, bounds b
-         WHERE NOT u.is_internal AND u.created_at ${IST} >= b.yesterday
+         WHERE NOT u.is_internal AND ${require('./consented').agreedSql('u.mobile')} AND u.created_at ${IST} >= b.yesterday
            AND u.created_at ${IST} < b.today)                              AS users_yesterday,
        (SELECT count(*) ${WA_BILLED})                                     AS wa_total,
        (SELECT count(*) ${WA_BILLED} AND m.created_at ${IST} >= (SELECT today FROM bounds)) AS wa_today,
@@ -170,7 +170,8 @@ async function series({ grain = 'day', days = 30 } = {}) {
      )
      SELECT b.bucket,
        (SELECT count(*) FROM users u
-         WHERE date_trunc('${g}', u.created_at ${IST}) = b.bucket)          AS new_users,
+         WHERE NOT u.is_internal AND ${require('./consented').agreedSql('u.mobile')}
+           AND date_trunc('${g}', u.created_at ${IST}) = b.bucket)          AS new_users,
        (SELECT count(*) FROM event_log e
          WHERE e.kind = 'vehicle_check'
            AND date_trunc('${g}', e.created_at ${IST}) = b.bucket)          AS checks,
