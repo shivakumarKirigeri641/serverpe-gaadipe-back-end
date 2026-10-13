@@ -86,6 +86,18 @@ const BTN = {
   OWNER_SHOW: 'owner_show',
   OFFERS_YES: 'offers_yes',
   OFFERS_NO: 'offers_no',
+  // The menu, as on the website's chat (user, 2026-10-12).
+  MY_VEHICLES: 'my_vehicles',
+  MY_MONITORING: 'my_monitoring',
+  EMAIL: 'menu_email',
+  EMAIL_CHANGE: 'email_change',
+  EMAIL_RESEND: 'email_resend',
+  WHAT_GET: 'what_get',
+  TERMS: 'menu_terms',
+  STOP_MENU: 'menu_stop',
+  STOP_CONFIRM: 'stop_confirm',
+  DELETE_DATA: 'delete_data',
+  STOP_CANCEL: 'stop_cancel',
 };
 
 /*
@@ -292,20 +304,34 @@ async function openVehicle(mobile, reg, message, why) {
   await deliverReport(mobile, reg, message);
 }
 
+/*
+ * THE MENU (user, 2026-10-12: the website chat's options on WhatsApp too — email,
+ * what do I get, help, terms, stop/deactivate — with Check a vehicle first, My
+ * vehicles and My monitoring). WhatsApp allows ten rows, so Feedback and Fleet
+ * moved: Feedback is a button after every report, Fleet one under "What do I
+ * get?". With owner verification on, its row takes the GST invoice's place
+ * (invoices still come by typing "invoice", and with every payment).
+ */
 async function mainMenu(mobile, body = 'What would you like to do?') {
+  const user = await db.one(`SELECT email, email_verified_at FROM users WHERE mobile = $1`, [mobile]).catch(() => null);
+  const ownerRow = await owners.enabled()
+    ? { id: BTN.OWNER_VERIFY, title: 'I own a vehicle', description: 'Verify it with your RC — badge, and hide it from others' } : null;
   const out = await send.list(mobile, {
     body,
     button: 'Choose',
     sectionTitle: 'GaadiPe',
     rows: [
-      { id: BTN.SUPPORT,         title: 'Support',          description: 'Ask us anything — we reply with a ticket number' },
-      { id: BTN.FLEET,           title: 'Fleet (5+ vehicles)', description: 'Daily Excel report of all your vehicles, by email' },
       { id: BTN.CHECK_ANOTHER,   title: 'Check a vehicle',  description: 'Any Indian number — basics are free' },
+      { id: BTN.MY_VEHICLES,     title: 'My vehicles',      description: 'Pick one — its report, or a fresh check' },
+      { id: BTN.MY_MONITORING,   title: 'My monitoring',    description: 'Watched vehicles, end dates, next alert, paused alerts' },
       { id: BTN.DOWNLOAD_REPORT, title: 'My reports',       description: 'Send my report PDF again' },
-      { id: BTN.INVOICE,         title: 'My GST invoice',   description: 'The tax invoice for a payment' },
-      { id: BTN.FEEDBACK,        title: 'Feedback',         description: 'Tell us what is wrong or missing' },
-      ...(await owners.enabled()
-        ? [{ id: BTN.OWNER_VERIFY, title: 'I own a vehicle', description: 'Verify it with your RC — badge, and hide it from others' }] : []),
+      ownerRow || { id: BTN.INVOICE, title: 'My GST invoice', description: 'The tax invoice for a payment' },
+      { id: BTN.EMAIL,           title: 'Email for alerts',
+        description: user?.email_verified_at ? `✓ ${user.email}` : 'Add and confirm your email for reports & alerts' },
+      { id: BTN.WHAT_GET,        title: 'What do I get?',   description: 'Free check, full report, monitoring, fleets' },
+      { id: BTN.SUPPORT,         title: 'Help & support',   description: 'Ask us anything — we reply with a ticket number' },
+      { id: BTN.TERMS,           title: 'Terms & privacy',  description: 'Terms of use, privacy policy, refunds' },
+      { id: BTN.STOP_MENU,       title: 'Stop / delete account', description: 'Stop messages, or delete my data' },
     ],
   });
   // A list needs an open 24-hour window; if it is shut, buttons would fail too,
@@ -313,6 +339,105 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
   if (!out.ok) await send.text(mobile, `${body}\n\nSend a vehicle number to begin.`);
   return out;
 }
+
+/* ─────────────────────────── the menu's own pages (user, 2026-10-12) ── */
+
+const dayIn = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+const rupeesOf = (paise) => `₹${Math.round(Number(paise || 0) / 100)}`;
+const DOC_NAME = { insurance_upto: 'Insurance', pucc_upto: 'PUC', tax_upto: 'Road tax', fitness_upto: 'Fitness', permit_upto: 'Permit' };
+
+/** "My monitoring": each watched vehicle as on the website's My subscriptions (site/subscriptions.js). */
+async function myMonitoring(mobile) {
+  const user = await store.upsertUser(mobile);
+  const { rows } = await require('../site/subscriptions').forUser(user.id);
+  if (!rows.length) {
+    await reply(mobile, '📋 *My monitoring*\n\nNo vehicle is being monitored yet.\n\n'
+      + 'Every full report includes *28 days of monitoring* — a message before insurance, PUC, road tax, fitness or permit '
+      + 'expires, and when a new challan appears.', ['check', { id: BTN.WHAT_GET, title: 'What do I get?' }, 'menu']);
+    return;
+  }
+  const blocks = rows.slice(0, 6).map((s) => {
+    const lines = [`🚗 *${s.reg_no}* — ${!s.active ? (s.stopped ? 'stopped' : 'ended') : s.plan === 'paid' ? '★ paid' : '👁 free'}`];
+    if (s.active) {
+      lines.push(`• Ends *${dayIn(s.ends_at)}*${s.days_left != null ? ` (${s.days_left} day${s.days_left === 1 ? '' : 's'} left)` : ''}`);
+      if (s.paused_until) lines.push(`• ⏸️ Alerts paused till ${dayIn(s.paused_until)}`);
+      else if (s.next_alert) {
+        lines.push(`• Next alert: ${dayIn(s.next_alert.date)} — ${s.next_alert.kind === 'ending'
+          ? 'monitoring ends soon' : `${DOC_NAME[s.next_alert.doc] || 'a document'} expires in ${s.next_alert.days} day${s.next_alert.days === 1 ? '' : 's'}`}`);
+      }
+    } else if (s.ends_at) {
+      lines.push(`• Ended ${dayIn(s.ends_at)}`);
+    }
+    if (s.next_document) lines.push(`• Next to expire: ${DOC_NAME[s.next_document.doc] || s.next_document.label} on ${dayIn(s.next_document.date)}`);
+    if (s.renew_paise) lines.push(`• Renew 28 days: *${rupeesOf(s.renew_paise)}* — send the vehicle number`);
+    return lines.join('\n');
+  });
+  const more = rows.length > 6 ? `\n\n_…and ${rows.length - 6} more on gaadipe.in._` : '';
+  const paused = rows.some((s) => s.paused_until);
+  await reply(mobile, `📋 *My monitoring*\n\n${blocks.join('\n\n')}${more}`,
+    [...(paused ? [{ id: 'mon_resume', title: 'Resume alerts' }] : []), { id: BTN.MY_VEHICLES, title: 'My vehicles' }, 'menu']);
+}
+
+/** "Email for alerts": shows the confirmed address, or asks for one (then a 4-digit code, mail/emailCode.js). */
+async function emailMenu(mobile, { change = false } = {}) {
+  const user = await store.upsertUser(mobile);
+  if (user.email && user.email_verified_at && !change) {
+    await reply(mobile, `📧 *Email for alerts*\n\n*${user.email}* ✓ confirmed.\n\n`
+      + 'Your reports, receipts and vehicle alerts go there too.',
+    [{ id: BTN.EMAIL_CHANGE, title: 'Change email' }, { id: BTN.MY_MONITORING, title: 'My monitoring' }, 'menu']);
+    return;
+  }
+  await setState(mobile, 'email_ask', 'asked for email');
+  await send.text(mobile, '📧 *Email for alerts*\n\nType your email address — I will send a *4-digit code* to confirm it.\n\n'
+    + '_Your reports, receipts and vehicle alerts will go there too. Send *hi* to cancel._');
+}
+
+async function emailCodeSent(mobile, email, out) {
+  await db.query(`UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+    [mobile, JSON.stringify({ email_pending: email })]);
+  await setState(mobile, 'email_code', 'email code sent');
+  await send.text(mobile, `✉️ I have sent a *4-digit code* to *${email}*.\n\nType it here to confirm. It is valid for 10 minutes.`
+    + (out.dev ? '\n\n_(Test server: the code is in the server log, not emailed.)_' : '')
+    + '\n\n_Not there? Check spam, or send *hi* to cancel._');
+}
+
+/** "What do I get?" — the offer in one message, prices from the plan. */
+async function whatYouGet(mobile) {
+  const plan = await billing.reportPlan().catch(() => null);
+  const price = plan ? rupeesOf(plan.price_paise) : '₹19';
+  const renew = plan && Number(plan.renewal_paise) > 0 ? rupeesOf(plan.renewal_paise) : null;
+  const days = plan?.duration_days || 28;
+  await reply(mobile, '💡 *What you get with GaadiPe*\n\n'
+    + '✅ *Free check* — send any vehicle number: make, model, and what needs attention.\n\n'
+    + `📋 *Full report — ${price}* — insurance, PUC, road tax, fitness, permit, loan, blacklist and every pending challan, as a PDF.\n\n`
+    + `🔔 *${days} days of monitoring included* — a message before any document expires, and when a new challan appears.\n\n`
+    + (renew ? `🔄 *Renew for ${renew}* — another ${days} days.\n\n` : '')
+    + '🚛 *Fleets (5+ vehicles)* — one Excel report of every vehicle, by email, every evening.\n\n'
+    + `Sample report: ${require('../mail/customer').SITE()}/sample-report.pdf`,
+  ['check', { id: BTN.FLEET, title: 'Fleet (5+ vehicles)' }, 'menu']);
+}
+
+async function termsAndPrivacy(mobile) {
+  const site = require('../mail/customer').SITE();
+  await reply(mobile, '📜 *Terms & privacy*\n\n'
+    + `Terms of use: ${site}/terms\n`
+    + `Privacy policy: ${site}/privacy\n`
+    + `Refunds: ${site}/refund\n\n`
+    + 'Personal details from the Government record are masked in every report. '
+    + 'You can stop messages or ask us to delete your data any time from the menu.',
+  [{ id: BTN.SUPPORT, title: 'Help & support' }, 'menu']);
+}
+
+/** "Stop / delete account": asked, never done on the first tap. */
+async function stopMenu(mobile) {
+  await reply(mobile, '⚙️ *Stop / delete account*\n\n'
+    + '*Stop messages* — GaadiPe will not message you unless you write first. Reply *START* any time to undo.\n\n'
+    + '*Delete my data* — we delete your name, chats, feedback and the vehicles you checked. '
+    + 'Payment records and GST invoices are kept for the period the law requires.',
+  [{ id: BTN.STOP_CONFIRM, title: 'Stop messages' }, { id: BTN.DELETE_DATA, title: 'Delete my data' },
+   { id: BTN.STOP_CANCEL, title: 'Keep everything' }]);
+}
+
 const baseUrl = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 
 /* SHORTER (user, 2026-09-28): 4 in 10 people left at the old 12-line terms
@@ -1507,8 +1632,13 @@ async function handle(session, message, mobile) {
    * "DELETE MY DATA" (user, 2026-10-03; DPDP Act). A request for the admin
    * (admin/dataRequests.js), and a plain answer: what will be deleted and what
    * the law makes GaadiPe keep. Messages from GaadiPe stop once it is done.
+   *
+   * Never from a tap on the bot's own buttons (2026-10-12): the menu row "Stop /
+   * delete account" only opens the choice, and "Delete my data" there has its own
+   * case below — words matched on a title would skip the question.
    */
-  if (/\b(delete|remove|erase|wipe|clear)\b[\w\s']{0,25}\b(data|details|information|info|account|records?)\b|\bdata\s+(delete|hatao|mitao|remove)\b/i.test(intent.text || '')) {
+  const ownTap = intent.kind === 'button' && Object.values(BTN).includes(intent.id);
+  if (!ownTap && /\b(delete|remove|erase|wipe|clear)\b[\w\s']{0,25}\b(data|details|information|info|account|records?)\b|\bdata\s+(delete|hatao|mitao|remove)\b/i.test(intent.text || '')) {
     const user = await store.upsertUser(mobile).catch(() => null);
     const r = await require('../admin/dataRequests').request({ mobile, userId: user?.id, said: intent.text });
     await funnel(mobile, 'data_delete_request', { created: r.created });
@@ -1550,7 +1680,7 @@ async function handle(session, message, mobile) {
    * Plain-language refusals — English, Hindi and Hinglish — now opt out at once.
    */
   // (Not while they are typing why they said STOP — "stop messaging me" is then the reason.)
-  if (state !== 'stop_reason' && OPT_OUT_RE.test(intent.text || '')) {
+  if (state !== 'stop_reason' && !ownTap && OPT_OUT_RE.test(intent.text || '')) {
     await db.query(
       `UPDATE whatsapp_sessions SET wa_opt_out_at = now(), modified_at = now()
         WHERE mobile = $1`, [mobile]);
@@ -2186,6 +2316,73 @@ async function handle(session, message, mobile) {
         await send.text(mobile, 'No problem. Please send the vehicle number again.');
         return;
 
+      /* The menu's own pages (user, 2026-10-12). */
+      case BTN.MY_VEHICLES:
+        await funnel(mobile, 'menu_my_vehicles');
+        await myVehicles(mobile, message);
+        return;
+
+      case BTN.MY_MONITORING:
+        await funnel(mobile, 'menu_my_monitoring');
+        await myMonitoring(mobile);
+        return;
+
+      case BTN.EMAIL:
+      case BTN.EMAIL_CHANGE:
+        await funnel(mobile, 'menu_email', { change: intent.id === BTN.EMAIL_CHANGE });
+        await emailMenu(mobile, { change: intent.id === BTN.EMAIL_CHANGE });
+        return;
+
+      case BTN.EMAIL_RESEND: {
+        const user = await store.upsertUser(mobile);
+        const email = (await sessionContext(mobile)).email_pending;
+        if (!email) { await emailMenu(mobile, { change: true }); return; }
+        const out = await require('../mail/emailCode').sendCode(user.id, email);
+        if (out.ok) await emailCodeSent(mobile, email, out);
+        else await reply(mobile, out.message, [{ id: BTN.EMAIL_RESEND, title: 'Send new code' }, 'menu']);
+        return;
+      }
+
+      case BTN.WHAT_GET:
+        await funnel(mobile, 'menu_what_get');
+        await whatYouGet(mobile);
+        return;
+
+      case BTN.TERMS:
+        await funnel(mobile, 'menu_terms');
+        await termsAndPrivacy(mobile);
+        return;
+
+      case BTN.STOP_MENU:
+        await funnel(mobile, 'menu_stop');
+        await stopMenu(mobile);
+        return;
+
+      // Its words ("Stop messages") are read as STOP above already; the id is the same thing.
+      case BTN.STOP_CONFIRM:
+        await db.query(`UPDATE whatsapp_sessions SET wa_opt_out_at = now(), modified_at = now() WHERE mobile = $1`, [mobile]);
+        await funnel(mobile, 'opt_out', { from: 'menu' });
+        console.log('[wa] %s chose Stop messages in the menu', mobile);
+        await stopped(mobile, 'Done ✅ — GaadiPe will not message you any more.');
+        return;
+
+      // Its words ("Delete my data") start the deletion request above already; the same here.
+      case BTN.DELETE_DATA: {
+        const user = await store.upsertUser(mobile).catch(() => null);
+        const r = await require('../admin/dataRequests').request({ mobile, userId: user?.id, said: 'Delete my data (menu)' });
+        await funnel(mobile, 'data_delete_request', { created: r.created, from: 'menu' });
+        await send.text(mobile, r.created
+          ? '✅ Your request to delete your personal data is received.\n\n'
+            + 'We will delete your name, chats, feedback and the vehicles you checked, and confirm it here. '
+            + 'Payment records and GST invoices are kept for the period the law requires.'
+          : 'Your request to delete your personal data is already with us — we will confirm here once it is done. 🙏');
+        return;
+      }
+
+      case BTN.STOP_CANCEL:
+        await doors(mobile, '👍 Nothing changed — you will keep getting your reports and alerts.');
+        return;
+
       default: {
         // An unknown id means a button from an older version of the flow, or a
         // template quick reply. Someone who agreed to the Terms in force is
@@ -2244,6 +2441,39 @@ async function handle(session, message, mobile) {
       await funnel(mobile, 'opt_out_reason', { reason: 'Something else', said: String(intent.text || `[${message.type}]`).slice(0, 300) });
       await setState(mobile, 'owner_start', 'STOP reason given');
       await send.text(mobile, 'Thank you for telling us 🙏 — it really helps. You will not hear from us unless you write.');
+      return;
+    }
+
+    // "Email for alerts" from the menu (2026-10-12): the address, then its 4-digit code.
+    case 'email_ask': {
+      const user = await store.upsertUser(mobile);
+      const email = String(intent.text || '').trim().toLowerCase();
+      const out = await require('../mail/emailCode').sendCode(user.id, email);
+      if (out.ok) { await emailCodeSent(mobile, email, out); return; }
+      await send.text(mobile, `${out.message}${out.suggestion ? `\n\nDid you mean *${out.suggestion}*?` : ''}\n\n`
+        + '_Type your email address again, or send *hi* to cancel._');
+      return;
+    }
+
+    case 'email_code': {
+      const code = String(intent.text || '').replace(/\s/g, '');
+      if (!/^\d{4}$/.test(code)) {
+        await send.text(mobile, 'Please type the *4-digit code* from the email — or send *hi* to cancel.');
+        return;
+      }
+      const user = await store.upsertUser(mobile);
+      const email = (await sessionContext(mobile)).email_pending;
+      const out = await require('../mail/emailCode').verifyCode(user.id, email, code);
+      if (out.ok) {
+        await setState(mobile, 'owner_start', 'email confirmed');
+        await funnel(mobile, 'email_confirmed');
+        await reply(mobile, `✅ *Email confirmed* — ${out.user.email}\n\nYour reports, receipts and vehicle alerts will go there too.`,
+          ['check', { id: BTN.MY_MONITORING, title: 'My monitoring' }, 'menu']);
+        return;
+      }
+      if (out.error === 'wrong_code') { await send.text(mobile, `${out.message}\n\n_Type the code again, or send *hi* to cancel._`); return; }
+      await setState(mobile, 'owner_start', `email code: ${out.error}`);
+      await reply(mobile, out.message, [{ id: BTN.EMAIL_RESEND, title: 'Send new code' }, { id: BTN.EMAIL_CHANGE, title: 'Change email' }, 'menu']);
       return;
     }
 

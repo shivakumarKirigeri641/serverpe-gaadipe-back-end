@@ -108,9 +108,12 @@ async function snoozed(userId, vehicleId, doc = 'all') {
 async function handleTap(mobile, intent) {
   const text = String(intent.text || '').trim();
   let tap = intent.kind === 'button' ? parse(intent.id) : null;
-  // A tap whose payload was lost still says which button it was.
+  // A template tap whose payload was lost (Meta then sends the button's words as
+  // the payload) still says which button it was — never the bot's own buttons,
+  // which carry ids of their own ("Check vehicle" is check_another there).
+  const lostPayload = intent.kind === 'button' && (!intent.id || intent.id === intent.text);
   const action = tap?.action
-    || (intent.kind === 'button' && Object.keys(BUTTON).find((k) => BUTTON[k].test(text)))
+    || (lostPayload && Object.keys(BUTTON).find((k) => BUTTON[k].test(text)))
     || (PAUSE_RE.test(text) ? 'p' : RESUME_RE.test(text) ? 'r' : null);
   if (!action) return null;
 

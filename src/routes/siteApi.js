@@ -636,46 +636,16 @@ router.post('/me/mobile/change', safe(async (req, res) => {
  * without leaving the payment window. Off the production server the code is not
  * emailed but written to the server's log, so testing never mails anyone.
  */
+// The code itself lives in mail/emailCode.js, shared with the WhatsApp menu (2026-10-12).
 router.post('/me/email/code', safe(async (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  const chk = await customerMail.checkEmail(email);
-  if (!chk.ok) return res.status(400).json({ error: chk.error, message: chk.message, suggestion: chk.suggestion || null });
-  const recent = await db.one(`SELECT 1 FROM email_codes WHERE user_id = $1 AND created_at > now() - interval '45 seconds'`, [req.user.id]);
-  if (recent) return res.status(429).json({ error: 'wait', message: 'A code was just sent. Please wait a moment before asking again.' });
-  // Four digits (user, 2026-10-10), typed in the profile conversation; ten minutes, five tries.
-  const code = String(require('crypto').randomInt(1000, 10000));
-  const hash = require('crypto').createHash('sha256').update(code).digest('hex');
-  await db.query(`INSERT INTO email_codes (user_id, email, code_hash, expires_at) VALUES ($1, $2, $3, now() + interval '10 minutes')`, [req.user.id, email, hash]);
-  if (String(process.env.NODE_ENV).toLowerCase() !== 'production') {
-    console.warn('[email-code] DEV (not emailed): %s gets %s', email, code);
-    return res.json({ ok: true, sent_to: email, dev: true });
-  }
-  const T = require('../mail/templates');
-  const mail = T.layout({ tagline: 'Confirm your email', badge: { text: 'Your code', tone: 'info' }, title: `${code} is your GaadiPe email code`,
-    lead: 'Type this code in GaadiPe to confirm your email address. It is valid for 10 minutes. If you did not ask for it, you can ignore this email.',
-    footer: 'You are receiving this because someone entered this address in GaadiPe.' });
-  const sent = await require('../mail/mailer').send({ to: email, subject: `${code} is your GaadiPe email code`, html: mail.html, text: mail.text });
-  if (!sent.ok) return res.status(502).json({ error: 'send_failed', message: 'We could not send the code just now. Please try again in a minute.' });
-  console.log('[email-code] sent to user %s', req.user.id);
-  res.json({ ok: true, sent_to: email });
+  const out = await require('../mail/emailCode').sendCode(req.user.id, req.body?.email);
+  if (!out.ok) return res.status(out.status).json({ error: out.error, message: out.message, ...(out.status === 400 ? { suggestion: out.suggestion } : {}) });
+  res.json({ ok: true, sent_to: out.sent_to, ...(out.dev ? { dev: true } : {}) });
 }));
 router.post('/me/email/verify', safe(async (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
-  const row = await db.one(`SELECT * FROM email_codes WHERE user_id = $1 AND email = $2 AND consumed_at IS NULL AND expires_at > now() ORDER BY id DESC LIMIT 1`, [req.user.id, email]);
-  if (!row) return res.status(400).json({ error: 'code_expired', message: 'That code has expired. Please ask for a new one.' });
-  if (row.attempts >= 5) return res.status(400).json({ error: 'too_many', message: 'Too many wrong codes. Please ask for a new one.' });
-  const hash = require('crypto').createHash('sha256').update(String(req.body?.code || '').replace(/\D/g, '')).digest('hex');
-  if (hash !== row.code_hash) {
-    await db.query(`UPDATE email_codes SET attempts = attempts + 1 WHERE id = $1`, [row.id]);
-    return res.status(400).json({ error: 'wrong_code', message: `That code is not right. ${Math.max(0, 4 - row.attempts)} attempt(s) left.` });
-  }
-  await db.query(`UPDATE email_codes SET consumed_at = now() WHERE id = $1`, [row.id]);
-  const { rows } = await db.query(
-    `UPDATE users SET email = $2, email_verified_at = now(), email_unsubscribed_at = NULL,
-            email_token = coalesce(email_token, $3), modified_at = now()
-      WHERE id = $1 RETURNING *`, [req.user.id, email, require('crypto').randomBytes(24).toString('hex')]);
-  console.log('[email-code] verified for user %s', req.user.id);
-  res.json({ ok: true, user: auth.publicUser(rows[0]) });
+  const out = await require('../mail/emailCode').verifyCode(req.user.id, req.body?.email, req.body?.code);
+  if (!out.ok) return res.status(400).json({ error: out.error, message: out.message });
+  res.json({ ok: true, user: auth.publicUser(out.user) });
 }));
 
 /* -------------------------------------------------------------- vehicles */
