@@ -374,8 +374,24 @@ async function myMonitoring(mobile) {
   });
   const more = rows.length > 6 ? `\n\n_…and ${rows.length - 6} more on gaadipe.in._` : '';
   const paused = rows.some((s) => s.paused_until);
-  await reply(mobile, `📋 *My monitoring*\n\n${blocks.join('\n\n')}${more}`,
-    [...(paused ? [{ id: 'mon_resume', title: 'Resume alerts' }] : []), { id: BTN.MY_VEHICLES, title: 'My vehicles' }, 'menu']);
+  /*
+   * ROUTINE UPDATES ON OR OFF (user, 2026-10-12: "do we have Only alert changes?").
+   * The choice (alertChoice, jobs/watch.js dailyStatus) had lost its button with the
+   * old alert template; it lives here now. Read by its words, like before.
+   */
+  const choice = await db.one(
+    `SELECT kind FROM event_log WHERE user_id = $1 AND kind IN ('watch_status_off', 'watch_status_on')
+      ORDER BY created_at DESC, id DESC LIMIT 1`, [user.id]).catch(() => null);
+  const quiet = choice?.kind === 'watch_status_off';
+  const dailyDays = await settings.num('watch_status_daily_days', 7);
+  const how = quiet
+    ? '🔕 _Routine updates are off — you hear from us only when something changes._'
+    : `🔔 _Routine updates: daily for the first ${dailyDays} days, then every other day — plus an alert whenever something changes._`;
+  await reply(mobile, `📋 *My monitoring*\n\n${blocks.join('\n\n')}${more}\n\n${how}`,
+    [...(paused ? [{ id: 'mon_resume', title: 'Resume alerts' }] : []),
+     quiet ? { id: 'status_on', title: 'Keep me updated' } : { id: 'status_off', title: 'Alert only on change' },
+     paused ? 'menu' : { id: BTN.MY_VEHICLES, title: 'My vehicles' },
+     ...(paused ? [] : ['menu'])]);
 }
 
 /** "Email for alerts": shows the confirmed address, or asks for one (then a 4-digit code, mail/emailCode.js). */

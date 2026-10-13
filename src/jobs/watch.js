@@ -600,7 +600,9 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
     for (const [userId, list] of people) {
       const f = list[0];
       const devices = (await db.one(`SELECT count(*)::int AS n FROM customer_push_subscriptions WHERE user_id = $1`, [userId]))?.n || 0;
-      const ways = [f.email && f.email_verified_at && !f.email_unsubscribed_at ? 'email' : null, devices ? `notification (${devices})` : null,
+      const waOn = require('../config').config.whatsapp.enabled && await settings.bool('whatsapp_sending_enabled', false)
+        && !(await send.optedOut(f.mobile).catch(() => true));
+      const ways = [waOn ? 'whatsapp' : null, f.email && f.email_verified_at && !f.email_unsubscribed_at ? 'email' : null, devices ? `notification (${devices})` : null,
         String(await settings.get('sms_tpl_status', '') || '').trim() && await settings.bool('sms_alerts_enabled', false) ? 'sms' : null].filter(Boolean);
       would.push({ mobile: `••${String(f.mobile).slice(-4)}`, name: f.name || null, vehicles: list.map((w) => w.reg_no),
                    goes_as: ways.length ? ways.join(' + ') : 'NOT SENT (no confirmed email, no notification device, SMS not approved)' });
@@ -629,13 +631,49 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
     const checked = list.map((w) => new Date(w.last_checked_at || w.created_at)).sort((a, b) => b - a)[0];
     const name = String(first.name || 'there').split(' ')[0];
 
-    /* EMAIL, NOTIFICATION, SMS (2026-10-10) — WhatsApp is gone; any one delivered counts. */
+    /*
+     * WHATSAPP FIRST, EMAIL AND NOTIFICATION AS WELL (user, 2026-10-12, WhatsApp back:
+     * "status update on WhatsApp first, with email and notifications as well"). SMS
+     * only when WhatsApp did not deliver. Any one delivered counts.
+     * Inside the 24-hour window a free message with reply buttons; outside it the
+     * approved gp_monitoringalert_en_v1. Never after STOP (send.js refuses templates;
+     * the free message is checked here).
+     */
     let out = { ok: false, error: 'no confirmed email, no notification device, SMS not approved' };
     const errors = [];
+    let wa = null;
+    if (require('../config').config.whatsapp.enabled && !(await send.optedOut(first.mobile).catch(() => true))) {
+      if (await send.windowOpen(first.mobile).catch(() => false)) {
+        const body = '✅ *Today\'s update from GaadiPe*\n\n'
+          + lines.map((l) => `🚗 *${l.reg}*\n${l.text.split(' · ').map((t) => `• ${t}`).join('\n')}`).join('\n\n')
+          + `\n\n_Last checked ${fmtDate(checked)}. We will message you if anything changes._`;
+        // "Alert only on change" is read by its words (whatsapp/flow.js alertChoice).
+        wa = body.length <= 1024
+          ? await send.buttons(first.mobile, body, [{ id: 'status_off', title: 'Alert only on change' },
+            { id: 'check_another', title: 'Check vehicle' }, { id: 'menu', title: 'Menu' }]).catch(() => ({ ok: false }))
+          : { ok: false };
+        if (!wa.ok) wa = await send.text(first.mobile, body).catch((e) => ({ ok: false, error: e.message }));
+      } else {
+        const summary = (lines.map((l) => (lines.length > 1 ? `${l.reg}: ${l.text}` : l.text)).join(' · ')
+          + ` (last checked ${fmtDate(checked)})`).slice(0, 900);
+        // gp_monitoringalert_en_v1 (2026-10-12): 1 name, 2 vehicle, 3 document, 4 expiry date, 5 status.
+        const expired = [...new Set(lines.flatMap((l) => l.expired))];
+        const challans = lines.some((l) => l.challans);
+        wa = await require('../whatsapp/monitorAlert').sendAlert(first.mobile, {
+          name, vehicle: lines.length === 1 ? first.reg_no : `${first.reg_no} +${lines.length - 1} more`,
+          vehicleId: list.length === 1 ? first.vehicle_id : null,
+          document: [expired.length ? expired.join(', ') : null, challans ? 'Challans' : null].filter(Boolean).join(', ') || 'All documents',
+          expiry: expired.length ? 'Expired' : 'Not applicable',
+          status: summary, settingKey: 'template_daily_status',
+        }).catch((e) => ({ ok: false, error: e.message }));
+      }
+      if (wa.ok) out = { ok: true, channel: 'whatsapp' };
+      else errors.push(`whatsapp: ${wa.error}`);
+    }
     if (first.email && first.email_verified_at && !first.email_unsubscribed_at) {
       const C = require('../mail/customer');
       const m = await C.deliver(first.email, statusMail(first, lines, checked), first.email_token).catch((e) => ({ ok: false, error: e.message }));
-      if (m.ok) out = { ok: true, channel: 'email' };
+      if (m.ok) out = { ok: true, channel: out.ok ? `${out.channel}+email` : 'email' };
       else errors.push(m.skipped ? 'email held (test mode)' : `email: ${m.error}`);
     }
     const pushed = await require('../site/push').toCustomer(userId, {
@@ -644,33 +682,13 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
       url: lines.length === 1 ? `/chat?reg=${encodeURIComponent(first.reg_no)}` : '/chat', tag: `status-${today}`, kind: 'status',
     }).catch((e) => { errors.push(`push: ${e.message}`); return 0; });
     if (pushed) out = { ok: true, channel: out.ok ? `${out.channel}+push` : 'push' };
-    // SMS once the 'status' DLT template is approved: [vehicle, short status].
-    const sms = await require('../util/sms').sendTemplate('status', first.mobile,
-      [lines.length === 1 ? first.reg_no : `${first.reg_no} +${lines.length - 1}`, lines.map((l) => (l.expired.length ? `${l.expired.join(', ')} expired` : l.challans ? 'challans pending' : 'all clear')).join('; ')]);
-    if (sms.ok) out = { ok: true, channel: out.ok ? `${out.channel}+sms` : 'sms' };
-    if (!out.ok && errors.length) out.error = errors.join('; ');
-    if (out.ok || !require('../config').config.whatsapp.enabled) {
-      // Delivered already, or WhatsApp off: WhatsApp is only ever the fallback now.
-    } else if (await send.optedOut(first.mobile)) {
-      if (!out.ok) out = { ok: false, error: 'opted_out' }; // STOP (user, 2026-09-30) — see notify()
-    } else if (await send.windowOpen(first.mobile)) {
-      out = await send.text(first.mobile, '✅ *Today\'s update from GaadiPe*\n\n'
-        + lines.map((l) => `🚗 *${l.reg}*\n${l.text.split(' · ').map((t) => `• ${t}`).join('\n')}`).join('\n\n')
-        + `\n\n_Last checked ${fmtDate(checked)}. We will message you if anything changes._`);
-    } else {
-      const summary = (lines.map((l) => (lines.length > 1 ? `${l.reg}: ${l.text}` : l.text)).join(' · ')
-        + ` (last checked ${fmtDate(checked)})`).slice(0, 900);
-      // gp_monitoringalert_en_v1 (2026-10-12): 1 name, 2 vehicle, 3 document, 4 expiry date, 5 status.
-      const expired = [...new Set(lines.flatMap((l) => l.expired))];
-      const challans = lines.some((l) => l.challans);
-      out = await require('../whatsapp/monitorAlert').sendAlert(first.mobile, {
-        name, vehicle: lines.length === 1 ? first.reg_no : `${first.reg_no} +${lines.length - 1} more`,
-        vehicleId: list.length === 1 ? first.vehicle_id : null,
-        document: [expired.length ? expired.join(', ') : null, challans ? 'Challans' : null].filter(Boolean).join(', ') || 'All documents',
-        expiry: expired.length ? 'Expired' : 'Not applicable',
-        status: summary, settingKey: 'template_daily_status',
-      });
+    // SMS once the 'status' DLT template is approved: [vehicle, short status] — only when WhatsApp did not deliver.
+    if (!wa?.ok) {
+      const sms = await require('../util/sms').sendTemplate('status', first.mobile,
+        [lines.length === 1 ? first.reg_no : `${first.reg_no} +${lines.length - 1}`, lines.map((l) => (l.expired.length ? `${l.expired.join(', ')} expired` : l.challans ? 'challans pending' : 'all clear')).join('; ')]);
+      if (sms.ok) out = { ok: true, channel: out.ok ? `${out.channel}+sms` : 'sms' };
     }
+    if (!out.ok && errors.length) out.error = errors.join('; ');
     if (out?.ok) sent += 1;
     else {
       await db.query(`UPDATE event_log SET detail = detail || $2::jsonb WHERE id = $1`,
