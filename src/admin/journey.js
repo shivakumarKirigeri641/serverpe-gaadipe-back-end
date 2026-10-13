@@ -193,8 +193,17 @@ const toCsv = (rows) => {
   return `${cols.join(',')}\n${rows.map((r) => cols.map((c) => cell(r[c])).join(',')).join('\n')}\n`;
 };
 
+/*
+ * CUSTOMERS ARE THOSE WHO AGREED (user, 2026-10-13: the export is the list for an SMS
+ * to customers). Built per request, so the panel's channel applies — the main admin
+ * exports WhatsApp agreements, the web admin website ones, never STOP, never the
+ * owner — exactly the Customers list. `offers` keeps only those who opted in to
+ * offers and newsletters (and did not withdraw): the list for a promotional SMS.
+ */
+const OFFERS_OK = 'u.promo_consent_at IS NOT NULL AND u.promo_consent_withdrawn_at IS NULL';
 const EXPORTS = {
-  customers: `SELECT u.id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name, u.signup_channel,
+  customers: ({ offers = false } = {}) => `SELECT u.id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name, u.signup_channel,
+                     (${OFFERS_OK}) AS offers_opt_in,
                      u.created_at AS first_seen, u.last_seen_at AS last_active,
                      (SELECT count(*) FROM user_vehicles uv WHERE uv.user_id = u.id) AS vehicles,
                      (SELECT count(*) FROM vehicle_reports r WHERE r.user_id = u.id) AS reports,
@@ -202,7 +211,10 @@ const EXPORTS = {
                      (SELECT count(*) FROM whatsapp_messages w WHERE w.mobile = u.mobile) AS whatsapp_messages,
                      coalesce((SELECT v.first_touch->>'source' FROM visitors v WHERE v.mobile = u.mobile ORDER BY v.first_seen_at LIMIT 1),
                               (SELECT s.attribution->>'channel' FROM whatsapp_sessions s WHERE s.mobile = u.mobile)) AS first_source
-                FROM users u WHERE u.deactivated_at IS NULL AND u.created_at >= $1 AND u.created_at < $2 ORDER BY u.id`,
+                FROM users u WHERE u.deactivated_at IS NULL AND u.erased_at IS NULL AND NOT u.is_internal
+                 AND ${require('./consented').agreedSql('u.mobile')}
+                 ${offers ? `AND ${OFFERS_OK}` : ''}
+                 AND u.created_at >= $1 AND u.created_at < $2 ORDER BY u.id`,
   events: `SELECT id, occurred_at, name, channel, mobile, user_id, visitor_id, session_id, reg_no, payment_id,
                   source, campaign, page, status, error_code, duration_ms, amount_paise
              FROM events WHERE occurred_at >= $1 AND occurred_at < $2 ORDER BY occurred_at`,
@@ -223,9 +235,10 @@ const EXPORTS = {
                FROM whatsapp_messages WHERE created_at >= $1 AND created_at < $2 ORDER BY id`,
 };
 
-async function exportCsv(kind, { from, to, mask = false } = {}) {
-  const sql = EXPORTS[kind];
-  if (!sql) return null;
+async function exportCsv(kind, { from, to, mask = false, offers = false } = {}) {
+  const def = EXPORTS[kind];
+  if (!def) return null;
+  const sql = typeof def === 'function' ? def({ offers }) : def;   // customers: built now, in this panel's view
   const day = (s, end) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || ''))
     ? new Date(Date.parse(`${s}T00:00:00Z`) - 330 * 60000 + (end ? 24 * 3600e3 : 0)) : null);
   const a = day(from) || new Date(0);

@@ -675,10 +675,12 @@ router.get('/export/vehicles.csv', needs('vehicles.export'), safe(async (req, re
 router.get('/export/:kind', safe(async (req, res) => {
   const kind = String(req.params.kind || '').replace(/\.csv$/, '');
   const out = await journeys.exportCsv(kind, { from: req.query.from, to: req.query.to,
-                                               mask: !auth.can(req.admin.role, 'pii') });
+                                               mask: !auth.can(req.admin.role, 'pii'),
+                                               // Customers who opted in to offers only — the list for a promotional SMS (2026-10-13).
+                                               offers: req.query.offers === '1' });
   if (!out) return res.status(404).json({ error: 'unknown_export', message: `Exports: ${journeys.EXPORT_KINDS.join(', ')}.` });
   await auth.audit({ adminId: req.admin.id, action: 'export_csv', ip: ipOf(req),
-                     detail: { kind, from: req.query.from || null, to: req.query.to || null, rows: out.rows } });
+                     detail: { kind, from: req.query.from || null, to: req.query.to || null, offers: req.query.offers === '1', rows: out.rows } });
   const stamp = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 16).replace(/[:T]/g, '-');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   await require('../admin/exportCenter').record({ adminId: req.admin.id, dataset: kind === 'api' ? 'api_logs' : kind,

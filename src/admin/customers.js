@@ -87,6 +87,8 @@ const SEGMENTS = {
   // Replied STOP (user, 2026-09-30): left out of every other view and of the
   // total; this is where they are seen. A search by number still finds them.
   stopped:      `ws.wa_opt_out_at IS NOT NULL`,
+  // Opted in to offers and newsletters, not withdrawn — who a promotional SMS may go to (2026-10-13).
+  offers:       `u.promo_consent_at IS NOT NULL AND u.promo_consent_withdrawn_at IS NULL`,
   // Said STOP once, and messages are on again — START, or Undo (user, 2026-10-02).
   came_back:    `ws.wa_opt_out_at IS NULL AND EXISTS (SELECT 1 FROM event_log eo WHERE eo.kind = 'funnel'
                   AND eo.detail->>'step' = 'opt_out' AND eo.detail->>'mobile' = u.mobile)`,
