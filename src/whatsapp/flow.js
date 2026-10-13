@@ -98,6 +98,7 @@ const BTN = {
   STOP_CONFIRM: 'stop_confirm',
   DELETE_DATA: 'delete_data',
   STOP_CANCEL: 'stop_cancel',
+  OFFERS_NOW: 'menu_offers',
 };
 
 /*
@@ -201,10 +202,12 @@ async function sendSupportLink(mobile) {
   const reg = await pendingReg(mobile);
   const { url, hours } = await tickets.linkFor({ userId: user.id, mobile, regNo: reg });
 
+  // Terms & privacy live here now (2026-10-13): their menu row went to "Current offers".
   await send.text(mobile,
-    '💬 *Support*\n\n'
+    '💬 *Help & support*\n\n'
     + 'Tell us what is wrong and we will get back to you here, with a ticket number.\n\n'
-    + `Open this to write to us (the link works for ${hours} hours):\n${url}`);
+    + `Open this to write to us (the link works for ${hours} hours):\n${url}\n\n`
+    + `📜 Terms: ${SITE}/terms\n🔒 Privacy: ${SITE}/privacy\n💸 Refunds: ${SITE}/refund`);
 
   await doors(mobile, 'Anything else?');
 }
@@ -386,8 +389,9 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
       { id: BTN.EMAIL,           title: 'Email for alerts',
         description: user?.email_verified_at ? `✓ ${user.email}` : 'Add and confirm your email for reports & alerts' },
       { id: BTN.WHAT_GET,        title: 'What do I get?',   description: 'Free check, full report, monitoring, fleets' },
-      { id: BTN.SUPPORT,         title: 'Help & support',   description: 'Ask us anything — we reply with a ticket number' },
-      { id: BTN.TERMS,           title: 'Terms & privacy',  description: 'Terms of use, privacy policy, refunds' },
+      { id: BTN.SUPPORT,         title: 'Help & support',   description: 'Ask us anything · terms, privacy and refunds' },
+      // In Terms & privacy's place (user, 2026-10-13: "one more option in menu: current offers").
+      { id: BTN.OFFERS_NOW,      title: 'Current offers',   description: 'Prices, renewals and what is on offer today' },
       { id: BTN.STOP_MENU,       title: 'Stop / delete account', description: 'Stop messages, or delete my data' },
     ],
   });
@@ -577,6 +581,36 @@ async function whatYouGet(mobile) {
     + '🚛 *Fleets (5+ vehicles)* — one Excel report of every vehicle, by email, every evening.\n\n'
     + `Sample report: ${require('../mail/customer').SITE()}/sample-report.pdf`,
   ['check', { id: BTN.FLEET, title: 'Fleet (5+ vehicles)' }, 'menu']);
+}
+
+/*
+ * CURRENT OFFERS (user, 2026-10-13: "one more option in menu: current offers"). Read
+ * live, so it is never out of date: the admin's own line (Settings offers_text — a
+ * festival offer, say), the report price with any discount, the renewal and replace
+ * prices, and free reports given to this customer. Asked for, so a reply — not marketing.
+ */
+async function currentOffers(mobile) {
+  const user = await store.upsertUser(mobile);
+  const plan = await billing.reportPlan().catch(() => null);
+  const replace = await db.one(`SELECT price_paise FROM plans WHERE code = 'REPLACE9' AND is_active`).catch(() => null);
+  const gifts = (await require('../admin/gifts').available(user.id).catch(() => [])).length;
+  const custom = String(await settings.get('offers_text', '') || '').trim();
+  const renewDays = await settings.num('report_renewal_window_days', 30);
+  const days = plan?.duration_days || 28;
+  const lines = ['🎁 *Current offers*', ''];
+  if (custom) lines.push(`🔥 ${custom}`, '');
+  if (gifts) lines.push(`🎉 *You have ${gifts} free full report${gifts === 1 ? '' : 's'}* from GaadiPe — send any vehicle number to use ${gifts === 1 ? 'it' : 'one'}.`, '');
+  lines.push('✅ *Basic vehicle check — free.* Send any number.');
+  if (plan) {
+    lines.push(plan.discount_paise
+      ? `📋 *Full report — ~${rupeesOf(plan.list_price_paise)}~ ${rupeesOf(plan.price_paise)}* (${rupeesOf(plan.discount_paise)} off) — with ${days} days of alerts.`
+      : `📋 *Full report — ${rupeesOf(plan.price_paise)}* — with ${days} days of alerts included.`);
+    if (Number(plan.renewal_paise) > 0) {
+      lines.push(`🔄 *Renew for ${rupeesOf(plan.renewal_paise)}* — the same vehicle${renewDays > 0 ? ` within ${renewDays} days of its last report` : ''}.`);
+    }
+  }
+  if (replace) lines.push(`🔁 *Changed your vehicle?* Move your monitoring to it for ${rupeesOf(replace.price_paise)} (₹9 + GST).`);
+  await reply(mobile, lines.join('\n'), ['check', { id: BTN.MY_MONITORING, title: 'My monitoring' }, 'menu']);
 }
 
 async function termsAndPrivacy(mobile) {
@@ -2545,6 +2579,11 @@ async function handle(session, message, mobile) {
       case BTN.TERMS:
         await funnel(mobile, 'menu_terms');
         await termsAndPrivacy(mobile);
+        return;
+
+      case BTN.OFFERS_NOW:
+        await funnel(mobile, 'menu_offers');
+        await currentOffers(mobile);
         return;
 
       case BTN.STOP_MENU:
