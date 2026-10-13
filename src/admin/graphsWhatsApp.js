@@ -378,7 +378,7 @@ async function today({ window: w = 'today' } = {}) {
   const startEpoch = win.minutes ? Math.floor((Date.now() / 1000 - win.minutes * 60) / step) * step + step : Number(mid.t);
   const start = new Date(startEpoch * 1000).toISOString();
   const B = (col) => `(floor(extract(epoch FROM ${col}) / $2) * $2)::bigint`;
-  const [ev, pay, totals, feed] = await Promise.all([
+  const [ev, pay, totals, feed, whoEv, whoPay] = await Promise.all([
     db.query(
       `SELECT ${B('created_at')} AS t, detail->>'step' AS step,
               CASE WHEN detail->>'reason' = 'not_found' THEN 'not_found' ELSE 'other' END AS reason,
@@ -411,6 +411,18 @@ async function today({ window: w = 'today' } = {}) {
           FROM payments p LEFT JOIN users u ON u.id = p.user_id
          WHERE ${PAID} AND p.paid_at >= $1::timestamptz ORDER BY p.paid_at DESC LIMIT 10)
        ORDER BY at DESC LIMIT 30`, [start, LIVE_STEPS]),
+    /* WHO, MINUTE BY MINUTE (user, 2026-10-13: "in the minutes graph I also want to see who
+       said hi — if several, how?"): each person in each bucket, agreed only, STOP left out. */
+    db.query(
+      `SELECT ${B('created_at')} AS t, created_at AS at, detail->>'step' AS step, detail->>'reason' AS reason,
+              detail->>'reg_no' AS reg_no, detail->>'mobile' AS mobile
+         FROM event_log WHERE kind = 'funnel' AND created_at >= $1::timestamptz AND detail->>'step' = ANY($3::text[])
+          AND detail->>'step' <> 'opt_out' AND ${AGREED("detail->>'mobile'")}
+        ORDER BY created_at LIMIT 3000`, [start, step, LIVE_STEPS]),
+    db.query(
+      `SELECT ${B('p.paid_at')} AS t, p.paid_at AS at, u.mobile, p.amount_paise AS paise
+         FROM payments p LEFT JOIN users u ON u.id = p.user_id
+        WHERE ${PAID} AND p.paid_at >= $1::timestamptz ORDER BY p.paid_at LIMIT 1000`, [start, step]),
   ]);
 
   // Every bucket from the start to now, zeros included, so the line moves on.
@@ -431,10 +443,25 @@ async function today({ window: w = 'today' } = {}) {
     const b = by.get(Number(r.t)); if (!b) continue;
     b.paid += r.n; b.revenue_paise += Number(r.paise || 0);
   }
-  const names = feed.rows.length ? await db.query(
+  const allMobiles = [...new Set([...feed.rows, ...whoEv.rows, ...whoPay.rows].map((r) => r.mobile).filter(Boolean))];
+  const names = allMobiles.length ? await db.query(
     `SELECT mobile, coalesce(display_name, wa_profile_name) AS name FROM users WHERE mobile = ANY($1::text[])`,
-    [[...new Set(feed.rows.map((r) => r.mobile).filter(Boolean))]]) : { rows: [] };
+    [allMobiles]) : { rows: [] };
   const nameOf = new Map(names.rows.map((r) => [r.mobile, r.name]));
+  // Each bucket's people: what they did, the vehicle, the time — up to 50 a bucket.
+  const WHAT = { hi: 'said Hi', basic_shown: 'checked', buy_tapped: 'tapped ₹19', paid: 'paid' };
+  const addWho = (r, what) => {
+    const b = by.get(Number(r.t)); if (!b) return;
+    (b.who ||= []);
+    if (b.who.length < 50) {
+      b.who.push({ at: r.at, what, reg_no: r.reg_no || null, paise: r.paise == null ? null : Number(r.paise),
+                   mobile: r.mobile, masked: mask(r.mobile), name: nameOf.get(r.mobile) || null });
+    } else b.who_more = (b.who_more || 0) + 1;
+  };
+  for (const r of whoEv.rows) {
+    addWho(r, r.step === 'lookup_failed' ? (r.reason === 'not_found' ? 'no such vehicle' : 'check failed') : WHAT[r.step] || r.step);
+  }
+  for (const r of whoPay.rows) addWho(r, 'paid');
   return {
     window: w in WINDOWS ? w : 'today', label: win.label, bucket_minutes: win.bucket,
     series: [...by.values()],
