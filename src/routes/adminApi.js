@@ -618,12 +618,14 @@ router.get('/whatsapp/limit', safe(async (_req, res) => res.json(await extras().
 router.get('/whatsapp/broadcast-costs', needs('dashboard.view'), safe(async (_req, res) => res.json(await extras().broadcastCosts())));
 router.post('/whatsapp/reply', needs('settings'), safe(async (req, res) => {
   try {
-    const out = await extras().reply(req.body?.mobile, req.body?.text, req.admin.id);
+    const out = await extras().reply(req.body?.mobile, req.body?.text, req.admin.id, req.body?.buttons);
     await auth.audit({ adminId: req.admin.id, action: 'whatsapp_reply', ip: ipOf(req),
-      detail: { mobile: String(req.body?.mobile || '').slice(-4), length: String(req.body?.text || '').length } });
+      detail: { mobile: String(req.body?.mobile || '').slice(-4), length: String(req.body?.text || '').length, buttons: out.buttons || [] } });
     res.json(out);
   } catch (e) { fail(res, e); }
 }));
+/* The buttons a reply may carry, and what each does (2026-10-13; whatsapp/replyButtons.js). */
+router.get('/whatsapp/reply-buttons', safe(async (_req, res) => res.json({ buttons: require('../whatsapp/replyButtons').CATALOG })));
 
 /* Where the vehicles are: by state, then by RTO (phase 7, src/admin/geo.js). */
 router.get('/geo/states', safe(async (req, res) => res.json(await require('../admin/geo').states(periodOf(req.query)))));

@@ -261,7 +261,7 @@ async function saveAdReturnSpend({ ad_key, label, rupees, note }, adminId) {
 
 /* ─────────────────────────────────────────────────────────────── reply ── */
 
-async function reply(mobile, text, adminId) {
+async function reply(mobile, text, adminId, buttons = []) {
   const send = require('../whatsapp/send');
   const m = String(mobile || '').replace(/\D/g, '').slice(-10);
   const body = String(text || '').trim().slice(0, 1000);
@@ -269,6 +269,17 @@ async function reply(mobile, text, adminId) {
   if (!body) throw Object.assign(new Error('Write a message first.'), { status: 400 });
   if (!(await send.windowOpen(m))) {
     throw Object.assign(new Error('Their 24-hour window has closed — only an approved template can reach them now.'), { status: 409 });
+  }
+  /* UP TO 3 BUTTONS (user, 2026-10-13), from the bot's own (whatsapp/replyButtons.js) — a tap
+     does what that button does anywhere in the chat. WhatsApp's limit for a button
+     message's text is 1024 characters. */
+  const { BY_ID } = require('../whatsapp/replyButtons');
+  const picked = [...new Set((Array.isArray(buttons) ? buttons : []).map(String))].filter((id) => BY_ID[id]).slice(0, 3);
+  if (picked.length) {
+    if (body.length > 1024) throw Object.assign(new Error('With buttons the message can be at most 1024 characters.'), { status: 400 });
+    const withButtons = await send.buttons(m, body, picked.map((id) => ({ id, title: BY_ID[id].title })));
+    if (!withButtons?.ok) throw Object.assign(new Error(`WhatsApp did not accept it: ${withButtons?.error || 'unknown'}`), { status: 502 });
+    return { ok: true, id: withButtons.id || null, buttons: picked };
   }
   const out = await send.text(m, body);
   if (!out?.ok) throw Object.assign(new Error(`WhatsApp did not accept it: ${out?.error || 'unknown'}`), { status: 502 });
