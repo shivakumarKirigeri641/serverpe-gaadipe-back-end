@@ -83,6 +83,10 @@ async function forUser(userId) {
       last_checked_at: r.last_checked_at,
       renew_paise: priced?.paise ?? null, renewal: Boolean(priced?.renewal),
       paused_until: active && r.paused_until ? r.paused_until : null,
+      // Replace vehicle (2026-10-13; pay/replace.js): offered while it may be done.
+      replace: active && paid ? await require('../pay/replace').eligible(userId, r.reg_no)
+        .then((e) => (e.ok ? { ok: true, price_paise: e.price_paise, until: e.until } : { ok: false, reason: e.reason }))
+        .catch(() => null) : null,
     });
   }
   out.sort((a, b) => (b.active - a.active) || (new Date(a.ends_at) - new Date(b.ends_at)));

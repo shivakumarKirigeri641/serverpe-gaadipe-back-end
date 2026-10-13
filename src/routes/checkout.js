@@ -245,12 +245,15 @@ router.get('/pay/:token', safe(async (req, res) => {
   if (pay.status === 'paid') {
     return res.send(page('Already paid', web ? `<div class="card">
       <h1>This payment is already complete ✅</h1>
-      <p class="muted">Your full report for <b>${esc(pay.reg_no || 'your vehicle')}</b> and its GST invoice
-      are in your GaadiPe account.</p>
+      <p class="muted">${pay.plan_kind === 'replace'
+        ? `Monitoring has moved to <b>${esc(pay.reg_no || 'your vehicle')}</b>; its GST invoice is in your GaadiPe account.`
+        : `Your full report for <b>${esc(pay.reg_no || 'your vehicle')}</b> and its GST invoice are in your GaadiPe account.`}</p>
       <button onclick="location.href=${esc(JSON.stringify(`${site}/app/reports`))}">Open my reports</button></div>`
       : `<div class="card">
       <h1>This payment is already complete ✅</h1>
-      <p class="muted">${pay.plan_kind === 'report'
+      <p class="muted">${pay.plan_kind === 'replace'
+        ? `Monitoring has moved to <b>${esc(pay.reg_no || 'your vehicle')}</b>.`
+        : pay.plan_kind === 'report'
         ? `Your full report for <b>${esc(pay.reg_no || 'your vehicle')}</b> has been sent.`
         : `Monitoring for <b>${esc(pay.reg_no || 'your vehicle')}</b> is active.`}
       The confirmation and invoice are ${sentTo()}.</p>
@@ -289,6 +292,9 @@ router.get('/pay/:token', safe(async (req, res) => {
     .toLowerCase().replace(/\b([a-z])/g, m => m.toUpperCase());
 
   const isReport = pay.plan_kind === 'report';
+  // Replace vehicle (2026-10-13; pay/replace.js): monitoring moves from the old vehicle to this one.
+  const isReplace = pay.plan_kind === 'replace';
+  const rep = pay.raw?.replace || {};
   /* A payment started on the website must end on the website: sending a web
      customer to WhatsApp would hand them to a different product than the one
      they were using. The channel was recorded when the order was created. */
@@ -302,16 +308,24 @@ router.get('/pay/:token', safe(async (req, res) => {
   // whatever WHATSAPP_ENABLED says. With the WhatsApp account disabled, "Open
   // WhatsApp" after paying sent a paying customer to a dead end.
   const backUrl = web
-    ? `${site}/chat?paid=${encodeURIComponent(pay.reg_no || '1')}`
+    ? (isReplace ? `${site}/chat?open=subs` : `${site}/chat?paid=${encodeURIComponent(pay.reg_no || '1')}`)
     : null;
   void WA_ON;
   const chatText = web ? 'Report' : '';
   const validDays = await settings.num('report_valid_days', 7);
-  const planLine = isReport
+  const planLine = isReplace
+    ? `Replace vehicle · ${rep.from_reg || ''} → ${rep.to_reg || pay.reg_no || ''}`
+    : isReport
     ? 'Full vehicle report'
     : `GaadiPe Watch · ${pay.duration_days || 28} days`;
   const where = web ? 'in your GaadiPe account' : 'on WhatsApp';
-  const benefits = isReport
+  const benefits = isReplace
+    ? [`Your running monitoring moves from ${rep.from_reg || 'the old vehicle'} to ${rep.to_reg || pay.reg_no || 'this vehicle'} — same end date`,
+       'New challans watched, and a warning before insurance, PUC, road tax, fitness or permit expires',
+       `${rep.from_reg || 'The old vehicle'} comes off your list and its alerts stop; its report and invoice stay`,
+       'The full report of the new vehicle is not included',
+       `GST invoice ${where}, and emailed to you`]
+    : isReport
     ? [`Full report PDF ${where}, and emailed to you — download again for ${validDays} days`,
        'Loan / hypothecation, blacklist and NOC status',
        'Every challan, with offence, place and amount',
@@ -331,7 +345,9 @@ router.get('/pay/:token', safe(async (req, res) => {
 </div>` : ''}
 <div id="done" class="card" style="display:none">
   <h1>Payment successful ✅</h1>
-  <p class="muted" style="margin:0 0 14px">${backUrl
+  <p class="muted" style="margin:0 0 14px">${isReplace
+    ? `Monitoring has moved from <b>${esc(rep.from_reg || '')}</b> to <b>${esc(rep.to_reg || pay.reg_no || '')}</b>. ${web ? 'It shows under My subscriptions.' : 'The confirmation and GST invoice are on their way to your WhatsApp chat.'}`
+    : backUrl
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready — it opens in your GaadiPe chat with a Download PDF button.`
     : web
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready. WhatsApp opens with <b>Report</b> typed — press Send and it arrives in the chat.`
@@ -341,7 +357,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   <p class="muted" id="mailedTo" style="margin:0 0 14px"></p>
   <p class="muted" style="margin:0 0 14px">${backUrl ? 'Taking you back to the chat…' : 'Opening WhatsApp…'}</p>
   ${backUrl
-    ? `<button onclick="location.href=${JSON.stringify(backUrl)}">Open my report in the chat</button>`
+    ? `<button onclick="location.href=${JSON.stringify(backUrl)}">${isReplace ? 'Open My subscriptions' : 'Open my report in the chat'}</button>`
     : waButton('Open WhatsApp', chatText)}
 </div>
 

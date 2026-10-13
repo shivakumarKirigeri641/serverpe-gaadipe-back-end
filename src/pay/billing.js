@@ -140,6 +140,25 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
     const plan = (await c.query(`SELECT * FROM plans WHERE id = $1`, [pay.plan_id])).rows[0];
     const days = plan?.duration_days || 28;
 
+    /* REPLACE VEHICLE (user, 2026-10-13; pay/replace.js): the running subscription
+       moves to the new vehicle with its end date — nothing is created or extended. */
+    if (plan?.kind === 'replace') {
+      const moved = await require('./replace').apply(c, pay);
+      await c.query(
+        `UPDATE payments SET status = 'paid', payment_id = $2, order_id = $3,
+                subscription_id = $4, paid_at = now(),
+                amount_paise = CASE WHEN $6 THEN 0 ELSE amount_paise END,
+                raw = COALESCE(raw, '{}'::jsonb) || $5::jsonb
+                      || CASE WHEN $6 THEN jsonb_build_object('test_amount_paise', amount_paise) ELSE '{}'::jsonb END
+          WHERE id = $1`,
+        [pay.id, razorpayPaymentId, orderId || null, moved.sub.id, JSON.stringify({ gateway: raw || {} }), test]);
+      await c.query(
+        `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'payment_paid', $3)`,
+        [pay.user_id, vehicleId, JSON.stringify({ payment_id: razorpayPaymentId, amount_paise: pay.amount_paise,
+          subscription_id: moved.sub.id, ends_on: moved.endsOn.toISOString().slice(0, 10), replace: pay.raw?.replace || null })]);
+      return { activated: true, subscription: moved.sub, endsOn: moved.endsOn, payment: pay, vehicleId, plan, replaced: pay.raw?.replace || null };
+    }
+
     // ONE SUBSCRIPTION PER VEHICLE. Looked up by vehicle, not by customer:
     // extending a customer-wide subscription every time they bought a vehicle
     // silently handed their earlier vehicles a free month each.
@@ -250,7 +269,8 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
     } catch { /* never in the way of a payment */ }
   }
 
-  if (result.activated) {
+  // A replace fee is not a purchase that earns the referrer anything (2026-10-13).
+  if (result.activated && result.plan?.kind !== 'replace') {
     result.referral = await require('../referrals/gaadipe').onPaid({
       userId: result.payment.user_id,
       paymentId: result.payment.id,

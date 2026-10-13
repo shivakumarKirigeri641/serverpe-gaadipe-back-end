@@ -894,6 +894,36 @@ router.post('/check', safe(async (req, res) => {
 
 /* My subscriptions — monitoring, its dates and the next alert (user, 2026-10-10; site/subscriptions.js). */
 router.get('/subscriptions', safe(async (req, res) => res.json(await require('../site/subscriptions').forUser(req.user.id))));
+/*
+ * REPLACE VEHICLE (user, 2026-10-13; pay/replace.js): ₹9 + GST moves running paid
+ * monitoring to another vehicle. quote: looks the new vehicle up (a check) and says
+ * what will happen; buy: opens the checkout, as /buy does.
+ */
+router.post('/replace/quote', safe(async (req, res) => {
+  const from = plate.parse(req.body?.from);
+  if (!from.ok) return res.status(400).json({ error: 'bad_plate', message: from.error });
+  const out = await require('../pay/replace').prepare(req.user.id, req.user.mobile, from.regNo, req.body?.to);
+  if (!out.ok) return res.status(400).json({ error: out.reason || 'cannot', message: String(out.message || '').replace(/\*/g, '') });
+  res.json({ ok: true, from: out.from.reg_no, to: { reg_no: out.to.reg_no, maker: out.to.maker, model: out.to.model },
+             ends_on: out.ends_on, price_paise: out.price_paise });
+}));
+router.post('/replace/buy', safe(async (req, res) => {
+  if (req.body?.terms_accepted !== true) {
+    return res.status(400).json({ error: 'terms_required', message: 'Please tick “I agree” to the Terms of use, Refund policy and Privacy policy to pay.' });
+  }
+  const from = plate.parse(req.body?.from);
+  if (!from.ok) return res.status(400).json({ error: 'bad_plate', message: from.error });
+  const R = require('../pay/replace');
+  const prep = await R.prepare(req.user.id, req.user.mobile, from.regNo, req.body?.to, { lookup: false });
+  if (!prep.ok) return res.status(400).json({ error: prep.reason || 'cannot', message: String(prep.message || '').replace(/\*/g, '') });
+  const out = await R.order(req.user.id, req.user.mobile, prep, { channel: 'web', test: await razorpay.isTestBuyer(req.user) });
+  if (!out.ok) return res.status(503).json({ error: 'unavailable', message: out.message });
+  await activity.record(req, { action: 'replace_start', regNo: prep.to.reg_no, detail: { from: prep.from.reg_no, payment_row: String(out.row.id) } });
+  const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+  res.json({ ok: true, pay_path: `/pay/${out.row.checkout_token}`, pay_url: base ? `${base}/pay/${out.row.checkout_token}` : null,
+             amount_paise: out.row.amount_paise });
+}));
+
 /* Alerts paused from the WhatsApp alert's "Pause this alert" — back on (2026-10-12). */
 router.post('/subscriptions/resume', safe(async (req, res) => res.json(await require('../site/subscriptions').resume(req.user.id, req.body?.reg_no))));
 

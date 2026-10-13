@@ -179,6 +179,12 @@ async function notifyPaid(result) {
     `SELECT mobile, wa_profile_name FROM users WHERE id = $1`, [result.payment.user_id]);
   if (!user) return;
 
+  // Replace vehicle (2026-10-13): its own confirmation — no report, so not the purchase email.
+  if (result.plan?.kind === 'replace') {
+    await notifyReplaced(result, user).catch((e) => console.error('[pay] replace confirmation failed:', e.message));
+    return;
+  }
+
   // FIRST, BEFORE ANY MESSAGE GOES OUT. GaadiPe is web-only for now — there is
   // no WhatsApp number — so the email below is the only thing the customer will
   // actually receive, and queueing it must not sit behind sends that will fail.
@@ -401,6 +407,56 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
     meta: { report_number: doc.report_number, via: sent.ok ? 'pdf' : 'link' },
   });
   return { ok: true, report: doc };
+}
+
+/**
+ * REPLACE VEHICLE PAID (2026-10-13; pay/replace.js): what moved, until when, and
+ * the GST invoice — on WhatsApp (with buttons), by email with the invoice attached,
+ * and as a browser notification. Any of them may be unavailable; none blocks another.
+ */
+async function notifyReplaced(result, user) {
+  const send = require('../whatsapp/send');
+  const r = result.replaced || {};
+  const day = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+  const ends = day(result.endsOn);
+  const amount = (Number(result.payment.amount_paise) / 100).toFixed(Number(result.payment.amount_paise) % 100 ? 2 : 0);
+  const body = '✅ *Vehicle replaced*\n\n'
+    + `Monitoring moved from *${r.from_reg}* to *${r.to_reg}* — alerts until *${ends}*.\n\n`
+    + `🔕 ${r.from_reg} is off your list and its alerts have stopped; its report stays in My reports.\n`
+    + `🔔 ${r.to_reg}: new challans, and a warning before insurance, PUC, road tax, fitness or permit expires.\n\n`
+    + `₹${amount} paid — your GST invoice follows.`;
+  const tapped = await send.buttons(user.mobile, body, [{ id: 'my_monitoring', title: 'My monitoring' },
+    { id: 'check_another', title: 'Check vehicle' }, { id: 'menu', title: 'Menu' }]).catch(() => ({ ok: false }));
+  if (!tapped.ok) await send.text(user.mobile, body).catch(() => {});
+  await sendInvoice(user, result.payment.id);
+
+  // Email, with the invoice, to a confirmed address.
+  const u = await db.one(`SELECT email, email_verified_at, email_unsubscribed_at, email_token, display_name FROM users WHERE id = $1`, [result.payment.user_id]);
+  if (u?.email && u.email_verified_at) {
+    const C = require('../mail/customer');
+    const T = require('../mail/templates');
+    let invoice = null;
+    try { ({ invoice } = await require('../pay/invoice').forPayment(result.payment.id)); } catch (e) { console.warn('[pay] replace invoice: %s', e.message); }
+    const card = T.vehicleCard({ reg: r.to_reg, sub: `Replaces ${r.from_reg}`,
+      items: [{ label: 'Monitoring', text: `Alerts until ${ends}`, tone: 'good' }] });
+    const mail = T.layout({
+      tagline: 'Vehicle replaced', badge: { text: 'Monitoring moved', tone: 'good' },
+      preheader: `Monitoring moved from ${r.from_reg} to ${r.to_reg}, until ${ends}.`,
+      title: `${r.to_reg} is now monitored, until ${ends}`,
+      lead: `Hi ${String(u.display_name || '').split(' ')[0] || 'there'}, your monitoring has moved from ${r.from_reg} to ${r.to_reg}. ${r.from_reg} is off your list and its alerts have stopped; its report stays in My reports. ₹${amount} paid — your GST invoice is attached.`,
+      intro: [card.html], textBlocks: [card.text],
+      cta: { label: 'Open GaadiPe', url: `${C.SITE()}/chat?open=subs` },
+      footer: 'You are receiving this because you replaced a vehicle on GaadiPe.',
+    });
+    const fs = require('fs');
+    await C.deliver(u.email, { subject: `${r.to_reg} replaces ${r.from_reg} — GaadiPe`, ...mail,
+      attachments: invoice?.pdf_path && fs.existsSync(invoice.pdf_path) ? [{ filename: `${invoice.invoice_number}.pdf`, path: invoice.pdf_path }] : [] },
+    u.email_token).catch((e) => console.warn('[pay] replace email: %s', e.message));
+  }
+  await require('../site/push').toCustomer(result.payment.user_id, {
+    title: `✅ ${r.to_reg} replaces ${r.from_reg}`, body: `Monitoring moved — alerts until ${ends}.`,
+    url: '/chat?open=subs', tag: `replace-${result.payment.id}`,
+  }).catch(() => 0);
 }
 
 /**

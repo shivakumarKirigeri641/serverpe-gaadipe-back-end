@@ -400,7 +400,8 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
 /* ─────────────────────────── the menu's own pages (user, 2026-10-12) ── */
 
 const dayIn = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
-const rupeesOf = (paise) => `₹${Math.round(Number(paise || 0) / 100)}`;
+// ₹19 and ₹11 stay whole; ₹10.62 (replace, ₹9 + GST) keeps its paise.
+const rupeesOf = (paise) => `₹${(Number(paise || 0) / 100).toFixed(Number(paise || 0) % 100 ? 2 : 0)}`;
 const DOC_NAME = { insurance_upto: 'Insurance', pucc_upto: 'PUC', tax_upto: 'Road tax', fitness_upto: 'Fitness', permit_upto: 'Permit' };
 
 /** "My monitoring": each watched vehicle as on the website's My subscriptions (site/subscriptions.js). */
@@ -431,6 +432,9 @@ async function myMonitoring(mobile) {
     }
     if (s.next_document) lines.push(`• Next to expire: ${DOC_NAME[s.next_document.doc] || s.next_document.label} on ${dayIn(s.next_document.date)}`);
     if (s.renew_paise) lines.push(`• ${s.stopped ? 'Start again' : 'Renew'} for 28 days: *${rupeesOf(s.renew_paise)}* — send the vehicle number`);
+    if (s.replace?.ok) {
+      lines.push(`• 🔁 Replace with another vehicle: *${rupeesOf(s.replace.price_paise)}*${s.replace.until ? ` (till ${dayIn(s.replace.until)})` : ''}`);
+    }
     return lines.join('\n');
   });
   const more = rows.length > 6 ? `\n\n_…and ${rows.length - 6} more on gaadipe.in._` : '';
@@ -448,11 +452,92 @@ async function myMonitoring(mobile) {
   const how = quiet
     ? '🔕 _Routine updates are off — you hear from us only when something changes._'
     : `🔔 _Routine updates: daily for the first ${dailyDays} days, then every other day — plus an alert whenever something changes._`;
-  await reply(mobile, `📋 *My monitoring*\n\n${blocks.join('\n\n')}${more}\n\n${how}`,
-    [...(paused ? [{ id: 'mon_resume', title: 'Resume alerts' }] : []),
-     quiet ? { id: 'status_on', title: 'Keep me updated' } : { id: 'status_off', title: 'Alert only on change' },
-     paused ? 'menu' : { id: BTN.MY_VEHICLES, title: 'My vehicles' },
-     ...(paused ? [] : ['menu'])]);
+  // Two of these, most needed first, then Menu (WhatsApp allows three buttons).
+  const replaceable = rows.some((s) => s.replace?.ok);
+  const firsts = [
+    paused ? { id: 'mon_resume', title: 'Resume alerts' } : null,
+    replaceable ? { id: 'rp_pick', title: 'Replace vehicle' } : null,
+    quiet ? { id: 'status_on', title: 'Keep me updated' } : { id: 'status_off', title: 'Alert only on change' },
+    { id: BTN.MY_VEHICLES, title: 'My vehicles' },
+  ].filter(Boolean).slice(0, 2);
+  await reply(mobile, `📋 *My monitoring*\n\n${blocks.join('\n\n')}${more}\n\n${how}`, [...firsts, 'menu']);
+}
+
+/* ─────────── REPLACE VEHICLE (user, 2026-10-13; pay/replace.js) — ₹9 + GST ── */
+
+/** Which vehicle? One that may be replaced is asked about straight away. */
+async function replacePick(mobile) {
+  const user = await store.upsertUser(mobile);
+  const { rows } = await require('../site/subscriptions').forUser(user.id);
+  const ok = rows.filter((s) => s.replace?.ok);
+  if (!ok.length) {
+    await reply(mobile, '🔁 *Replace vehicle*\n\nA vehicle with paid monitoring can be replaced once, within a few days of buying its report or renewal. '
+      + 'None of yours can be replaced right now.', [{ id: BTN.MY_MONITORING, title: 'My monitoring' }, 'menu']);
+    return;
+  }
+  if (ok.length === 1) { await replaceAsk(mobile, ok[0].reg_no); return; }
+  const out = await send.list(mobile, {
+    body: '🔁 *Replace vehicle*\n\nWhich vehicle\'s monitoring should move to another vehicle?',
+    button: 'Choose vehicle', sectionTitle: 'Replace which?',
+    rows: ok.slice(0, 10).map((s) => ({ id: `rp:${s.reg_no}`, title: s.reg_no, description: `Monitoring till ${dayIn(s.ends_at)}` })),
+  });
+  if (!out.ok) await send.text(mobile, 'Send *replace* and the vehicle number — like *replace KA01XX1234*.');
+}
+
+/** Asks for the new vehicle's number (state replace_to). */
+async function replaceAsk(mobile, fromReg) {
+  const user = await store.upsertUser(mobile);
+  const e = await require('../pay/replace').eligible(user.id, fromReg);
+  if (!e.ok) { await reply(mobile, e.message, [{ id: BTN.MY_MONITORING, title: 'My monitoring' }, 'menu']); return; }
+  await db.query(`UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+    [mobile, JSON.stringify({ replace_from: fromReg, replace_to: null })]);
+  await setState(mobile, 'replace_to', `replace ${fromReg}`);
+  await send.text(mobile, `🔁 *Replace ${fromReg}*\n\nType the *new vehicle number* — like *KA01XX1234*.\n\n`
+    + `Its monitoring moves there until *${dayIn(e.ends_on)}*, for *${rupeesOf(e.price_paise)}* (₹9 + GST). `
+    + 'I will show you the vehicle before you pay.\n\n_Send *hi* to cancel._');
+}
+
+/** The new number typed: looked up, then the confirmation with Pay. */
+async function replaceConfirm(mobile, toRaw) {
+  const user = await store.upsertUser(mobile);
+  const fromReg = (await sessionContext(mobile)).replace_from;
+  if (!fromReg) { await replacePick(mobile); return; }
+  await send.text(mobile, 'Checking the new vehicle … ⏳');
+  const p = await require('../pay/replace').prepare(user.id, mobile, fromReg, toRaw);
+  if (!p.ok) {
+    await send.text(mobile, `${p.message}\n\n_Type another number, or send *hi* to cancel._`);
+    return;
+  }
+  await db.query(`UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+    [mobile, JSON.stringify({ replace_to: p.to.reg_no })]);
+  await setState(mobile, 'owner_start', 'replace confirm');
+  const what = [p.to.maker, p.to.model].filter(Boolean).join(' ');
+  await reply(mobile, `🔁 *Replace ${fromReg} with ${p.to.reg_no}?*\n\n`
+    + `🚗 *${p.to.reg_no}*${what ? ` — ${what}` : ''}\n\n`
+    + `• Monitoring moves to ${p.to.reg_no} until *${dayIn(p.ends_on)}* — new challans and document expiry warnings.\n`
+    + `• ${fromReg} comes off your list and its alerts stop; its report stays in My reports.\n`
+    + `• The full report of ${p.to.reg_no} is not included.\n\n`
+    + `Fee: *${rupeesOf(p.price_paise)}* (₹9 + GST). This can be done once for this purchase.\n\n`
+    + `_By paying you agree to our Terms (${SITE}/terms), Refund (${SITE}/refund) and Privacy (${SITE}/privacy) policies._`,
+  [{ id: 'rp_pay', title: `Pay ${rupeesOf(p.price_paise)}` }, { id: 'rp_cancel', title: 'Cancel' }]);
+}
+
+async function replacePay(mobile) {
+  const user = await store.upsertUser(mobile);
+  const ctx = await sessionContext(mobile);
+  if (!ctx.replace_from || !ctx.replace_to) { await replacePick(mobile); return; }
+  const R = require('../pay/replace');
+  const p = await R.prepare(user.id, mobile, ctx.replace_from, ctx.replace_to, { lookup: false });
+  if (!p.ok) { await reply(mobile, p.message, [{ id: BTN.MY_MONITORING, title: 'My monitoring' }, 'menu']); return; }
+  if (!baseUrl()) { await reply(mobile, 'Payment is not available right now. Please try again shortly.', ['support', 'menu']); return; }
+  // The owner's own tries run on Razorpay test keys, as on the website (razorpay.isTestBuyer).
+  const out = await R.order(user.id, mobile, p, { channel: 'whatsapp', test: await require('../pay/razorpay').isTestBuyer(user).catch(() => false) });
+  if (!out.ok) { await reply(mobile, out.message, ['support', 'menu']); return; }
+  await setState(mobile, 'awaiting_payment', `replace order ${out.row.order_id}`);
+  await funnel(mobile, 'replace_link_sent', { reg_no: p.to.reg_no, from: p.from.reg_no, payment_row: out.row.id });
+  await reply(mobile, `🔁 *${p.from.reg_no} → ${p.to.reg_no}* · ${rupeesOf(out.row.amount_paise)}\n\n`
+    + `Pay securely here (UPI, card, netbanking):\n${baseUrl()}/pay/${out.row.checkout_token}\n\n`
+    + 'The vehicle is replaced the moment the payment goes through.', ['support', 'menu']);
 }
 
 /** "Email for alerts": shows the confirmed address, or asks for one (then a 4-digit code, mail/emailCode.js). */
@@ -1871,6 +1956,15 @@ async function handle(session, message, mobile) {
     if (intent.id === 'rm_pick') { await funnel(mobile, 'remove_pick'); await removePick(mobile); return; }
     if (String(intent.id || '').startsWith('rm:')) { await removeConfirm(mobile, intent.id.slice(3)); return; }
     if (String(intent.id || '').startsWith('rm_yes:')) { await removeDo(mobile, intent.id.slice(7)); return; }
+    // Replace vehicle (2026-10-13): pick → new number → confirmation → Pay.
+    if (intent.id === 'rp_pick') { await funnel(mobile, 'replace_pick'); await replacePick(mobile); return; }
+    if (String(intent.id || '').startsWith('rp:')) { await replaceAsk(mobile, intent.id.slice(3)); return; }
+    if (intent.id === 'rp_pay') { await replacePay(mobile); return; }
+    if (intent.id === 'rp_cancel') {
+      await setState(mobile, 'owner_start', 'replace cancelled');
+      await reply(mobile, '👍 Nothing changed — your monitoring stays as it is.', [{ id: BTN.MY_MONITORING, title: 'My monitoring' }, 'check', 'menu']);
+      return;
+    }
     if (intent.id === 'rm_no') {
       await reply(mobile, '👍 Kept — nothing changed.', [{ id: BTN.MY_VEHICLES, title: 'My vehicles' }, 'check', 'menu']);
       return;
@@ -2512,6 +2606,16 @@ async function handle(session, message, mobile) {
     await removePick(mobile);
     return;
   }
+  // "replace KA01AB1234" / "replace vehicle" typed (2026-10-13).
+  const rpTyped = /^replace\s+(?:vehicle\s+)?([a-z0-9 -]{5,15})\s*$/i.exec(intent.text || '');
+  if (rpTyped && state !== 'replace_to' && await send.agreedTerms(mobile)) {
+    const parsed = plate.parse(rpTyped[1]);
+    if (parsed.ok) { await replaceAsk(mobile, parsed.regNo); return; }
+  }
+  if (/^replace( a| my)?( vehicle)?\s*$/i.test(intent.text || '') && await send.agreedTerms(mobile)) {
+    await replacePick(mobile);
+    return;
+  }
   // Owner verification by word as well as from the menu — only while it is on.
   if (/^(verify|verify owner|i own (a|my|this) vehicle|owner verification)\s*$/i.test(intent.text) && await owners.enabled()) {
     await askOwnedVehicle(mobile);
@@ -2542,6 +2646,11 @@ async function handle(session, message, mobile) {
       await send.text(mobile, 'Thank you for telling us 🙏 — it really helps. You will not hear from us unless you write.');
       return;
     }
+
+    // Replace vehicle (2026-10-13): whatever is typed now is the new vehicle's number.
+    case 'replace_to':
+      await replaceConfirm(mobile, intent.text || '');
+      return;
 
     // "Email for alerts" from the menu (2026-10-12): the address, then its 4-digit code.
     case 'email_ask': {

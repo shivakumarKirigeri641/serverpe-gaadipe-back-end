@@ -136,7 +136,12 @@ function pdfInput(row, pay, business) {
       reg_no: pay.reg_no || null,
       // What the money bought, stated as dates rather than "28 days": the
       // question a customer opens an invoice to answer is "until when?"
-      description: pay.plan_kind === 'report' ? [
+      // Replace vehicle (2026-10-13): the fee for moving running monitoring to another vehicle.
+      description: pay.plan_kind === 'replace' ? [
+        `GaadiPe Replace Vehicle — ${pay.raw?.replace?.from_reg || 'old vehicle'} to ${pay.raw?.replace?.to_reg || pay.reg_no || 'new vehicle'}`,
+        pay.ends_on ? `Monitoring moved; alerts until ${fmtDate(pay.ends_on)}` : 'Monitoring moved to the new vehicle',
+        'One-time fee, no renewal',
+      ].join('\n') : pay.plan_kind === 'report' ? [
         pay.reg_no ? `GaadiPe Full Vehicle Report — ${pay.reg_no}` : 'GaadiPe Full Vehicle Report',
         pay.starts_on && pay.ends_on
           ? `Alerts from ${fmtDate(pay.starts_on)} to ${fmtDate(pay.ends_on)}`
