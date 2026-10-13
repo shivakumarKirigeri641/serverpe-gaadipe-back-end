@@ -853,6 +853,52 @@ router.post('/customers/:id/pause', needs('block'), safe(async (req, res) => {
   res.json({ ok: true, is_paused: row.is_paused });
 }));
 
+/*
+ * REMOVE FROM A CUSTOMER'S LIST (user, 2026-10-13: "I put around 7 vehicles to My vehicles —
+ * make it possible to remove, the same as vehicles removed"). Exactly the customer's own
+ * Remove (vehicle/remove.js): their link hidden, alerts stopped, report and invoice kept,
+ * anyone may check the number again. One vehicle, or all of them.
+ */
+router.post('/customers/:id/vehicles/:vehicleId/remove', needs('block'), safe(async (req, res) => {
+  const v = await db.one(`SELECT reg_no FROM vehicles WHERE id = $1`, [req.params.vehicleId]);
+  if (!v) return res.status(404).json({ error: 'not_found', message: 'No such vehicle.' });
+  const out = await require('../vehicle/remove').removeForUser(req.params.id, v.reg_no, { channel: 'admin' });
+  await auth.audit({ adminId: req.admin.id, action: 'remove_customer_vehicle', ip: ipOf(req),
+                     detail: { user_id: req.params.id, reg_no: v.reg_no, removed: out.ok, alerts_stopped: out.alerts_stopped || 0 } });
+  res.json({ ok: true, removed: out.ok, alerts_stopped: out.alerts_stopped || 0 });
+}));
+router.post('/customers/:id/vehicles/remove-all', needs('block'), safe(async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT v.reg_no FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
+      WHERE uv.user_id = $1 AND uv.hidden_at IS NULL`, [req.params.id]);
+  let removed = 0;
+  for (const r of rows) {
+    const out = await require('../vehicle/remove').removeForUser(req.params.id, r.reg_no, { channel: 'admin' });
+    if (out.ok) removed += 1;
+  }
+  await auth.audit({ adminId: req.admin.id, action: 'remove_customer_vehicles_all', ip: ipOf(req),
+                     detail: { user_id: req.params.id, removed, reg_nos: rows.map((r) => r.reg_no) } });
+  res.json({ ok: true, removed });
+}));
+
+/* SMS broadcast — the promotional DLT template, opted-in customers only (2026-10-13; admin/smsBroadcast.js). */
+router.get('/sms-broadcast', safe(async (req, res) => {
+  const S = require('../admin/smsBroadcast');
+  res.json({ ...(await S.overview()), people: await S.recipients({ filter: req.query.filter || 'all', q: req.query.q || '' }) });
+}));
+router.post('/sms-broadcast/send', needs('settings'), safe(async (req, res) => {
+  const out = await require('../admin/smsBroadcast').send({ userIds: req.body?.user_ids, vals: req.body?.vals, note: req.body?.note }, req.admin.id);
+  if (!out.ok) return res.status(400).json({ error: 'cannot', message: out.error });
+  await auth.audit({ adminId: req.admin.id, action: 'sms_promo_broadcast', ip: ipOf(req),
+                     detail: { queued: out.queued, not_opted: out.not_opted, over_cap: out.over_cap, vals: req.body?.vals, batch: out.batch } });
+  res.json(out);
+}));
+router.post('/sms-broadcast/cancel', needs('settings'), safe(async (req, res) => {
+  const out = await require('../admin/smsBroadcast').cancel(req.body?.batch);
+  await auth.audit({ adminId: req.admin.id, action: 'sms_promo_cancel', ip: ipOf(req), detail: { batch: req.body?.batch, cancelled: out.cancelled } });
+  res.json(out);
+}));
+
 /* The customer paused a vehicle's alerts from WhatsApp; the admin turns them back on (2026-10-12). */
 router.post('/customers/:id/vehicles/:vehicleId/resume-alerts', needs('block'), safe(async (req, res) => {
   const resumed = await customers.resumeVehicleAlerts(req.params.id, req.params.vehicleId);

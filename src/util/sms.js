@@ -27,9 +27,10 @@ const configured = () => Boolean(PROVIDER);
  * The key goes in the `authorization` HEADER: sent in the POST body Fast2SMS
  * answers 401, which reads exactly like a wrong key.
  */
-async function sendViaFast2sms({ mobile, variables, messageId: givenId = null, values: givenValues = null }) {
+async function sendViaFast2sms({ mobile, variables, messageId: givenId = null, values: givenValues = null, sender: givenSender = null }) {
   const key = process.env.FAST2SMSAPIKEY || process.env.FAST2SMS_API_KEY || '';
-  const sender = process.env.FAST2SMS_SENDER_ID || '';
+  // A promotional template goes from the promotional header (2026-10-13); everything else from the usual one.
+  const sender = givenSender || process.env.FAST2SMS_SENDER_ID || '';
   // The OTP template unless another approved template (alerts, 2026-10-10) is named.
   const messageId = givenId || process.env.FAST2SMS_DLT_MESSAGE_ID || '';
   if (!key || !sender || !messageId) {
@@ -177,7 +178,9 @@ async function send(mobile, text, { variables = {}, templateId = null } = {}) {
  */
 // 'manual' (2026-10-10): the web admin's own SMS to chosen customers — a placeholder template until approved.
 // 'status' (2026-10-10): the status update on the cadence in jobs/watch.js — [vehicle, short status].
-const KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers', 'manual', 'status'];
+// 'promo' (2026-10-13): the admin's promotional broadcast — 3 values, opted-in customers only (admin/smsBroadcast.js).
+const KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers', 'manual', 'status', 'promo'];
+const PROMOTIONAL = ['offers', 'promo'];
 async function sendTemplate(kind, mobile, values = [], meta = {}) {
   const out = await sendTemplateRaw(kind, mobile, values);
   await logSms({ kind, mobile, out, values: values.map((v) => String(v ?? '')), queueId: meta.queueId || null, adminId: meta.adminId || null });
@@ -186,17 +189,26 @@ async function sendTemplate(kind, mobile, values = [], meta = {}) {
 async function sendTemplateRaw(kind, mobile, values = []) {
   if (!KINDS.includes(kind)) return { ok: false, error: 'unknown_kind' };
   const settings = require('./settings');
-  // The master switch is for the automatic SMS; a manual send from the web admin is a decision of its own.
-  if (kind !== 'manual' && !(await settings.bool('sms_alerts_enabled', false))) return { ok: false, skipped: true, error: 'sms_alerts_off' };
+  // The master switch is for the automatic SMS; a manual or promotional send from the admin is a decision of its own.
+  if (!['manual', 'promo'].includes(kind) && !(await settings.bool('sms_alerts_enabled', false))) return { ok: false, skipped: true, error: 'sms_alerts_off' };
   const messageId = String(await settings.get(`sms_tpl_${kind}`, '') || '').trim();
   if (!messageId) return { ok: false, skipped: true, error: `no approved template for ${kind}` };
   const m = String(mobile || '').replace(/\D/g, '').slice(-10);
   if (m.length !== 10) return { ok: false, error: 'bad_mobile' };
   if (await require('../admin/blocks').isBlocked('mobile', m).catch(() => false)) return { ok: false, error: 'blocked' };
-  // Promotional SMS only 9 am – 9 pm IST (TRAI).
-  if (kind === 'offers') {
+  /*
+   * PROMOTIONAL: only 10 am – 9 pm IST (TRAI), and only to someone who opted in to
+   * offers and newsletters and did not withdraw it (Terms 4.2) — checked here, at
+   * the one door every SMS leaves through, whoever queued it (2026-10-13).
+   */
+  if (PROMOTIONAL.includes(kind)) {
     const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours();
-    if (h < 9 || h >= 21) return { ok: false, skipped: true, error: 'outside 9 am - 9 pm' };
+    if (h < 10 || h >= 21) return { ok: false, skipped: true, error: 'outside 10 am - 9 pm (promotional)' };
+    const ok = await require('../db').one(
+      `SELECT 1 FROM users WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $1
+          AND promo_consent_at IS NOT NULL AND promo_consent_withdrawn_at IS NULL
+          AND deactivated_at IS NULL LIMIT 1`, [m]).catch(() => null);
+    if (!ok) return { ok: false, skipped: true, error: 'not opted in to offers' };
   }
   const cut = values.map((v) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 30));
   if (!configured()) {
@@ -205,7 +217,10 @@ async function sendTemplateRaw(kind, mobile, values = []) {
   }
   try {
     if (PROVIDER !== 'fast2sms') throw new Error(`template SMS is set up for Fast2SMS only (provider ${PROVIDER})`);
-    const out = await sendViaFast2sms({ mobile: m, messageId, values: cut });
+    const promoSender = PROMOTIONAL.includes(kind)
+      ? (String(await settings.get('sms_promo_sender_id', '') || '').trim() || process.env.FAST2SMS_PROMO_SENDER_ID || null) : null;
+    if (PROMOTIONAL.includes(kind) && !promoSender) throw new Error('no promotional sender id (Settings sms_promo_sender_id)');
+    const out = await sendViaFast2sms({ mobile: m, messageId, values: cut, sender: promoSender });
     console.log('[sms] %s sent to ••••%s', kind, m.slice(-4));
     return { ok: true, id: out.id };
   } catch (e) {
