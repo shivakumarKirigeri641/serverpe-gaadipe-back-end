@@ -398,14 +398,22 @@ async function notify(w, items, summary, byVehicle = null) {
   // replies must still go — so it is checked here.
   if (await send.optedOut(w.mobile)) return { ok: false, error: 'opted_out' };
 
+  const dates = [...new Set(items.map((i) => /^[^:]+:(\d{4}-\d{2}-\d{2}):/.exec(i.key || '')?.[1]).filter(Boolean))]
+    .map((d) => fmtDate(new Date(`${d}T00:00:00+05:30`)));
+  const vehicleIds = [...new Set(items.map((i) => i.vehicle_id).filter(Boolean))];
+
   if (await send.windowOpen(w.mobile)) {
-    // Inside the 24-hour window a plain message is free, and can list vehicles line by line.
-    const body = byVehicle
-      ? [...byVehicle].map(([reg, list]) => `🚗 *${reg}*\n${list.map((i) => `• ${i.text}`).join('\n')}`).join('\n\n')
-      : `🔔 *${w.reg_no}*\n\n${summary}`;
-    await send.text(w.mobile, `🔔 *Today's update from GaadiPe*\n\n${body}\n\n`
-      + 'Open gaadipe.in to see the full record.');
-    return { ok: true, template: null };
+    /* Inside the 24-hour window: free, and laid out like the template with its three buttons
+       (2026-10-13; monitorAlert.sendInWindow) — vehicle by vehicle when there are several. */
+    const lines = byVehicle && byVehicle.size > 1
+      ? [...byVehicle].map(([reg, list]) => `🚗 ${reg}: ${list.map((i) => i.text).join(', ')}`).join('\n')
+      : '';
+    const out = await require('../whatsapp/monitorAlert').sendInWindow(w.mobile, {
+      name, vehicle: w.reg_no, vehicleId: vehicleIds.length === 1 ? vehicleIds[0] : null,
+      document: what || 'Vehicle record', expiry: dates.join(', '),
+      status: byVehicle && byVehicle.size > 1 ? 'See below' : summary, extra: lines,
+    }).catch((e) => ({ ok: false, error: e.message }));
+    return out.ok ? { ok: true, template: null } : { ok: false, error: out.error };
   }
 
   /*
@@ -414,9 +422,6 @@ async function notify(w, items, summary, byVehicle = null) {
    * "Thanks for remembering / Check vehicle / Pause this alert" buttons (whatsapp/monitorAlert.js).
    * A document's date comes from its finding's key ("Insurance:2026-11-15:expiring").
    */
-  const dates = [...new Set(items.map((i) => /^[^:]+:(\d{4}-\d{2}-\d{2}):/.exec(i.key || '')?.[1]).filter(Boolean))]
-    .map((d) => fmtDate(new Date(`${d}T00:00:00+05:30`)));
-  const vehicleIds = [...new Set(items.map((i) => i.vehicle_id).filter(Boolean))];
   const r = await require('../whatsapp/monitorAlert').sendAlert(w.mobile, {
     name, vehicle: w.reg_no, vehicleId: vehicleIds.length === 1 ? vehicleIds[0] : null,
     document: what || 'Vehicle record', expiry: dates.join(', '),

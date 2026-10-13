@@ -62,6 +62,33 @@ async function sendAlert(mobile, { name, vehicle, vehicleId, document, expiry, s
   return { ...out, template: tpl };
 }
 
+/*
+ * INSIDE THE 24-HOUR WINDOW (user, 2026-10-13: "an unapproved template can't go — create
+ * one the same and reply within 24 hours?"). No template is needed there, so the alert
+ * goes as a free message laid out like gp_monitoringalert_en_v1, with the same three
+ * buttons — their ids are the template's payloads, so a tap is handled the same way.
+ * Plain text if the buttons cannot go (a body over 1024 characters).
+ */
+async function sendInWindow(mobile, { name, vehicle, vehicleId, document, expiry, status, kind = 'chg', docs = ['all'], extra = '' }) {
+  const body = [
+    '🔔 *Monitoring alert from GaadiPe*', '',
+    `Hello *${filled(name, 'there')}*,`, '',
+    `Monitoring alert for your vehicle: *${filled(vehicle)}*`, '',
+    `Document: *${filled(document)}*`,
+    `Expiry Date: *${filled(expiry)}*`,
+    `Status: *${filled(status)}*`,
+    ...(extra ? ['', extra] : []),
+    '', '_Always keep the documents updated to avoid fines._',
+  ].join('\n');
+  const tail = `${vehicleId || 0}|${kind}|${(docs.length ? docs : ['all']).join(',')}`;
+  // Reply buttons hold 20 characters (a template's hold 25): "Thanks for remembering" is 22.
+  const out = body.length <= 1024
+    ? await send.buttons(mobile, body, [{ id: `mon|t|${tail}`, title: 'Thanks for reminding' },
+      { id: `mon|c|${tail}`, title: 'Check vehicle' }, { id: `mon|p|${tail}`, title: 'Pause this alert' }]).catch(() => ({ ok: false }))
+    : { ok: false };
+  return out.ok ? out : send.text(mobile, body);
+}
+
 /* ───────────────────────────────────────────────────────── the taps ── */
 
 // t thanks · c check · p pause (asks first) · py yes, pause · pn no, keep alerts
@@ -88,7 +115,7 @@ async function lastWarning(userId) {
   return rows[0] ? { vehicleId: Number(rows[0].vehicle_id), kind: 'exp', docs: rows[0].docs } : null;
 }
 
-const BUTTON = { t: /^thanks for remembering$/i, c: /^check vehicle$/i, p: /^pause this alert$/i };
+const BUTTON = { t: /^thanks for (remembering|reminding)$/i, c: /^check vehicle$/i, p: /^pause this alert$/i };
 const PAUSE_RE = /^(pause (this )?alerts?|pause)\s*[.!]?$/i;
 const RESUME_RE = /^(resume|resume alerts?|unpause( alerts?)?)\s*[.!]?$/i;
 
@@ -195,4 +222,4 @@ async function handleTap(mobile, intent) {
   return { step: 'alert_paused' };
 }
 
-module.exports = { NAME, sendAlert, handleTap, snoozed, parse };
+module.exports = { NAME, sendAlert, sendInWindow, handleTap, snoozed, parse };

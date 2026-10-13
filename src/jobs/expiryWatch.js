@@ -382,15 +382,18 @@ async function runOnce({ limit = 20 } = {}) {
       const open = await send.windowOpen(row.mobile).catch(() => false) && !(await send.optedOut(row.mobile).catch(() => true));
       // gp_monitoringalert_en_v1 (2026-10-12): 3 the documents, 4 their dates, 5 how each stands;
       // its buttons carry the vehicle and documents back (monitorAlert.js).
+      // Inside the window the same alert as a free message with the same three buttons (2026-10-13).
+      const M = require('../whatsapp/monitorAlert');
+      const alert = {
+        name, vehicle: row.reg_no, vehicleId: row.vehicle_id, kind: 'exp', docs: claimed.map((d) => d.doc.key),
+        document: claimed.map((d) => d.doc.label).join(', '),
+        expiry: claimed.map((d) => istDay(d.date)).join(', '),
+        status: claimed.map((d) => `${claimed.length > 1 ? `${d.doc.label} ` : ''}${phrase(d).replace(/\s*\(.*\)$/, '')}`)
+          .join(' · ').replace(/^./, (c) => c.toUpperCase()),
+      };
       const out = open
-        ? await send.text(row.mobile, `🔔 *${row.reg_no}*\n\n${documentLine(claimed)}\n\n${adviceLine(claimed)}`).catch(() => ({ ok: false }))
-        : await require('../whatsapp/monitorAlert').sendAlert(row.mobile, {
-          name, vehicle: row.reg_no, vehicleId: row.vehicle_id, kind: 'exp', docs: claimed.map((d) => d.doc.key),
-          document: claimed.map((d) => d.doc.label).join(', '),
-          expiry: claimed.map((d) => istDay(d.date)).join(', '),
-          status: claimed.map((d) => `${claimed.length > 1 ? `${d.doc.label} ` : ''}${phrase(d).replace(/\s*\(.*\)$/, '')}`)
-            .join(' · ').replace(/^./, (c) => c.toUpperCase()),
-        }).catch(() => ({ ok: false }));
+        ? await M.sendInWindow(row.mobile, { ...alert, extra: adviceLine(claimed) }).catch(() => ({ ok: false }))
+        : await M.sendAlert(row.mobile, alert).catch(() => ({ ok: false }));
       if (out.ok) warned += 1;
     }
   }
