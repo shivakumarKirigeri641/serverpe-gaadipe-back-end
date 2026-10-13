@@ -532,7 +532,8 @@ async function targets(id, { limit = 500 } = {}) {
   const { rows } = await db.query(
     `SELECT t.id, t.mobile, t.params, t.status, t.error, t.attempts, t.sent_at,
             coalesce(u.display_name, u.wa_profile_name) AS display_name,
-            d.status AS delivery, d.error_title AS delivery_error, d.created_at AS delivery_at
+            d.status AS delivery, d.error_title AS delivery_error, d.created_at AS delivery_at,
+            rp.created_at AS replied_at, rp.said AS reply_text, rp.type AS reply_type
        FROM whatsapp_broadcast_targets t
        LEFT JOIN users u ON u.id = t.user_id
        LEFT JOIN LATERAL (
@@ -540,6 +541,17 @@ async function targets(id, { limit = 500 } = {}) {
           WHERE t.wa_message_id IS NOT NULL AND s.wa_message_id = t.wa_message_id
           ORDER BY CASE s.status WHEN 'failed' THEN 4 WHEN 'read' THEN 3 WHEN 'delivered' THEN 2 ELSE 1 END DESC, s.id DESC
           LIMIT 1) d ON true
+       -- THE REPLY (user, 2026-10-13: "track replies — when they tap reply"): their first message
+       -- answering this one (WhatsApp's context id), else the first within 72 hours of it.
+       LEFT JOIN LATERAL (
+         SELECT m.created_at, m.message_type AS type,
+                coalesce(m.payload->'button'->>'text', m.payload->'interactive'->'button_reply'->>'title',
+                         m.payload->'text'->>'body', m.body) AS said
+           FROM whatsapp_messages m
+          WHERE t.sent_at IS NOT NULL AND m.direction = 'in' AND right(m.mobile, 10) = right(t.mobile, 10)
+            AND m.created_at > t.sent_at AND m.created_at < t.sent_at + interval '72 hours'
+          ORDER BY (m.payload->'context'->>'id' = t.wa_message_id) DESC NULLS LAST, m.created_at
+          LIMIT 1) rp ON true
       WHERE t.broadcast_id = $1 ORDER BY t.id LIMIT $2`, [id, Math.min(2000, limit)]);
   const b = await db.one(`SELECT id, template_name, language, status, recipients, created_at FROM whatsapp_broadcasts WHERE id = $1`, [id]);
   const perMinute = Math.max(1, await require('../util/settings').num('whatsapp_broadcast_per_tick', 5));

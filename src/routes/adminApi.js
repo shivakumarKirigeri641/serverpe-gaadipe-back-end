@@ -2167,6 +2167,14 @@ router.post('/tickets/:id/close', needs('settings'), safe(async (req, res) => {
 const broadcasts = require('../admin/broadcasts');
 
 /* The approved templates, the people who can be sent to, and what has gone. */
+/* WhatsApp replies & taps — what customers answered, and to which message (2026-10-13; admin/waReplies.js). */
+router.get('/whatsapp/replies', safe(async (req, res) => {
+  const R = require('../admin/waReplies');
+  const days = Number(req.query.days) || 7;
+  res.json({ ...(await R.list({ days, kind: req.query.kind || 'all', template: req.query.template || '', q: req.query.q || '' })),
+             summary: (await R.summary({ days })).templates });
+}));
+
 router.get('/broadcasts', safe(async (req, res) => {
   res.json({
     templates: await broadcasts.templates({ refresh: req.query.refresh === '1' }),
