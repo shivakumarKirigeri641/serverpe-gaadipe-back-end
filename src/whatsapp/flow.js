@@ -365,11 +365,15 @@ async function myMonitoring(mobile) {
         lines.push(`• Next alert: ${dayIn(s.next_alert.date)} — ${s.next_alert.kind === 'ending'
           ? 'monitoring ends soon' : `${DOC_NAME[s.next_alert.doc] || 'a document'} expires in ${s.next_alert.days} day${s.next_alert.days === 1 ? '' : 's'}`}`);
       }
+    } else if (s.stopped) {
+      // Switched off or removed before its end date (user, 2026-10-13: "'Ended 24 Oct 2026'
+      // doesn't make sense" — a date still ahead never "ended").
+      lines.push(s.ends_at ? `• Stopped early — it was to run till ${dayIn(s.ends_at)}` : '• Stopped early');
     } else if (s.ends_at) {
-      lines.push(`• Ended ${dayIn(s.ends_at)}`);
+      lines.push(`• Ended on ${dayIn(s.ends_at)}`);
     }
     if (s.next_document) lines.push(`• Next to expire: ${DOC_NAME[s.next_document.doc] || s.next_document.label} on ${dayIn(s.next_document.date)}`);
-    if (s.renew_paise) lines.push(`• Renew 28 days: *${rupeesOf(s.renew_paise)}* — send the vehicle number`);
+    if (s.renew_paise) lines.push(`• ${s.stopped ? 'Start again' : 'Renew'} for 28 days: *${rupeesOf(s.renew_paise)}* — send the vehicle number`);
     return lines.join('\n');
   });
   const more = rows.length > 6 ? `\n\n_…and ${rows.length - 6} more on gaadipe.in._` : '';
@@ -522,19 +526,22 @@ const OWNER_TERMS =
   // One account, any channel (Terms 4.1, 2026-10-07).
   + ' You also agree to receive messages about your account, checks and reports on WhatsApp, SMS or email — the same account works on gaadipe.in.'
   // The offers opt-in, in the same message (user, 2026-10-09: "no separate step"), as its own button.
-  + '\n\nTap *Agree + get offers* to also get occasional tips & offers here — at most one a week; reply STOP any time.';
+  + '\n\nTap *Agree, news & offers* to also get our newsletter and occasional offers here — at most one a week; reply STOP any time.';
 
 /*
  * AGREE, OR AGREE + OFFERS (user, 2026-10-09). One message, two buttons: the
  * Terms alone, or the Terms and the tips-&-offers opt-in in one tap. Marketing
  * stays a real, separate choice (DPDP; the promise in the Meta appeal) without
  * a separate step. WhatsApp allows 20 characters per button.
+ * Swapped and renamed (user, 2026-10-13: "swap the buttons; replace 'get offers'
+ * with 'get newsletter & offers'") — "Agree, news & offers" is that, in 20.
  */
 const AGREE_BUTTONS = () => [
+  { id: BTN.AGREE_OWNER_OFFERS, title: 'Agree, news & offers' },
   { id: BTN.AGREE_OWNER, title: 'Agree & continue' },
-  { id: BTN.AGREE_OWNER_OFFERS, title: 'Agree + get offers' },
 ];
-const AGREE_OFFERS_WORDS = 'Agree + get offers — I agree to the Terms, Privacy and Refund policies, and to receive occasional tips & offers from GaadiPe on WhatsApp (at most one a week; STOP any time).';
+// The exact words recorded with the opt-in (site/auth.setPromoConsent).
+const AGREE_OFFERS_WORDS = 'Agree, news & offers — I agree to the Terms, Privacy and Refund policies, and to receive the GaadiPe newsletter and occasional offers on WhatsApp (at most one a week; STOP any time).';
 
 const PARTNER_TERMS =
   'Good to have you! 🤝 Please read the partner terms first:\n\n'
@@ -2668,7 +2675,7 @@ async function handle(session, message, mobile) {
 
     case 'owner_consent':
       await send.buttons(mobile,
-        'Please tap *Agree & continue* (or *Agree + get offers*) above to proceed. '
+        'Please tap *Agree & continue* (or *Agree, news & offers*) above to proceed. '
         + 'Tap below to start again.',
         [{ id: BTN.CHECK_ANOTHER, title: 'Start again' }]);
       return;
