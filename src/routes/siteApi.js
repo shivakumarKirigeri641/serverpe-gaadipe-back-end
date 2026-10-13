@@ -800,22 +800,13 @@ router.get('/vehicles/:regNo/card', safe(async (req, res) => {
 router.delete('/vehicles/:regNo', safe(async (req, res) => {
   const parsed = plate.parse(req.params.regNo);
   if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
-  const { rows } = await db.query(
-    `UPDATE user_vehicles uv SET hidden_at = now(), hidden_count = uv.hidden_count + 1
-       FROM vehicles v
-      WHERE v.id = uv.vehicle_id AND uv.user_id = $1 AND v.reg_no = $2 AND uv.hidden_at IS NULL
-      RETURNING uv.vehicle_id`, [req.user.id, parsed.regNo]);
-  if (!rows.length) return res.status(404).json({ error: 'not_yours', message: 'This vehicle is not in your list.' });
-  const vehicleId = rows[0].vehicle_id;
-  const stopped = await db.query(
-    `UPDATE watches SET is_active = false, modified_at = now()
-      WHERE user_id = $1 AND vehicle_id = $2 AND is_active`, [req.user.id, vehicleId]);
-  await db.query(`INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'vehicle_removed', $3)`,
-    [req.user.id, vehicleId, JSON.stringify({ reg_no: parsed.regNo, alerts_stopped: stopped.rowCount })]);
+  // The same rule as WhatsApp's "Remove a vehicle" (vehicle/remove.js, 2026-10-13).
+  const out = await require('../vehicle/remove').removeForUser(req.user.id, parsed.regNo, { channel: 'web' });
+  if (!out.ok) return res.status(404).json({ error: 'not_yours', message: 'This vehicle is not in your list.' });
   await activity.record(req, { action: 'remove_vehicle', regNo: parsed.regNo });
-  require('../util/activity').log('🗑', `Removed ${parsed.regNo} from My vehicles${stopped.rowCount ? ' · alerts stopped' : ''}`,
+  require('../util/activity').log('🗑', `Removed ${parsed.regNo} from My vehicles${out.alerts_stopped ? ' · alerts stopped' : ''}`,
     { who: require('../util/activity').who(req.user.display_name || req.user.name, req.user.mobile) });
-  res.json({ ok: true, alerts_stopped: stopped.rowCount });
+  res.json({ ok: true, alerts_stopped: out.alerts_stopped });
 }));
 
 /**

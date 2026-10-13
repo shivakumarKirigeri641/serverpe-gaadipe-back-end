@@ -236,8 +236,9 @@ async function myVehicles(mobile, message) {
        FROM user_vehicles uv
        JOIN vehicles v ON v.id = uv.vehicle_id
       WHERE uv.user_id = $1
+        AND uv.hidden_at IS NULL            -- removed from My vehicles (here or on the website)
       ORDER BY uv.last_checked_at DESC NULLS LAST
-      LIMIT 11`, [user.id]);
+      LIMIT 10`, [user.id]);
 
   if (!rows.length) {
     await doors(mobile,
@@ -246,27 +247,27 @@ async function myVehicles(mobile, message) {
     return;
   }
 
-  if (rows.length === 1) {
-    await openVehicle(mobile, rows[0].reg_no, message, 'only vehicle');
-    return;
-  }
-
-  const more = rows.length > 10;
-  const shown = rows.slice(0, 10);
+  /*
+   * Always the list, now with "Remove a vehicle" as its last row (user, 2026-10-13) —
+   * even for one vehicle, which used to open straight away, so the way to remove it
+   * is always where the vehicles are. WhatsApp allows ten rows: nine vehicles.
+   */
+  const more = rows.length > 9;
+  const shown = rows.slice(0, 9);
   const out = await send.list(mobile, {
     body: more
-      ? 'Which vehicle? These are your ten most recent — for any other, just send me its number.'
+      ? 'Which vehicle? These are your most recent — for any other, just send me its number.'
       : 'Which vehicle?',
     button: 'My vehicles',
     sectionTitle: 'Checked by you',
-    rows: shown.map((r) => ({
+    rows: [...shown.map((r) => ({
       id: `veh:${r.reg_no}`,
       title: r.reg_no,
       description: [
         [r.maker, r.model].filter(Boolean).join(' ').slice(0, 30),
         r.has_report ? 'full report (PDF)' : 'basic details',
       ].filter(Boolean).join(' · '),
-    })),
+    })), { id: 'rm_pick', title: '🗑 Remove a vehicle', description: 'Take one off your list — its alerts stop' }],
   });
 
   // A list needs an open 24-hour window. If it is shut, say it in plain text
@@ -277,6 +278,62 @@ async function myVehicles(mobile, message) {
       + shown.map((r) => `• *${r.reg_no}* — ${r.has_report ? 'full report (PDF)' : 'basic details'}`).join('\n')
       + '\n\nSend me the number of the one you want.');
   }
+}
+
+/* ─────────────── REMOVE A VEHICLE (user, 2026-10-13; vehicle/remove.js) ── */
+
+/** "Remove a vehicle": which one? */
+async function removePick(mobile) {
+  const user = await store.upsertUser(mobile);
+  const { rows } = await db.query(
+    `SELECT v.reg_no, v.maker, v.model FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
+      WHERE uv.user_id = $1 AND uv.hidden_at IS NULL ORDER BY uv.last_checked_at DESC NULLS LAST LIMIT 10`, [user.id]);
+  if (!rows.length) { await doors(mobile, 'There is no vehicle in your list.'); return; }
+  const out = await send.list(mobile, {
+    body: '🗑 *Remove a vehicle*\n\nWhich one should come off your list? I will ask before removing it.'
+      + (rows.length >= 10 ? '\n\n_For any other, send *remove* and its number — like remove KA01XX1234._' : ''),
+    button: 'Choose vehicle',
+    sectionTitle: 'Remove which?',
+    rows: rows.map((r) => ({ id: `rm:${r.reg_no}`, title: r.reg_no, description: [r.maker, r.model].filter(Boolean).join(' ').slice(0, 60) || undefined })),
+  });
+  if (!out.ok) await send.text(mobile, 'Send *remove* and the vehicle number — like *remove KA01XX1234*.');
+}
+
+/*
+ * THE WARNING (user: "confirm warning for user that this vehicle will be removed and
+ * no more alerts will go"). Said plainly for what this vehicle has: paid monitoring
+ * and its date, a report still downloadable, or only the basic check.
+ */
+async function removeConfirm(mobile, regNo) {
+  const user = await store.upsertUser(mobile);
+  const d = await require('../vehicle/remove').describe(user.id, regNo);
+  if (!d) { await reply(mobile, `*${regNo}* is not in your list.`, [{ id: BTN.MY_VEHICLES, title: 'My vehicles' }, 'menu']); return; }
+  const lines = [`⚠️ *Remove ${regNo} from your list?*`, ''];
+  if (d.watched_until) {
+    lines.push(`🔕 ${d.paid ? 'Your paid monitoring' : 'Monitoring'} for it stops now${new Date(d.watched_until) > new Date()
+      ? ` (it was to run till ${dayIn(d.watched_until)})` : ''} — *no more alerts* about this vehicle: no challan alerts, expiry warnings or updates.`);
+    if (d.paid) lines.push('_The remaining days are not carried over to another vehicle._');
+  } else {
+    lines.push('🔕 No alerts will come for it.');
+  }
+  if (d.report_until) lines.push('', `📄 Your report stays in *My reports* until ${dayIn(d.report_until)}, and the invoice stays too.`);
+  lines.push('', 'You can check this number again any time — it comes back as a new entry.');
+  await reply(mobile, lines.join('\n'),
+    [{ id: `rm_yes:${regNo}`, title: 'Yes, remove' }, { id: 'rm_no', title: 'No, keep it' }]);
+}
+
+async function removeDo(mobile, regNo) {
+  const user = await store.upsertUser(mobile);
+  const out = await require('../vehicle/remove').removeForUser(user.id, regNo, { channel: 'whatsapp' });
+  await funnel(mobile, 'vehicle_removed', { reg_no: regNo, alerts_stopped: out.alerts_stopped || 0 });
+  if (!out.ok) {
+    await reply(mobile, `*${regNo}* was already off your list.`, [{ id: BTN.MY_VEHICLES, title: 'My vehicles' }, 'check', 'menu']);
+    return;
+  }
+  console.log('[wa] %s removed %s (alerts stopped: %d)', mobile, regNo, out.alerts_stopped);
+  await reply(mobile, `🗑 *${regNo}* is removed from your list${out.alerts_stopped ? ', and its alerts are stopped' : ''}.\n\n`
+    + 'Send the number again any time to check it.',
+  [{ id: BTN.MY_VEHICLES, title: 'My vehicles' }, 'check', 'menu']);
 }
 
 /**
@@ -1810,6 +1867,15 @@ async function handle(session, message, mobile) {
       return;
     }
 
+    // Remove a vehicle (2026-10-13): pick → the warning → Yes, remove / No, keep it.
+    if (intent.id === 'rm_pick') { await funnel(mobile, 'remove_pick'); await removePick(mobile); return; }
+    if (String(intent.id || '').startsWith('rm:')) { await removeConfirm(mobile, intent.id.slice(3)); return; }
+    if (String(intent.id || '').startsWith('rm_yes:')) { await removeDo(mobile, intent.id.slice(7)); return; }
+    if (intent.id === 'rm_no') {
+      await reply(mobile, '👍 Kept — nothing changed.', [{ id: BTN.MY_VEHICLES, title: 'My vehicles' }, 'check', 'menu']);
+      return;
+    }
+
     /*
      * "Check a vehicle" on a TEMPLATE (user, 2026-09-25) — the announcement's
      * quick reply. Its payload is the button's own text, not one of our ids,
@@ -2434,6 +2500,16 @@ async function handle(session, message, mobile) {
   }
   if (/^(report|pdf|document)s?\s*$/i.test(intent.text)) {
     await sendReports(mobile);
+    return;
+  }
+  // "remove KA01AB1234" typed (2026-10-13) — the same warning as the list's Remove.
+  const rmTyped = /^(remove|delete)\s+(?:vehicle\s+)?([a-z0-9 -]{5,15})\s*$/i.exec(intent.text || '');
+  if (rmTyped && await send.agreedTerms(mobile)) {
+    const parsed = plate.parse(rmTyped[2]);
+    if (parsed.ok) { await removeConfirm(mobile, parsed.regNo); return; }
+  }
+  if (/^(remove|delete)( a)?( vehicle)?\s*$/i.test(intent.text || '') && await send.agreedTerms(mobile)) {
+    await removePick(mobile);
     return;
   }
   // Owner verification by word as well as from the menu — only while it is on.

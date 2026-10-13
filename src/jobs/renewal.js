@@ -59,6 +59,10 @@ async function due(limit = 20) {
         AND s.vehicle_id IS NOT NULL
         AND u.deactivated_at IS NULL AND NOT u.is_paused
         AND s.ends_on BETWEEN CURRENT_DATE AND (CURRENT_DATE + $1::int)
+        -- Removed from My vehicles: no reminder about it either (user, 2026-10-13:
+        -- "no more alerts will go"; vehicle/remove.js).
+        AND NOT EXISTS (SELECT 1 FROM user_vehicles uv WHERE uv.user_id = s.user_id
+                         AND uv.vehicle_id = s.vehicle_id AND uv.hidden_at IS NOT NULL)
         /*
          * Said once per SUBSCRIPTION AND END DATE, not once per subscription.
          * A renewal extends the same row rather than creating a new one, so
