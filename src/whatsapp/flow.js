@@ -2242,12 +2242,15 @@ async function handle(session, message, mobile) {
         // tells us nothing until a webhook arrives; an order opened by Checkout
         // inside our page gives the browser a signed success callback, so the
         // subscription is active before they are back in this chat.
+        // The owner's own tries in test mode, as for reports (2026-10-13).
+        const test = await razorpay.isTestBuyer(user).catch(() => false);
         let order;
         try {
           order = await razorpay.createOrder({
             amountPaise: paise,
             receipt: `gp-${row.id}`,
-            notes: { reg_no: vehicle.reg_no, mobile, kind, payment_row: String(row.id) },
+            notes: { reg_no: vehicle.reg_no, mobile, kind, payment_row: String(row.id), ...(test ? { test_mode: 'owner' } : {}) },
+            test,
           });
         } catch (e) {
           console.error('[pay] order creation failed:', e.message);
@@ -2260,7 +2263,7 @@ async function handle(session, message, mobile) {
         await db.query(
           `UPDATE payments SET order_id = $2, checkout_token = $3,
                   raw = COALESCE(raw,'{}'::jsonb) || $4::jsonb WHERE id = $1`,
-          [row.id, order.id, token, JSON.stringify({ order_id: order.id })]);
+          [row.id, order.id, token, JSON.stringify({ order_id: order.id, ...(test ? { test_mode: true } : {}) })]);
 
         const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
         if (!base) {
@@ -2395,6 +2398,11 @@ async function handle(session, message, mobile) {
           return;
         }
 
+        /* THE OWNER PAYS IN TEST MODE (user, 2026-10-13: "for both WhatsApp & web, as
+           admin (me), use test mode for transactions") — Razorpay test keys, booked
+           at ₹0, as on the website (razorpay.isTestBuyer: pay_test_mobiles + internal). */
+        const test = await razorpay.isTestBuyer(user).catch(() => false);
+
         // A tap twice on the same button reuses the unpaid order rather than
         // opening a second one that could be paid as well.
         let row = await db.one(
@@ -2402,8 +2410,9 @@ async function handle(session, message, mobile) {
             WHERE user_id = $1 AND plan_id = $2 AND status = 'created'
               AND checkout_token IS NOT NULL
               AND (raw->>'vehicle_id')::bigint = $3
+              AND coalesce((raw->>'test_mode')::boolean, false) = $4
               AND created_at > now() - interval '1 hour'
-            ORDER BY id DESC LIMIT 1`, [user.id, plan.id, vehicle.id]);
+            ORDER BY id DESC LIMIT 1`, [user.id, plan.id, vehicle.id, test]);
 
         if (!row) {
           await db.query(
@@ -2427,7 +2436,8 @@ async function handle(session, message, mobile) {
               // captured payment whose browser callback was lost is never
               // activated.
               notes: { reference_id: `gp-${pending.id}`, reg_no: vehicle.reg_no,
-                       mobile, plan: plan.code },
+                       mobile, plan: plan.code, ...(test ? { test_mode: 'owner' } : {}) },
+              test,
             });
             if (!order?.id) throw new Error('no order id returned');
           } catch (e) {
@@ -2442,7 +2452,8 @@ async function handle(session, message, mobile) {
             `UPDATE payments SET order_id = $2, checkout_token = $3,
                     raw = COALESCE(raw,'{}'::jsonb) || $4::jsonb
               WHERE id = $1 RETURNING *`,
-            [pending.id, order.id, token, JSON.stringify({ order_id: order.id })])).rows[0];
+            [pending.id, order.id, token, JSON.stringify({ order_id: order.id, ...(test ? { test_mode: true } : {}) })])).rows[0];
+          if (test) console.log('[pay] TEST-mode order %s for the owner on WhatsApp (payment row %d)', order.id, pending.id);
         }
 
         await setState(mobile, 'awaiting_payment', `order ${row.order_id}`);
