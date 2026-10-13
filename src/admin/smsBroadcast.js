@@ -27,6 +27,22 @@ const fill = (text, vals) => {
   return String(text || '').replace(/\{#var#\}/gi, () => (vals[i++] ?? '…'));
 };
 
+/*
+ * ONE SMS (user, 2026-10-13: "what I type for all 3 values must fit 160 characters").
+ * The whole message, values filled in, must be one SMS: 160 characters in the GSM
+ * alphabet, or 70 once any other character is in it (₹, emoji, Hindi — Unicode).
+ * Characters from the GSM extension table (^ { } \ [ ] ~ | €) take two places.
+ */
+const GSM = '@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !"#¤%&\'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà';
+const GSM_EXT = '^{}\\[~]|€';
+function smsLength(text) {
+  const s = String(text || '');
+  const unicode = [...s].some((c) => !GSM.includes(c) && !GSM_EXT.includes(c));
+  if (unicode) return { unicode: true, length: [...s].length, limit: 70 };
+  const length = [...s].reduce((n, c) => n + (GSM_EXT.includes(c) ? 2 : 1), 0);
+  return { unicode: false, length, limit: 160 };
+}
+
 /** Now if inside 10 am – 9 pm IST, else the next 10 am. */
 function nextWindow(at = new Date()) {
   const ist = new Date(at.getTime() + 5.5 * 3600e3);
@@ -120,6 +136,11 @@ async function send({ userIds = [], vals = [], note = '' }, adminId) {
   if (v.length !== t.vars || v.some((x) => !x)) return { ok: false, error: `The template needs all ${t.vars} values.` };
   const long = v.findIndex((x) => x.length > VAR_MAX);
   if (long >= 0) return { ok: false, error: `Value ${long + 1} is longer than ${VAR_MAX} characters — DLT would cut it.` };
+  const size = smsLength(fill(t.text, v));
+  if (size.length > size.limit) {
+    return { ok: false, error: `The message is ${size.length} characters — one SMS holds ${size.limit}${size.unicode
+      ? ' because it has a special character (like ₹, an emoji or Hindi); plain text allows 160' : ''}. Shorten the values.` };
+  }
   const ids = [...new Set((userIds || []).map(String).filter((x) => /^\d+$/.test(x)))];
   if (!ids.length) return { ok: false, error: 'Choose at least one customer.' };
 
@@ -148,4 +169,4 @@ async function cancel(batch) {
   return { ok: true, cancelled: rowCount };
 }
 
-module.exports = { overview, recipients, send, cancel, fill, nextWindow };
+module.exports = { overview, recipients, send, cancel, fill, nextWindow, smsLength };
