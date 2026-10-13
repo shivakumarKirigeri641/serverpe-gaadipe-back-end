@@ -190,7 +190,8 @@ async function sendTemplateRaw(kind, mobile, values = []) {
   if (!KINDS.includes(kind)) return { ok: false, error: 'unknown_kind' };
   const settings = require('./settings');
   // The master switch is for the automatic SMS; a manual or promotional send from the admin is a decision of its own.
-  if (!['manual', 'promo'].includes(kind) && !(await settings.bool('sms_alerts_enabled', false))) return { ok: false, skipped: true, error: 'sms_alerts_off' };
+  // 'service' too (2026-10-13): only ever sent by hand, from the admin's SMS broadcast or the web admin.
+  if (!['manual', 'promo', 'service'].includes(kind) && !(await settings.bool('sms_alerts_enabled', false))) return { ok: false, skipped: true, error: 'sms_alerts_off' };
   const messageId = String(await settings.get(`sms_tpl_${kind}`, '') || '').trim();
   if (!messageId) return { ok: false, skipped: true, error: `no approved template for ${kind}` };
   const m = String(mobile || '').replace(/\D/g, '').slice(-10);

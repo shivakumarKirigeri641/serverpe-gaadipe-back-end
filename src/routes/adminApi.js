@@ -884,13 +884,14 @@ router.post('/customers/:id/vehicles/remove-all', needs('block'), safe(async (re
 /* SMS broadcast — the promotional DLT template, opted-in customers only (2026-10-13; admin/smsBroadcast.js). */
 router.get('/sms-broadcast', safe(async (req, res) => {
   const S = require('../admin/smsBroadcast');
-  res.json({ ...(await S.overview()), people: await S.recipients({ filter: req.query.filter || 'all', q: req.query.q || '' }) });
+  const mode = req.query.mode === 'service' ? 'service' : 'promo';
+  res.json({ ...(await S.overview(mode)), people: await S.recipients({ mode, filter: req.query.filter || 'all', q: req.query.q || '' }) });
 }));
 router.post('/sms-broadcast/send', needs('settings'), safe(async (req, res) => {
-  const out = await require('../admin/smsBroadcast').send({ userIds: req.body?.user_ids, vals: req.body?.vals, note: req.body?.note }, req.admin.id);
+  const out = await require('../admin/smsBroadcast').send({ mode: req.body?.mode, userIds: req.body?.user_ids, vals: req.body?.vals, note: req.body?.note }, req.admin.id);
   if (!out.ok) return res.status(400).json({ error: 'cannot', message: out.error });
   await auth.audit({ adminId: req.admin.id, action: 'sms_promo_broadcast', ip: ipOf(req),
-                     detail: { queued: out.queued, not_opted: out.not_opted, over_cap: out.over_cap, vals: req.body?.vals, batch: out.batch } });
+                     detail: { mode: out.mode, queued: out.queued, not_opted: out.not_opted, over_cap: out.over_cap, vals: req.body?.vals, batch: out.batch } });
   res.json(out);
 }));
 router.post('/sms-broadcast/cancel', needs('settings'), safe(async (req, res) => {
