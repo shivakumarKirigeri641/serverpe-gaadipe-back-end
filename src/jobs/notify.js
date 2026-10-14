@@ -11,6 +11,7 @@
  *   feedback       a feedback note
  *   wa_hi          someone said Hi on WhatsApp
  *   wa_check       a vehicle checked on WhatsApp — found, or not
+ *   wa_agreed      agreed to the Terms on WhatsApp, and whether to offers
  *   wa_opt_out     someone replied STOP
  *   left_at_pay    a ₹19 payment link opened and not paid within 30 minutes
  *   daily_summary  the day's figures, once, at 11:55 pm IST (daily_summary_hour_ist)
@@ -489,7 +490,6 @@ async function payments() {
     `SELECT p.id FROM payments p
       WHERE p.status = 'paid' AND p.paid_at > now() - interval '1 day'
         AND p.gateway <> 'free'  -- a free report (referral / owner grant) is not a payment
-        AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'  -- website payments only (2026-10-07)
         AND (EXISTS (SELECT 1 FROM invoices i WHERE i.payment_id = p.id) OR p.paid_at < now() - interval '3 minutes')
         AND ${notDone('payment', 'p.id::text')}
       ORDER BY p.id LIMIT 10`);
@@ -788,6 +788,46 @@ async function waHi() {
         }),
       };
     }) ? 1 : 0;
+  }
+  return n;
+}
+
+/*
+ * AGREED (user, 2026-10-14: "mails when user says Hi, Agree & agreeing for offers").
+ * 'agreed' is the Terms tap — offers says which button ("Agree, news & offers" or
+ * "Agree & continue"); 'offers_answer' is the later Yes / No to tips & offers.
+ * Switch: notify_wa_agreed.
+ */
+async function waAgreed() {
+  if (!(await on('notify_wa_agreed'))) return 0;
+  let n = 0;
+  for (const step of ['agreed', 'offers_answer']) {
+    for (const e of await funnelEvents(step, 'wa_agreed')) {
+      const d = e.detail || {};
+      const offers = d.offers === true;
+      n += await deliver('wa_agreed', e.id, async () => {
+        const w = await whoIs(d.mobile);
+        const what = step === 'agreed'
+          ? (offers ? 'Agreed to the Terms + news & offers' : 'Agreed to the Terms (no offers)')
+          : (offers ? 'Said yes to tips & offers' : 'Said no to tips & offers');
+        return {
+          subject: `${offers ? '✅🎁' : '✅'} ${what} · ${nameOf(w, d.mobile)}`,
+          ...T.layout({
+            badge: { text: what, tone: offers ? 'good' : 'info' },
+            title: `${nameOf(w, d.mobile)}: ${what.toLowerCase()}`,
+            lead: `${T.ist(e.created_at)} on WhatsApp.${step === 'agreed' ? ' They can now check vehicles and are counted as a customer.' : ''}`,
+            sections: [{ heading: 'Who', rows: [
+              ['WhatsApp name', w?.profile_name || 'Not shown'],
+              ['Mobile', T.mobile(d.mobile)],
+              ['News & offers', offers ? 'Yes — can get promotional messages' : 'No — service messages only'],
+              ['Vehicles checked', String(w?.vehicles ?? 0)],
+              ['Paid before', w?.paid ? `Yes (${w.paid})` : 'No'],
+            ] }],
+            cta: { label: 'Open Live', path: '/live' },
+          }),
+        };
+      }) ? 1 : 0;
+    }
   }
   return n;
 }
@@ -1221,11 +1261,12 @@ async function dailySummary() {
 async function runOnce() {
   if (!mailer.configured()) return { skipped: 'mail not configured' };
   const out = {};
-  /* NO EMAIL FROM WHATSAPP ACTIVITY (user, 2026-10-07: "stop all mails triggering
-     from WhatsApp"). WhatsApp is retired: "said hi", WhatsApp checks, STOP and its
-     reason, left at the WhatsApp payment link and the WhatsApp summary no longer
-     run; payments and alerts below mail only the website's. */
+  /* WHATSAPP EMAILS BACK (user, 2026-10-14: "yes i want whatsapp emails back"; they
+     were stopped 7 Oct). Said Hi, agreed (and to offers), vehicle checked, STOP and
+     its reason, left at the payment link; payments mail both channels again. Each
+     has its own switch in Settings → Emails to you. */
   for (const [k, fn] of Object.entries({ visits, signIns, webChecks, chatChecks, pushOn, freeMonitorStarted, checksMonthUsed, reachDone, payments, contacts, feedback,
+                                            waHi, waAgreed, waChecks, waOptOut, leftAtPayment,
                                             alertMails, security, dailySummary, weeklyMoney, weeklyDigest })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
@@ -1336,5 +1377,5 @@ function start(everySeconds = 30) {
   console.log(`  admin email: every ${everySeconds}s from ${process.env.NOREPLYMAIL}`);
 }
 
-module.exports = { start, runOnce, visits, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waChecks, waOptOut,
+module.exports = { start, runOnce, visits, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waAgreed, waChecks, waOptOut,
                    leftAtPayment, security, dailySummary, weeklyMoney, whatsappSummary, weeklyDigest };

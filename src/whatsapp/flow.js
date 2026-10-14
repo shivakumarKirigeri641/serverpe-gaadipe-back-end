@@ -2083,7 +2083,8 @@ async function handle(session, message, mobile) {
       // falls through: the Terms are agreed exactly as with "Agree & continue"
       case BTN.AGREE_OWNER:
         await recordConsent(mobile, 'owner', ['terms', 'privacy', 'refund']);
-        await funnel(mobile, 'agreed');
+        // offers: which button — the admin's "agreed" email says so (jobs/notify.js waAgreed).
+        await funnel(mobile, 'agreed', { offers: intent.id === BTN.AGREE_OWNER_OFFERS });
         await setState(mobile, 'owner_start', 'consent given');
         await doors(mobile,
           'Thank you. ✅\n\n'
@@ -2099,6 +2100,7 @@ async function handle(session, message, mobile) {
         await db.query(
           `UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
           [mobile, JSON.stringify({ offers_answer: yes ? 'yes' : 'no', offers_answered_at: new Date().toISOString() })]);
+        await funnel(mobile, 'offers_answer', { offers: yes });
         await reply(mobile, yes
           ? '✅ Thank you — you will get occasional tips & offers here, at most one a week. Reply *STOP* any time to stop them.'
           : '👍 No problem — no offers. You will still get your reports and the alerts you asked for.',
