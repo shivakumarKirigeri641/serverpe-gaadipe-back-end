@@ -905,7 +905,7 @@ router.post('/check', safe(async (req, res) => {
 /* My subscriptions — monitoring, its dates and the next alert (user, 2026-10-10; site/subscriptions.js). */
 router.get('/subscriptions', safe(async (req, res) => res.json(await require('../site/subscriptions').forUser(req.user.id))));
 /*
- * REPLACE VEHICLE (user, 2026-10-13; pay/replace.js): ₹9 + GST moves running paid
+ * REPLACE VEHICLE (user, 2026-10-13; pay/replace.js): ₹11 incl. GST (was ₹9 + GST until 14 Oct) moves running paid
  * monitoring to another vehicle. quote: looks the new vehicle up (a check) and says
  * what will happen; buy: opens the checkout, as /buy does.
  */

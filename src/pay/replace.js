@@ -2,8 +2,8 @@
  * src/pay/replace.js — REPLACE VEHICLE (user, 2026-10-13: "small fee 9 + GST for
  * replace vehicle rather than move vehicle, because most people won't understand").
  *
- * Paid monitoring that is running moves from vehicle A to vehicle B for ₹10.62
- * (plan REPLACE9, migration 163):
+ * Paid monitoring that is running moves from vehicle A to vehicle B for ₹11 including
+ * GST — ₹9.32 + ₹1.68 (plan REPLACE9; ₹10.62 from migration 163 until 172, 2026-10-14):
  *   - the subscription keeps its end date — the days left carry over, none added
  *   - A comes off the customer's list and every alert for it stops
  *     (vehicle/remove.js rules); A's report and invoice stay

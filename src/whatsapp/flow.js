@@ -404,8 +404,14 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
 /* ─────────────────────────── the menu's own pages (user, 2026-10-12) ── */
 
 const dayIn = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
-// ₹19 and ₹11 stay whole; ₹10.62 (replace, ₹9 + GST) keeps its paise.
+// ₹19 and ₹11 stay whole; an amount with paise (₹10.62) keeps them.
 const rupeesOf = (paise) => `₹${(Number(paise || 0) / 100).toFixed(Number(paise || 0) % 100 ? 2 : 0)}`;
+/* " (₹9.32 + ₹1.68 GST)" — what an inclusive amount is made of, at 18% (2026-10-14: replace ₹11). */
+const gstBreak = (paise) => {
+  const total = Number(paise || 0);
+  const taxable = Math.round(total / 1.18);
+  return total ? ` (₹${(taxable / 100).toFixed(2)} + ₹${((total - taxable) / 100).toFixed(2)} GST)` : '';
+};
 const DOC_NAME = { insurance_upto: 'Insurance', pucc_upto: 'PUC', tax_upto: 'Road tax', fitness_upto: 'Fitness', permit_upto: 'Permit' };
 
 /** "My monitoring": each watched vehicle as on the website's My subscriptions (site/subscriptions.js). */
@@ -497,7 +503,7 @@ async function replaceAsk(mobile, fromReg) {
     [mobile, JSON.stringify({ replace_from: fromReg, replace_to: null })]);
   await setState(mobile, 'replace_to', `replace ${fromReg}`);
   await send.text(mobile, `🔁 *Replace ${fromReg}*\n\nType the *new vehicle number* — like *KA01XX1234*.\n\n`
-    + `Its monitoring moves there until *${dayIn(e.ends_on)}*, for *${rupeesOf(e.price_paise)}* (₹9 + GST). `
+    + `Its monitoring moves there until *${dayIn(e.ends_on)}*, for *${rupeesOf(e.price_paise)}* (GST included). `
     + 'I will show you the vehicle before you pay.\n\n_Send *hi* to cancel._');
 }
 
@@ -521,7 +527,7 @@ async function replaceConfirm(mobile, toRaw) {
     + `• Monitoring moves to ${p.to.reg_no} until *${dayIn(p.ends_on)}* — new challans and document expiry warnings.\n`
     + `• ${fromReg} comes off your list and its alerts stop; its report stays in My reports.\n`
     + `• The full report of ${p.to.reg_no} is not included.\n\n`
-    + `Fee: *${rupeesOf(p.price_paise)}* (₹9 + GST). This can be done once for this purchase.\n\n`
+    + `Fee: *${rupeesOf(p.price_paise)}*, inclusive of GST${gstBreak(p.price_paise)}. This can be done once for this purchase.\n\n`
     + `_By paying you agree to our Terms (${SITE}/terms), Refund (${SITE}/refund) and Privacy (${SITE}/privacy) policies._`,
   [{ id: 'rp_pay', title: `Pay ${rupeesOf(p.price_paise)}` }, { id: 'rp_cancel', title: 'Cancel' }]);
 }
@@ -609,7 +615,7 @@ async function currentOffers(mobile) {
       lines.push(`🔄 *Renew for ${rupeesOf(plan.renewal_paise)}* — the same vehicle${renewDays > 0 ? ` within ${renewDays} days of its last report` : ''}.`);
     }
   }
-  if (replace) lines.push(`🔁 *Changed your vehicle?* Move your monitoring to it for ${rupeesOf(replace.price_paise)} (₹9 + GST).`);
+  if (replace) lines.push(`🔁 *Changed your vehicle?* Move your monitoring to it for ${rupeesOf(replace.price_paise)}, GST included.`);
   await reply(mobile, lines.join('\n'), ['check', { id: BTN.MY_MONITORING, title: 'My monitoring' }, 'menu']);
 }
 
