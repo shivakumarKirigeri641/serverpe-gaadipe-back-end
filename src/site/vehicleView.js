@@ -52,6 +52,7 @@ function basic(data, { detail = 'count' } = {}) {
     pretty: data.vehicle_number_pretty || data.vehicle_number,
     paid: false,
     identity: {
+      kind: kindOf(rc),
       maker: rc.maker || null,
       // VAHAN carries the variant inside the model ("H/H.SPLENDOR PLUS"), so
       // the two are one field rather than an invented split.
@@ -136,6 +137,7 @@ function identity(data, { variant = false, owner = false } = {}) {
     paid: false,
     detail: 'identity',
     identity: {
+      kind: kindOf(rc),
       maker: rc.maker || null,
       model: variant ? (cleanModel(rc.model) || m.name) : m.name,
       variant_hidden: variant ? false : m.hidden,
@@ -167,6 +169,7 @@ function publicView(data) {
     paid: false,
     detail: 'public',
     identity: {
+      kind: kindOf(rc),
       maker: rc.maker || null,
       model: cleanModel(rc.model),
       vehicle_class: rc.vehicle_class || null,
@@ -219,13 +222,42 @@ async function rtoOf(regNo) {
   const row = await require('../db').one(
     `SELECT code, state_code, office, district FROM rtos WHERE code = $1`, [code]).catch(() => null);
   const state = row?.state_code || code.slice(0, 2);
+  // The state's own transport website and helpline (2026-10-14, site/stateTransport.js).
+  const dept = await require('./stateTransport').forState(state).catch(() => null);
   return {
     code: `${code.slice(0, 2)}-${code.slice(2)}`,
     office: row?.office ? row.office.replace(/\s*\((previously|formerly|earlier)[^)]*\)/gi, '').trim() : null,
     district: row?.district && row.district.length <= 60 ? row.district : null,
     state: geo.STATES[state] || state,
-    website: 'https://parivahan.gov.in',
+    website: dept?.website || 'https://parivahan.gov.in',
+    website_label: dept?.website_label || 'parivahan.gov.in',
+    helpline: dept?.helpline || null,
   };
+}
+
+/*
+ * WHICH PICTURE (user, 2026-10-14: "CarInfo shows the vehicle's image"). Our own drawings
+ * by type, never a maker's photo — picked from the record's body type, class and category,
+ * and for two-wheelers the model name (a scooter and a motorcycle share one class):
+ *   car · hatchback · suv · bike · scooter · auto · truck · bus · tractor · vehicle
+ */
+const SCOOTERS = /\b(ACTIVA|JUPITER|ACCESS|DIO|NTORQ|PLEASURE|MAESTRO|FASCINO|RAY ?ZR|BURGMAN|AVENIS|VESPA|APRILIA SR|ATHER|CHETAK|IQUBE|DESTINI|XOOM|ZEST|WEGO|SCOOTY|PEP|ETHER|OLA|S1|AEROX|GRAZIA|LETS|SWISH|RIDE|VIDA|FLOW|NYX|OPTIMA|PHOTON|MAGNUS|EV)\b/;
+function kindOf(rc = {}) {
+  const all = `${rc.vehicle_class || ''} ${rc.vehicle_category || ''} ${rc.body_type || ''}`.toUpperCase();
+  const body = String(rc.body_type || '').toUpperCase();
+  if (/TRACTOR|HARVESTER/.test(all)) return 'tractor';
+  if (/\bBUS\b|OMNI ?BUS|STAGE CARRIAGE|SCHOOL BUS/.test(all)) return 'bus';
+  if (/3W|THREE ?WHEEL|E-?RICKSHAW|AUTO ?RICKSHAW|\bAUTO\b/.test(all)) return 'auto';
+  if (/GOODS|TRUCK|LORRY|TIPPER|TANKER|TRAILER|\b[LMH]GV\b|PICK ?UP|DELIVERY VAN/.test(all) && !/M-?CYCLE|SCOOTER|2W/.test(all)) return 'truck';
+  if (/M-?CYCLE|MOTOR ?CYCLE|SCOOTER|MOPED|2W/.test(all)) {
+    return SCOOTERS.test(`${rc.model || ''}`.toUpperCase()) ? 'scooter' : 'bike';
+  }
+  if (/MOTOR CAR|\bCAR\b|LMV|CAB|JEEP|OMNI|MAXI/.test(all)) {
+    if (/SUV|SPORTS UTILITY|MUV|MULTI ?UTILITY|JEEP/.test(body)) return 'suv';
+    if (/HATCH/.test(body)) return 'hatchback';
+    return 'car';
+  }
+  return 'vehicle';
 }
 
 /*
@@ -278,6 +310,7 @@ function full(data) {
     paid: true,
     locked: null,
     identity: {
+      kind: kindOf(rc),
       maker: rc.maker || null,
       model: cleanModel(rc.model) || rc.model || null,
       vehicle_class: rc.vehicle_class || null,
@@ -366,4 +399,4 @@ const one = (p) => ({
   status: p.sent_to_court || p.sent_to_virtual_court ? 'In court' : (p.status || 'Pending'),
 });
 
-module.exports = { basic, full, identity, modelName, rtoOf, verdict, publicView, cleanModel };
+module.exports = { basic, full, identity, modelName, rtoOf, verdict, publicView, cleanModel, kindOf };
