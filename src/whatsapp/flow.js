@@ -580,8 +580,10 @@ async function whatYouGet(mobile) {
   const renew = plan && Number(plan.renewal_paise) > 0 ? rupeesOf(plan.renewal_paise) : null;
   const days = plan?.duration_days || 28;
   await reply(mobile, '💡 *What you get with GaadiPe*\n\n'
-    + '✅ *Free check* — send any vehicle number: make, model, and what needs attention.\n\n'
-    + `📋 *Full report — ${price}* — insurance, PUC, road tax, fitness, permit, loan, blacklist and every pending challan, as a PDF.\n\n`
+    + '✅ *Free check* — send any vehicle number: the vehicle, the owner’s name (masked), registration date and age, RC status, '
+    + 'seats and weight, the RTO, every validity date (insurance, PUC, road tax, fitness, permit) and how many challans are pending, with the total.\n\n'
+    + `📋 *Full report — ${price}* — adds the loan / hypothecation, blacklist and NOC, each challan with offence and place, number of owners, `
+    + 'insurer and policy, FASTag, and what to check before you buy — as a PDF.\n\n'
     + `🔔 *${days} days of monitoring included* — a message before any document expires, and when a new challan appears.\n\n`
     + (renew ? `🔄 *Renew for ${renew}* — another ${days} days.\n\n` : '')
     + '🚛 *Fleets (5+ vehicles)* — one Excel report of every vehicle, by email, every evening.\n\n'
@@ -1559,8 +1561,12 @@ async function deliverReport(mobile, regNo, message) {
   const badge = await owners.isOwner(mobile, regNo) ? '✅ *Owner verified* — your vehicle\n\n' : '';
   // Its verified owner is told of this check (owners/checkAlerts.js) — and so is the checker.
   const watched = await require('../owners/checkAlerts').checkerNotice(regNo, mobile).catch(() => null);
+  // 'public' (2026-10-14): the website's signed-in view — Agree is the sign-in on WhatsApp.
+  const freeDetail = String(await settings.get('whatsapp_free_view_detail', 'count')).toLowerCase();
+  const price = plan ? `₹${Math.round(plan.price_paise / 100)}` : undefined;
   await send.text(mobile, badge + (watched ? `${watched}\n\n` : '') + (bought
     ? await report.buildFor(data, { detailed: true })
+    : freeDetail === 'public' ? await report.publicText(data, price ? { price } : {})
     : report.basic(data, {
       ...(plan ? { price: `₹${Math.round(plan.price_paise / 100)}` } : {}),
       // WhatsApp's own free level (user, 2026-09-28): 'labels' names what needs

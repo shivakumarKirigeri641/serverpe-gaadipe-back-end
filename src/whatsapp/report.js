@@ -452,5 +452,71 @@ async function buildFor(data, opts = {}) {
   });
 }
 
-module.exports = { build, buildFor, basic, attentionCount, attentionLabels, attentionSummary, safeRc, documentsOf, human,
+/*
+ * THE FREE CHECK AT THE WEBSITE'S SIGNED-IN LEVEL (user, 2026-10-14: "CarInfo shows almost
+ * everything after sign-in — show the same on WhatsApp, it is already signed in"). On
+ * WhatsApp, Agree is the sign-in, so whatsapp_free_view_detail = 'public' shows what the
+ * website shows a signed-in visitor (site/vehicleView.js publicView): the vehicle, the owner
+ * masked, registration date and age, RC status, norms, seats, weight, the RTO with its
+ * state's website, every validity date, and how many challans are pending with their total.
+ * The loan, blacklist and NOC, each challan, owners, insurer, FASTag and the verdict stay
+ * in the ₹19 report.
+ */
+async function publicText(data, { price = '₹19' } = {}) {
+  const view = require('../site/vehicleView');        // here, not at the top: it requires this file
+  const v = view.publicView(data);
+  const id = v.identity;
+  const rto = await view.rtoOf(data.vehicle_number).catch(() => null);
+  const make = String(id.maker || '')
+    .replace(/\(P\)|\bPVT\.?|\bPRIVATE\b|\bLTD\.?|\bLIMITED\b|\bINDIA\b|\bCO\.?$/gi, '')
+    .replace(/[\s.,]+$/, '').replace(/\s+/g, ' ').trim();
+  const reg = id.reg_date ? new Date(id.reg_date) : null;
+  let age = null;
+  if (reg && !Number.isNaN(reg.getTime())) {
+    const months = (new Date().getFullYear() - reg.getFullYear()) * 12 + (new Date().getMonth() - reg.getMonth());
+    if (months >= 0) age = `${Math.floor(months / 12)} yr ${months % 12} mo old`;
+  }
+
+  const lines = [`🚗 *${data.vehicle_number}*`, ''];
+  const row = (label, val) => { if (val != null && val !== '') lines.push(`${label}: *${val}*`); };
+  row('Vehicle', [make && titleCase(make), id.model].filter(Boolean).join(' '));
+  row('Fuel · type', [id.fuel, id.vehicle_class].filter(Boolean).map((x) => titleCase(x)).join(' · '));
+  // The mask's stars would read as WhatsApp's bold marker: dots instead, not in bold.
+  if (id.owner_masked) lines.push(`Owner: ${String(id.owner_masked).replace(/\*/g, '•')} _(masked)_`);
+  row('Registered', reg && !Number.isNaN(reg.getTime()) ? `${fmtDate(reg)}${age ? ` · ${age}` : ''}` : null);
+  row('RC status', id.rc_status && titleCase(id.rc_status));
+  row('Emission norms', id.norms);
+  row('Seats', Number(id.seats) > 0 ? id.seats : null);
+  row('Unladen weight', Number(id.unladen_weight) > 0 ? `${id.unladen_weight} kg` : null);
+  if (rto) {
+    lines.push(`RTO: *${rto.code}*${[rto.office, rto.state].filter(Boolean).length ? ` · ${[rto.office, rto.state].filter(Boolean).join(', ')}` : ''}`);
+    lines.push(`🌐 ${rto.website}${rto.helpline ? ` · 📞 ${rto.helpline}` : ''}`);
+  }
+
+  if (v.documents.length) {
+    lines.push('', '*Validity*');
+    for (const d of v.documents) {
+      const icon = d.state === 'expired' ? '❌' : d.state === 'due' ? '⚠️' : '✅';
+      // "expired 6 days ago" · "expires today" · "expires in 5 months" (human() above).
+      const when = d.days < 0 ? `expired ${human(d.days)}` : d.days === 0 ? 'expires today' : `expires ${human(d.days)}`;
+      lines.push(`${icon} ${d.name}: *${fmtDate(new Date(d.valid_until))}* · ${when}`);
+    }
+  }
+  // Only when the challan record was actually read — no record is not "none pending".
+  if (data.challans) {
+    const n = v.found.challans_pending;
+    const amt = v.found.challans_amount_paise;
+    lines.push('', n
+      ? `🚨 Challans: *${n} pending*${amt ? ` · *₹${Math.round(amt / 100).toLocaleString('en-IN')}* in all` : ''}`
+      : '✅ Challans: *none pending*');
+  }
+
+  lines.push('', `🔒 *In the full report for ${price}:* loan / hypothecation, blacklist and NOC, each challan with `
+    + 'offence and place, number of owners, insurer and policy, FASTag, and what to check before you buy — '
+    + 'as a PDF, with 28 days of expiry and challan alerts.');
+  lines.push('', `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · Government records_`);
+  return lines.join('\n');
+}
+
+module.exports = { build, buildFor, basic, publicText, attentionCount, attentionLabels, attentionSummary, safeRc, documentsOf, human,
                    maskName, maskNumber, maskFirst, titleCase, NEVER_SHOW };
