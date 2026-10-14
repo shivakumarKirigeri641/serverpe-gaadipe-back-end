@@ -624,6 +624,24 @@ router.post('/whatsapp/reply', needs('settings'), safe(async (req, res) => {
     res.json(out);
   } catch (e) { fail(res, e); }
 }));
+/* One message to many open chats, from Hot leads (2026-10-14; admin/replyMany.js). */
+router.post('/whatsapp/reply-many', needs('settings'), safe(async (req, res) => {
+  try {
+    const out = await require('../admin/replyMany').start({
+      mobiles: req.body?.mobiles, text: req.body?.text, buttons: req.body?.buttons, adminId: req.admin.id });
+    await auth.audit({ adminId: req.admin.id, action: 'whatsapp_reply_many', ip: ipOf(req),
+      detail: { people: out.total, length: String(req.body?.text || '').length, buttons: (req.body?.buttons || []).length } });
+    res.json(out);
+  } catch (e) { fail(res, e); }
+}));
+router.get('/whatsapp/reply-many/:id', safe(async (req, res) => {
+  const out = require('../admin/replyMany').get(req.params.id);
+  return out ? res.json(out) : res.status(404).json({ error: 'Not found — the server may have restarted.' });
+}));
+router.post('/whatsapp/reply-many/:id/stop', needs('settings'), safe(async (req, res) => {
+  const out = require('../admin/replyMany').stop(req.params.id);
+  return out ? res.json(out) : res.status(404).json({ error: 'Not found.' });
+}));
 /* The buttons a reply may carry, and what each does (2026-10-13; whatsapp/replyButtons.js). */
 router.get('/whatsapp/reply-buttons', safe(async (_req, res) => res.json({ buttons: require('../whatsapp/replyButtons').CATALOG })));
 
