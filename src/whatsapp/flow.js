@@ -705,6 +705,9 @@ const STEP_WORDS = {
   alert_paused: () => ['⏸', 'Paused a vehicle\'s alerts for 30 days'],
   alert_pause_cancelled: () => ['▶️', 'Kept alerts on (did not pause)'],
   alert_resumed: () => ['▶️', 'Resumed alerts'],
+  renewal_renew: (d) => ['🔄', `Tapped "Renew now" on the renewal reminder${d.reg_no ? ` · ${d.reg_no}` : ''}`],
+  renewal_monitoring: () => ['📋', 'Tapped "My monitoring" on the renewal reminder'],
+  renewal_not_now: (d) => ['🙅', `Tapped "Not now" on the renewal reminder${d.reg_no ? ` · ${d.reg_no}` : ''}`],
 };
 function stepWords(step, d) {
   if (STEP_WORDS[step]) return STEP_WORDS[step](d);
@@ -1698,6 +1701,35 @@ async function afterReport(mobile, regNo) {
      { id: BTN.MENU,          title: 'Menu' }]).catch(() => {});
 }
 
+/*
+ * THE RENEWAL REMINDER'S BUTTONS (user, 2026-10-14: "we need repliable buttons to make our
+ * reply rating higher"). gp_renewal_en_v1 carries three quick replies, in this order, whose
+ * payloads jobs/renewal.js sets to ren|<action>|<vehicle number>:
+ *   r  "Renew now"      the vehicle opens, as if its number were sent: the report it
+ *                       had has lapsed by then (report_valid_days), so the check shows
+ *                       with the renewal price on the buy button (billing.reportPriceFor)
+ *   m  "My monitoring"  every vehicle being watched and when it ends
+ *   n  "Not now"        a thank-you, and that nothing is charged
+ * A tap whose payload was lost arrives with the button's words; those are matched too —
+ * never the bot's own buttons, which carry ids of their own.
+ */
+const RENEW_TAP = { r: /^renew( now)?$/i, m: /^my monitoring$/i, n: /^not now$/i };
+const RENEW_STEP = { r: 'renewal_renew', m: 'renewal_monitoring', n: 'renewal_not_now' };
+async function renewalTap(mobile, intent, message) {
+  if (intent.kind !== 'button') return false;
+  const hit = /^ren\|([rmn])\|([A-Z0-9]{4,12})$/.exec(String(intent.id || ''));
+  const lost = !intent.id || intent.id === intent.text;
+  const action = hit?.[1] || (lost && Object.keys(RENEW_TAP).find((k) => RENEW_TAP[k].test(String(intent.text || '').trim())));
+  if (!action) return false;
+  const reg = hit?.[2] || null;
+  await funnel(mobile, RENEW_STEP[action], reg ? { reg_no: reg } : {});
+  if (action === 'r' && reg) { await openVehicle(mobile, reg, message, 'renewal button'); return true; }
+  if (action !== 'n') { await myMonitoring(mobile); return true; }
+  await reply(mobile, `👍 No problem.${reg ? ` Monitoring for *${reg}* simply ends on its date` : ' Monitoring simply ends on its date'} — nothing is charged.\n\n`
+    + 'You can renew any time later: just send the vehicle number here.', ['check', 'menu']);
+  return true;
+}
+
 /** Send a still-valid report: the PDF, and a link that works until it lapses — then the next steps. */
 async function sendValidReport(mobile, r, { next = true } = {}) {
   const ends = fmt(new Date(r.valid_until));
@@ -1910,9 +1942,11 @@ async function handle(session, message, mobile) {
     await stopped(mobile, 'Done ✅ — GaadiPe will not message you any more.');
     return;
   }
+  // The renewal reminder's buttons — "Renew now", "My monitoring", "Not now" (2026-10-14).
+  if (await renewalTap(mobile, intent, message)) return;
   // The monitoring alert's buttons — "Thanks for remembering", "Check vehicle",
   // "Pause this alert" — and "Resume alerts" (2026-10-12, monitorAlert.js).
-  const tapped = await require('./monitorAlert').handleTap(mobile, intent)
+  const tapped =await require('./monitorAlert').handleTap(mobile, intent)
     .catch((e) => { console.error('[wa] alert button for %s: %s', mobile, e.message); return null; });
   if (tapped) {
     await funnel(mobile, tapped.step, tapped.open && tapped.open !== 'list' ? { reg_no: tapped.open } : {});

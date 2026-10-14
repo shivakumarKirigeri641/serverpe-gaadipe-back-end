@@ -162,13 +162,24 @@ async function runOnce({ limit = 20 } = {}) {
     if (config.whatsapp.enabled) {
       const send = require('../whatsapp/send');
       const name = String(r.display_name || r.wa_profile_name || '').split(' ')[0] || 'there';
-      const out = await send.template(
+      const days = String(priced.plan.duration_days || 28);
+      /* Inside their 24-hour window no template is needed (2026-10-14): the same words and
+         the same three buttons as a free message — the ids are the template's payloads. */
+      const inWindow = await send.windowOpen(r.mobile).catch(() => false);
+      const out = inWindow ? await send.buttons(r.mobile,
+        `🔔 *Monitoring ending soon*\n\nHello *${name}*, the monitoring for your vehicle *${r.reg_no}* ends on *${istDay(r.ends_on)}*. `
+        + `After that, document expiry and challan alerts for it will stop.\n\nTo continue for *${days} more days*, the renewal is *${money(priced.paise)}*.`,
+        [{ id: `ren|r|${r.reg_no}`, title: 'Renew now' }, { id: `ren|m|${r.reg_no}`, title: 'My monitoring' }, { id: `ren|n|${r.reg_no}`, title: 'Not now' }],
+        { footer: 'Team GaadiPe · Vehicle Monitoring' }).catch(() => ({ ok: false })) : await send.template(
         r.mobile,
         await settings.get('wa_template_renewal', 'gp_renewal_en_v1'),
         // {{4}} is the window and {{5}} the price: Meta numbers variables in the
         // order they appear, and the days figure comes first in the sentence.
-        [name, r.reg_no, istDay(r.ends_on), String(priced.plan.duration_days || 28), money(priced.paise)],
-        { language: await settings.get('wa_template_language', 'en') },
+        [name, r.reg_no, istDay(r.ends_on), days, money(priced.paise)],
+        // Three quick replies, in the template's order (2026-10-14; flow.js renewalTap):
+        // Renew now, My monitoring, Not now.
+        { language: await settings.get('wa_template_language', 'en'),
+          buttons: ['r', 'm', 'n'].map((a) => `ren|${a}|${r.reg_no}`) },
       ).catch(() => ({ ok: false }));
       if (out.ok) told += 1;
     }
