@@ -149,6 +149,15 @@ async function handle(body) {
         const rec = await store.recordInbound(m, contact);
         if (rec) {
           console.log(`[wa] in  ${rec.mobile}  ${m.type}  ${JSON.stringify(rec.body).slice(0, 80)}`);
+          {
+            // The same message in plain words (user, 2026-10-14): what they typed or tapped.
+            const act = require('../util/activity');
+            const said = typeof rec.body === 'string' ? rec.body : JSON.stringify(rec.body || '');
+            const words = m.type === 'text' ? `Wrote “${said.slice(0, 100)}”`
+              : ['interactive', 'button'].includes(m.type) ? `Tapped “${said.slice(0, 60)}”`
+                : `Sent a ${m.type}`;
+            act.log('💬', words, { who: act.who(contact?.profile?.name, rec.mobile), detail: 'WhatsApp' });
+          }
           // EVERYONE WHO WRITES IS A CUSTOMER (user, 2026-09-25). A users row
           // used to appear only at a vehicle check or a payment, so the admin
           // panel — Customers, Home, counts — could not see someone who said
@@ -183,6 +192,9 @@ async function handle(body) {
                 WHERE mobile = $1 AND attribution = '{}'::jsonb`, [rec.mobile, JSON.stringify(ad)]).catch(() => {});
             track.fire({ key: `wa_ad:${m.id}`, name: 'whatsapp_ad_clicked', channel: 'whatsapp', at, userId,
                          mobile: rec.mobile, source: 'meta_ads', campaign: r.headline || r.source_id || null, meta: ad });
+            const act = require('../util/activity');
+            act.log('📣', `Came from your WhatsApp ad${r.headline ? ` · “${String(r.headline).slice(0, 60)}”` : ''}`,
+              { who: act.who(contact?.profile?.name, rec.mobile), detail: 'WhatsApp' });
           }
         }
         // Testing guard: a number outside WHATSAPP_ALLOWED_RECIPIENTS is recorded

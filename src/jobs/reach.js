@@ -41,6 +41,13 @@ async function runOnce() {
         }
       } catch (e) { result = e.message; }
       await db.query(`UPDATE notify_queue SET status = $2, result = $3, sent_at = now() WHERE id = $1`, [q.id, status, result]);
+      {
+        // One plain line per SMS / notification (user, 2026-10-14: an understandable log).
+        const act = require('../util/activity');
+        const what = channel === 'sms' ? `SMS (${q.kind})` : `Phone notification${q.title ? ` “${String(q.title).slice(0, 50)}”` : ''}`;
+        const icon = status === 'sent' ? '📨' : status === 'skipped' ? '⏭' : '⚠️';
+        act.whoOf(q.mobile).then((who) => act.log(icon, `${what} ${status}${result ? ` · ${String(result).slice(0, 80)}` : ''}`, { who })).catch(() => {});
+      }
       done += 1;
     }
   }

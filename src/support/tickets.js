@@ -109,6 +109,11 @@ async function create({ token, subject, message, name, email, regNo }) {
 
   await db.query(`UPDATE support_tokens SET used_at = now() WHERE token = $1`, [token]);
   console.log('[support] %s opened by %s', ticket, who.mobile);
+  {
+    const act = require('../util/activity');
+    act.log('🎫', `Support ticket ${ticket} · ${String(subject || 'Support').slice(0, 60)} · “${body.slice(0, 150)}”`,
+      { who: act.who(name || who.name, who.mobile) });
+  }
   return { ok: true, ticket_no: row.ticket_no, id: String(row.id) };
 }
 

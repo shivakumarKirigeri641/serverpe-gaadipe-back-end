@@ -665,8 +665,58 @@ const STEP_EVENT = {
   opt_in: 'whatsapp_opt_in',
 };
 
+/*
+ * EACH STEP IN PLAIN WORDS (user, 2026-10-14: "a good log, understandable, for all
+ * activities" in pm2 logs). One [activity] line per step, next to the website's and
+ * the admin's (util/activity.js). d is the step's detail.
+ */
+const MENU_WORDS = { menu_my_vehicles: 'My vehicles', menu_my_monitoring: 'My monitoring', menu_email: 'Email for alerts',
+  menu_what_get: 'What do I get?', menu_terms: 'Terms & privacy', menu_offers: 'Current offers', menu_stop: 'Stop / delete account' };
+const STEP_WORDS = {
+  hi: () => ['👋', 'Said Hi on WhatsApp'],
+  agreed: (d) => ['✅', d.offers ? 'Agreed to the Terms + news & offers' : 'Agreed to the Terms (no offers)'],
+  offers_answer: (d) => [d.offers ? '🎁' : '🙅', d.offers ? 'Said yes to tips & offers' : 'Said no to tips & offers'],
+  number: (d) => ['🔢', `Sent a vehicle number · ${d.reg_no}`],
+  basic_shown: (d) => ['🔍', `Vehicle checked · ${d.reg_no} · found${d.bought ? ' · already has its full report' : ''}`],
+  lookup_failed: (d) => ['⚠️', `Vehicle check failed · ${d.reg_no} · ${d.reason === 'not_found' ? 'not in Government records' : 'records service error'}`],
+  vehicle_private: (d) => ['🔒', `Vehicle check · ${d.reg_no} · its owner made it private`],
+  buy_now_offered: (d) => ['💡', `Was offered the full report · ${d.reg_no}`],
+  buy_tapped: (d) => ['🛒', `Tapped "Get full report" · ${d.reg_no}`],
+  gift_used: (d) => ['🎁', `Used a free report · ${d.reg_no}${d.left != null ? ` · ${d.left} left` : ''}`],
+  link_sent: (d) => ['💳', `Payment link sent · ${d.reg_no}`],
+  replace_link_sent: (d) => ['💳', `Replace-vehicle payment link sent · ${d.from} → ${d.reg_no}`],
+  vehicle_removed: (d) => ['🗑', `Removed ${d.reg_no} from My vehicles${d.alerts_stopped ? ' · alerts stopped' : ''}`],
+  remove_pick: () => ['📋', 'Opened "Remove vehicle"'],
+  replace_pick: () => ['📋', 'Opened "Replace vehicle"'],
+  watch_status_off: () => ['🔕', 'Turned routine monitoring updates off'],
+  watch_status_on: () => ['🔔', 'Turned routine monitoring updates on'],
+  opt_out: (d) => ['🛑', `Sent STOP — no more messages${d.from === 'menu' ? ' (from the menu)' : ''}`],
+  opt_out_reason: (d) => ['🛑', `Why STOP: ${d.reason}${d.said ? ` — “${d.said}”` : ''}`],
+  opt_in: (d) => ['▶️', d.undo ? 'Undid STOP' : 'Came back (START)'],
+  data_delete_request: () => ['🗑', 'Asked to delete their account & data'],
+  email_confirmed: () => ['📧', 'Confirmed their email'],
+  owner_verify_started: (d) => ['🪪', `Started owner verification · ${d.reg_no}`],
+  owner_photo_sent: (d) => ['🪪', `Sent an RC photo · ${d.reg_no}`],
+  owner_verified: (d) => ['🪪', `Verified as owner · ${d.reg_no}`],
+  owner_verify_failed: (d) => ['🪪', `Owner verification failed · ${d.reg_no}${d.locked ? ' · locked' : ''}`],
+  alert_thanks: () => ['🙏', 'Tapped "Thanks" on a monitoring alert'],
+  alert_check: (d) => ['🔍', `Tapped "Check vehicle" on a monitoring alert${d.reg_no ? ` · ${d.reg_no}` : ''}`],
+  alert_pause_asked: () => ['⏸', 'Tapped "Pause this alert" — asked to confirm'],
+  alert_paused: () => ['⏸', 'Paused a vehicle\'s alerts for 30 days'],
+  alert_pause_cancelled: () => ['▶️', 'Kept alerts on (did not pause)'],
+  alert_resumed: () => ['▶️', 'Resumed alerts'],
+};
+function stepWords(step, d) {
+  if (STEP_WORDS[step]) return STEP_WORDS[step](d);
+  if (MENU_WORDS[step]) return ['📋', `Opened menu: ${MENU_WORDS[step]}`];
+  return ['•', step.replace(/_/g, ' ')];
+}
+
 async function funnel(mobile, step, detail = {}) {
   try {
+    const act = require('../util/activity');
+    const [icon, words] = stepWords(step, detail);
+    act.whoOf(mobile).then((who) => act.log(icon, words, { who, detail: 'WhatsApp' })).catch(() => {});
     // The first steps happen before a users row exists, so mobile is what joins
     // the funnel together; user_id is filled in once there is one.
     const u = await db.one(`SELECT id FROM users WHERE mobile = $1`, [mobile]);
@@ -2746,6 +2796,11 @@ async function handle(session, message, mobile) {
         `INSERT INTO feedback (user_id, mobile, reg_no, body) VALUES ($1, $2, $3, $4)`,
         [user.id, mobile, reg, intent.text || `[${message.type}]`]);
       console.log('[wa] feedback from %s: %s', mobile, String(intent.text).slice(0, 80));
+      {
+        const act = require('../util/activity');
+        act.whoOf(mobile).then((who) => act.log('💬', `Feedback${reg ? ` about ${reg}` : ''} · “${String(intent.text || `[${message.type}]`).slice(0, 150)}”`,
+          { who, detail: 'WhatsApp' })).catch(() => {});
+      }
       await setState(mobile, 'owner_start', 'feedback received');
       await send.buttons(mobile,
         'Thank you — every message is read. 🙏\n\nSend another vehicle number any time.',

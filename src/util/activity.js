@@ -37,6 +37,25 @@ function who(name, mobile) {
   return n && tail ? `${n} (${tail})` : n || tail || 'a visitor';
 }
 
+/* "Ravi (…2415)" from a mobile alone (user, 2026-10-14: WhatsApp lines in the log): the
+   customer's name from users, remembered for ten minutes so a chat is not a query a line. */
+const names = new Map();
+async function whoOf(mobile, name = null) {
+  const m = String(mobile || '').replace(/\D/g, '').slice(-10);
+  if (name || m.length !== 10) return who(name, mobile);
+  const hit = names.get(m);
+  if (hit && hit.at > Date.now() - 10 * 60 * 1000) return who(hit.name, m);
+  let found = null;
+  try {
+    const r = await require('../db').one(
+      `SELECT coalesce(display_name, wa_profile_name) AS name FROM users WHERE right(mobile, 10) = $1 LIMIT 1`, [m]);
+    found = r?.name || null;
+  } catch { /* the name is a nicety */ }
+  if (names.size > 5000) names.clear();
+  names.set(m, { name: found, at: Date.now() });
+  return who(found, m);
+}
+
 /* Long numbers that look like a mobile are cut to their last four digits, even
    inside free text — a log is read by many and kept for weeks. */
 const scrub = (s) => String(s ?? '').replace(/(?<![A-Z0-9])(?:\+?91[\s-]?)?([6-9]\d{9})(?![0-9])/g, (_, m) => `…${m.slice(-4)}`)
@@ -77,4 +96,4 @@ function log(icon, text, { who: person = null, detail = null } = {}) {
   } catch { /* never */ }
 }
 
-module.exports = { log, who, DIR };
+module.exports = { log, who, whoOf, DIR };

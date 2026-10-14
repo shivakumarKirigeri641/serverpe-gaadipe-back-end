@@ -200,6 +200,7 @@ async function post(payload, meta) {
   status.record('whatsapp', { ok: !metaDown, ms: Date.now() - t0, error: metaDown ? error : null });
   await record({ mobile, type, body, templateName, waMessageId, error, payload });
 
+  sayOut({ mobile, type, body, templateName, error });
   if (error) {
     console.error('[wa] out %s rejected: %s', mobile, error);
     await brake(Number(json.error.code), mobile, type).catch((e) => console.error('[wa] brake:', e.message));
@@ -207,6 +208,18 @@ async function post(payload, meta) {
   }
   console.log('[wa] out %s %s %s', mobile, type, JSON.stringify(body || '').slice(0, 60));
   return { ok: true, id: waMessageId };
+}
+
+/* What GaadiPe sent, in plain words (user, 2026-10-14: an understandable log) —
+   the bot's reply, a template, a PDF, or why it did not go. */
+function sayOut({ mobile, type, body, templateName, error }) {
+  const act = require('../util/activity');
+  const text = String(typeof body === 'string' ? body : JSON.stringify(body || '')).replace(/\s+/g, ' ');
+  const [icon, words] = error ? ['⚠️', `WhatsApp message NOT delivered · ${String(error).slice(0, 120)}`]
+    : type === 'template' ? ['📤', `Template sent · ${templateName}`]
+      : type === 'document' ? ['📄', `PDF sent · ${text.slice(0, 60)}`]
+        : ['🤖', `Bot replied · “${text.slice(0, 70)}${text.length > 70 ? '…' : ''}”`];
+  act.whoOf(mobile).then((who) => act.log(icon, words, { who, detail: 'WhatsApp' })).catch(() => {});
 }
 
 async function record({ mobile, type, body, templateName, waMessageId, error, payload }) {

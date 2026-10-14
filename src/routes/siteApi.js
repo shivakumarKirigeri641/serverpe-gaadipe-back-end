@@ -148,6 +148,11 @@ router.post('/feedback', safe(async (req, res) => {
   await db.query(
     `INSERT INTO feedback (user_id, mobile, body, rating, name, channel) VALUES ($1, $2, $3, $4, $5, $6)`,
     [user?.id || null, mobile, reg ? `[${reg}] ${text}` : text, rating, name, src ? `web:${src}` : 'web']);
+  {
+    const act = require('../util/activity');
+    act.log('💬', `Feedback${rating ? ` ${rating}★` : ''}${reg ? ` about ${reg}` : ''} · “${String(text).slice(0, 150)}”`,
+      { who: act.who(name, mobile), detail: 'website' });
+  }
   // 1–2 stars, or angry words, reach the admin at once (util/unhappy.js).
   const why = Number(rating) <= 2 ? 'low rating' : require('../util/unhappy').kind(body);
   if (why && mobile) require('../util/unhappy').flag({ mobile, said: body || `${rating}★`, why, source: 'the website feedback page', rating }).catch(() => {});
@@ -257,6 +262,11 @@ router.post('/contact', safe(async (req, res) => {
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [name, mobile || session?.user?.mobile || null, email || session?.user?.email || null, clip(b.subject, 140) || null,
      message, reg, session?.user?.id || null, language, req.ip || null, clip(req.get('user-agent'), 600) || null]);
+  {
+    const act = require('../util/activity');
+    act.log('✉️', `Contact form · ${clip(b.subject, 60) || 'message'} · “${String(message).slice(0, 150)}”`,
+      { who: act.who(name, mobile || session?.user?.mobile), detail: 'website' });
+  }
   res.json({ ok: true, message: hi ? 'धन्यवाद — आपका संदेश हमें मिल गया है। हम जल्द जवाब देंगे।' : 'Thank you — your message has reached us. We will reply soon.' });
 }));
 
