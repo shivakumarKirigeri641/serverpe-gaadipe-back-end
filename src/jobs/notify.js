@@ -832,6 +832,68 @@ async function waAgreed() {
   return n;
 }
 
+/*
+ * REMOVED OR REPLACED (user, 2026-10-14: "when a user removes or replaces, send those details
+ * to my mail"). Read from event_log — vehicle/remove.js writes 'vehicle_removed' (website or
+ * WhatsApp), pay/replace.js 'vehicle_replaced' once the ₹11 is paid. Switch:
+ * notify_vehicle_changes.
+ */
+async function vehicleChanges() {
+  if (!(await on('notify_vehicle_changes'))) return 0;
+  const { rows } = await db.query(
+    `SELECT e.id, e.kind, e.detail, e.created_at, e.user_id,
+            u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name
+       FROM event_log e LEFT JOIN users u ON u.id = e.user_id
+      WHERE e.kind IN ('vehicle_removed', 'vehicle_replaced') AND e.created_at > now() - interval '1 day'
+        AND ${notDone('vehicle_change', 'e.id::text')}
+      ORDER BY e.id LIMIT 20`);
+  let n = 0;
+  for (const e of rows) {
+    const d = e.detail || {};
+    const who = e.name || T.mobile(e.mobile);
+    n += await deliver('vehicle_change', e.id, async () => {
+      if (e.kind === 'vehicle_removed') {
+        const v = d.reg_no ? await db.one(`SELECT maker, model FROM vehicles WHERE reg_no = $1`, [d.reg_no]) : null;
+        return {
+          subject: `🗑 Vehicle removed · ${d.reg_no || ''} · ${who}`,
+          ...T.layout({
+            badge: { text: 'Removed from My vehicles', tone: 'watch' },
+            title: `${who} removed ${d.reg_no || 'a vehicle'}`,
+            lead: `${T.ist(e.created_at)} on the ${d.channel === 'web' ? 'website' : 'WhatsApp chat'}. `
+              + `${d.alerts_stopped ? `Its alerts stopped (${d.alerts_stopped} watch${d.alerts_stopped === 1 ? '' : 'es'}).` : 'It had no alerts running.'} Reports and invoices stay.`,
+            sections: [{ heading: 'Details', rows: [
+              ['Vehicle', d.reg_no], ['Make · model', v ? [v.maker, v.model].filter(Boolean).join(' · ') : null],
+              ['Customer', e.name || 'Not given'], ['Mobile', T.mobile(e.mobile)],
+              ['From', d.channel === 'web' ? 'Website' : 'WhatsApp'],
+            ] }],
+            cta: { label: 'Open customers', path: '/customers' },
+          }),
+        };
+      }
+      const [sub, pay] = await Promise.all([
+        d.subscription_id ? db.one(`SELECT ends_on::text AS ends_on FROM subscriptions WHERE id = $1`, [d.subscription_id]) : null,
+        d.payment_row ? db.one(`SELECT amount_paise, raw FROM payments WHERE id = $1`, [d.payment_row]) : null,
+      ]);
+      return {
+        subject: `🔁 Vehicle replaced · ${d.from_reg} → ${d.to_reg} · ${who}`,
+        ...T.layout({
+          badge: { text: 'Monitoring moved to another vehicle', tone: 'info' },
+          title: `${who} replaced ${d.from_reg} with ${d.to_reg}`,
+          lead: `${T.ist(e.created_at)}. Monitoring moved to ${d.to_reg}${sub?.ends_on ? ` until ${sub.ends_on}` : ''}; ${d.from_reg} left their list and its alerts stopped.`,
+          sections: [{ heading: 'Details', rows: [
+            ['Old vehicle', d.from_reg], ['New vehicle', d.to_reg],
+            ['Monitoring ends', sub?.ends_on || null],
+            ['Fee paid', pay ? `${T.rupees(pay.amount_paise)}${pay.raw?.test_mode ? ' (TEST mode)' : ''}` : null],
+            ['Customer', e.name || 'Not given'], ['Mobile', T.mobile(e.mobile)],
+          ] }],
+          cta: { label: 'Open customers', path: '/customers' },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
 async function waChecks() {
   if (!(await on('notify_wa_checks'))) return 0;
   let n = 0;
@@ -1266,7 +1328,7 @@ async function runOnce() {
      its reason, left at the payment link; payments mail both channels again. Each
      has its own switch in Settings → Emails to you. */
   for (const [k, fn] of Object.entries({ visits, signIns, webChecks, chatChecks, pushOn, freeMonitorStarted, checksMonthUsed, reachDone, payments, contacts, feedback,
-                                            waHi, waAgreed, waChecks, waOptOut, leftAtPayment,
+                                            waHi, waAgreed, waChecks, waOptOut, leftAtPayment, vehicleChanges,
                                             alertMails, security, dailySummary, weeklyMoney, weeklyDigest })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
@@ -1377,5 +1439,5 @@ function start(everySeconds = 30) {
   console.log(`  admin email: every ${everySeconds}s from ${process.env.NOREPLYMAIL}`);
 }
 
-module.exports = { start, runOnce, visits, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waAgreed, waChecks, waOptOut,
+module.exports = { start, runOnce, visits, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waAgreed, waChecks, waOptOut, vehicleChanges,
                    leftAtPayment, security, dailySummary, weeklyMoney, whatsappSummary, weeklyDigest };
