@@ -296,6 +296,13 @@ async function runOnce({ limit = 20 } = {}) {
   if (String(await settings.get('expiry_warnings_enabled', 'true')).toLowerCase() === 'false') {
     return { off: true };
   }
+  /* THE EVENING ONLY (user, 2026-10-14): a warning fell due at midnight and went within the
+     hour — 1 am on someone's phone. Now the same 7–10 pm window as the change alerts
+     (jobs/watch.js); one due outside it waits for the evening. */
+  const from = await settings.num('alert_send_hour_ist', 19);
+  const until = await settings.num('alert_send_until_hour_ist', 22);
+  const hour = new Date(Date.now() + IST).getUTCHours();
+  if (hour < from || hour >= until) return { warned: 0, reason: 'outside the evening window' };
   const list = await thresholds();
   const rows = await candidates(limit);
   let warned = 0;
