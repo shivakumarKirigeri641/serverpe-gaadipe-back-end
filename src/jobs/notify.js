@@ -894,6 +894,46 @@ async function vehicleChanges() {
   return n;
 }
 
+/*
+ * EMAIL CONFIRMED (user, 2026-10-15: "mail me when a user confirms their mail"). Read from
+ * users.email_verified_at — set by the 4-digit code (WhatsApp or website, mail/emailCode.js)
+ * and by the confirmation link (routes/email.js) alike. Once per confirmation: the key
+ * carries its time, so a changed and re-confirmed address is told again. Switch:
+ * notify_email_confirmed.
+ */
+async function emailConfirmations() {
+  if (!(await on('notify_email_confirmed'))) return 0;
+  const { rows } = await db.query(
+    `SELECT u.id, u.mobile, u.email, u.email_verified_at, u.signup_channel,
+            coalesce(u.display_name, u.wa_profile_name) AS name,
+            u.id::text || ':' || floor(extract(epoch FROM u.email_verified_at))::bigint::text AS ref
+       FROM users u
+      WHERE u.email_verified_at > now() - interval '1 day' AND NOT coalesce(u.is_internal, false)
+        AND ${notDone('email_confirmed', `u.id::text || ':' || floor(extract(epoch FROM u.email_verified_at))::bigint::text`)}
+      ORDER BY u.email_verified_at LIMIT 20`);
+  if (!rows.length) return 0;
+  const total = await db.one(`SELECT count(*)::int AS n FROM users WHERE email_verified_at IS NOT NULL AND NOT coalesce(is_internal, false)`);
+  let n = 0;
+  for (const u of rows) {
+    const who = u.name || T.mobile(u.mobile);
+    n += await deliver('email_confirmed', u.ref, async () => ({
+      subject: `📧 Email confirmed · ${who} · ${u.email}`,
+      ...T.layout({
+        badge: { text: 'Email confirmed', tone: 'good' },
+        title: `${who} confirmed their email`,
+        lead: `${T.ist(u.email_verified_at)}. Their alerts and updates now also go to ${u.email}. `
+          + `${total?.n ?? '—'} customer${total?.n === 1 ? '' : 's'} now have a confirmed email.`,
+        sections: [{ heading: 'Customer', rows: [
+          ['Name', u.name || 'Not given'], ['Mobile', T.mobile(u.mobile)], ['Email', u.email],
+          ['Came through', u.signup_channel === 'web' ? 'Website' : 'WhatsApp'],
+        ] }],
+        cta: { label: 'Open customers', path: '/customers' },
+      }),
+    })) ? 1 : 0;
+  }
+  return n;
+}
+
 async function waChecks() {
   if (!(await on('notify_wa_checks'))) return 0;
   let n = 0;
@@ -1328,7 +1368,7 @@ async function runOnce() {
      its reason, left at the payment link; payments mail both channels again. Each
      has its own switch in Settings → Emails to you. */
   for (const [k, fn] of Object.entries({ visits, signIns, webChecks, chatChecks, pushOn, freeMonitorStarted, checksMonthUsed, reachDone, payments, contacts, feedback,
-                                            waHi, waAgreed, waChecks, waOptOut, leftAtPayment, vehicleChanges,
+                                            waHi, waAgreed, waChecks, waOptOut, leftAtPayment, vehicleChanges, emailConfirmations,
                                             alertMails, security, dailySummary, weeklyMoney, weeklyDigest })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }
   }
@@ -1439,5 +1479,5 @@ function start(everySeconds = 30) {
   console.log(`  admin email: every ${everySeconds}s from ${process.env.NOREPLYMAIL}`);
 }
 
-module.exports = { start, runOnce, visits, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waAgreed, waChecks, waOptOut, vehicleChanges,
+module.exports = { start, runOnce, visits, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waAgreed, waChecks, waOptOut, vehicleChanges, emailConfirmations,
                    leftAtPayment, security, dailySummary, weeklyMoney, whatsappSummary, weeklyDigest };
