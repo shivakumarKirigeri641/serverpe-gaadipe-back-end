@@ -596,7 +596,7 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
         -- Nothing twice in an evening: a status or a real alert already went today.
         AND NOT EXISTS (SELECT 1 FROM event_log e WHERE e.user_id = w.user_id
                           AND e.kind IN ('watch_status', 'watch_digest') AND e.detail->>'ist_date' = $1
-                          AND coalesce(e.detail->>'failed', 'false') <> 'true')
+                          AND (coalesce(e.detail->>'failed', 'false') <> 'true' OR e.detail->>'final' = 'true'))
         AND ($2::text IS NULL OR u.mobile = $2)
         -- "Only alert changes" / "Keep me updated" (2026-10-09): the latest choice counts.
         AND (SELECT so.kind FROM event_log so WHERE so.user_id = w.user_id
@@ -645,12 +645,25 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
     // A pause between customers when sent by hand (the launch update: 5 s).
     if (gapMs > 0 && n > 0) await new Promise((r) => setTimeout(r, gapMs));
     n += 1;
+    /* NOTHING CAN REACH THEM TODAY — skipped quietly (user, 2026-10-15, the evening log): due by
+       email only (email every 2 days, WhatsApp every 3) with no confirmed email and no phone
+       notification. Claimed and "failed", they were tried and logged again every minute till 10 pm. */
+    {
+      const f0 = list[0];
+      const waDue = list.some((w) => w.dueWa);
+      const mailDue = list.some((w) => w.dueMail);
+      const hasMail = Boolean(f0.email && f0.email_verified_at && !f0.email_unsubscribed_at);
+      const devices = mailDue && !hasMail
+        ? (await db.one(`SELECT count(*)::int AS n FROM customer_push_subscriptions WHERE user_id = $1`, [userId]))?.n || 0 : 0;
+      if (!waDue && !(mailDue && (hasMail || devices))) continue;
+    }
     // Claimed first, so two passes in the same minute cannot both send.
+    // A failure is tried again next pass — unless it is final (STOP, not agreed, nothing to reach them).
     const claim = await db.one(
       `INSERT INTO event_log (user_id, kind, detail)
        SELECT $1, 'watch_status', $2
         WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE user_id = $1 AND kind = 'watch_status' AND detail->>'ist_date' = $3
-                            AND coalesce(detail->>'failed', 'false') <> 'true')
+                            AND (coalesce(detail->>'failed', 'false') <> 'true' OR detail->>'final' = 'true'))
        RETURNING id`, [userId, JSON.stringify({ ist_date: today, vehicles: list.map((w) => w.reg_no) }), today]);
     if (!claim) continue;
 
@@ -726,9 +739,13 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
     if (!out.ok && errors.length) out.error = errors.join('; ');
     if (out?.ok) sent += 1;
     else {
+      /* FINAL, NOT TRIED AGAIN TONIGHT (2026-10-15): WhatsApp refused for a reason another minute
+         cannot change — not agreed, STOP, templates paused — or WhatsApp was not even tried. A
+         Meta error (a hiccup) stays retryable. */
+      const final = !wa || /not_agreed|opted|stop|templates_paused|consent/i.test(String(wa.error || ''));
       await db.query(`UPDATE event_log SET detail = detail || $2::jsonb WHERE id = $1`,
-        [claim.id, JSON.stringify({ failed: true, error: String(out?.error || '').slice(0, 300) })]);
-      console.warn('[watch] daily status to user %s failed: %s', userId, out?.error);
+        [claim.id, JSON.stringify({ failed: true, final, error: String(out?.error || '').slice(0, 300) })]);
+      console.warn('[watch] daily status to user %s failed%s: %s', userId, final ? ' (not retried today)' : '', out?.error);
     }
     // Sent by hand: report each one; returning false stops the run (scripts/launch-update.js).
     if (onEach && (await onEach({ n, of: people.size, mobile: first.mobile, vehicles: list.map((w) => w.reg_no), out })) === false) break;
