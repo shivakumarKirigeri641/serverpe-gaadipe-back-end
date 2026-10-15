@@ -19,32 +19,45 @@ const TZ = `'Asia/Kolkata'`;
 /* ───────────────────────────────────────────────────────────── compare ── */
 
 /* Everything counted in one window. $1 inclusive, $2 exclusive. */
-const METRICS_SQL = `
+/* The owner's own checks and TEST payments are left out (2026-10-15: the 11:55 pm summary
+   counted them). */
+const NOT_ME = `(user_id IS NULL OR user_id NOT IN (SELECT id FROM users WHERE is_internal))`;
+const REAL_PAY = `amount_paise > 0 AND (raw->>'test_mode') IS NULL AND ${NOT_ME}`;
+/*
+ * ONE CHANNEL OR BOTH (user, 2026-10-15: the 11:55 pm summary — "now give only WhatsApp based").
+ * 'whatsapp' counts WhatsApp customers, checks, payments and reports; 'web' the website's;
+ * 'all' (the default) both, as before.
+ */
+const PAY_CH = (ch) => (ch === 'all' ? '' : `AND coalesce(raw->>'channel', raw->'paid_from'->>'channel', 'whatsapp') ${ch === 'web' ? '=' : '<>'} 'web'`);
+const CHECK_CH = (ch) => (ch === 'all' ? '' : ch === 'web' ? `AND detail->>'channel' = 'web'` : `AND coalesce(detail->>'channel', 'whatsapp') = 'whatsapp'`);
+const USER_CH = (ch) => (ch === 'all' ? '' : ch === 'web' ? `AND signup_channel = 'web'` : `AND coalesce(signup_channel, 'whatsapp') <> 'web'`);
+const metricsSql = (ch = 'all') => `
   SELECT
-    (SELECT count(*) FROM users WHERE created_at >= $1 AND created_at < $2)              AS new_users,
-    (SELECT count(*) FROM event_log WHERE kind = 'vehicle_check'
+    (SELECT count(*) FROM users WHERE created_at >= $1 AND created_at < $2 AND NOT coalesce(is_internal, false) ${USER_CH(ch)}) AS new_users,
+    (SELECT count(*) FROM event_log WHERE kind = 'vehicle_check' AND ${NOT_ME} ${CHECK_CH(ch)}
         AND created_at >= $1 AND created_at < $2)                                         AS checks,
-    (SELECT count(DISTINCT user_id) FROM event_log WHERE kind = 'vehicle_check'
+    (SELECT count(DISTINCT user_id) FROM event_log WHERE kind = 'vehicle_check' AND ${NOT_ME} ${CHECK_CH(ch)}
         AND created_at >= $1 AND created_at < $2)                                         AS active_users,
     (SELECT count(*) FROM vehicles WHERE first_seen_at >= $1 AND first_seen_at < $2)     AS new_vehicles,
     (SELECT count(*) FROM site_sessions WHERE created_at >= $1 AND created_at < $2)      AS sign_ins,
     -- WhatsApp-first (user, 2026-09-25): people who wrote in the period.
     (SELECT count(DISTINCT mobile) FROM whatsapp_messages
       WHERE direction = 'in' AND created_at >= $1 AND created_at < $2)                  AS wa_chats,
-    (SELECT count(*) FROM payments WHERE status = 'paid'
+    (SELECT count(*) FROM payments WHERE status = 'paid' AND ${REAL_PAY} ${PAY_CH(ch)}
         AND paid_at >= $1 AND paid_at < $2)                                               AS payments,
-    (SELECT coalesce(sum(amount_paise), 0) FROM payments WHERE status = 'paid'
+    (SELECT coalesce(sum(amount_paise), 0) FROM payments WHERE status = 'paid' AND ${REAL_PAY} ${PAY_CH(ch)}
         AND paid_at >= $1 AND paid_at < $2)                                               AS gross_paise,
-    (SELECT count(*) FROM payments WHERE status = 'created'
+    (SELECT count(*) FROM payments WHERE status = 'created' AND ${REAL_PAY} ${PAY_CH(ch)}
         AND created_at >= $1 AND created_at < $2)                                         AS abandoned,
-    (SELECT count(*) FROM vehicle_reports WHERE created_at >= $1 AND created_at < $2)    AS reports,
+    (SELECT count(*) FROM vehicle_reports r WHERE r.created_at >= $1 AND r.created_at < $2
+        ${ch === 'all' ? '' : `AND EXISTS (SELECT 1 FROM payments WHERE id = r.payment_id ${PAY_CH(ch)})`}) AS reports,
     (SELECT count(*) FROM feedback WHERE created_at >= $1 AND created_at < $2)           AS feedback,
     (SELECT count(*) FROM whatsapp_messages WHERE direction = 'out' AND message_type = 'template'
         AND created_at >= $1 AND created_at < $2)                                         AS wa_billed,
     (SELECT count(*) FROM site_otps WHERE created_at >= $1 AND created_at < $2)          AS sms_sent`;
 
-async function metrics(from, to) {
-  const r = await db.one(METRICS_SQL, [from, to]);
+async function metrics(from, to, ch = 'all') {
+  const r = await db.one(metricsSql(ch), [from, to]);
   const n = Object.fromEntries(Object.entries(r).map(([k, v]) => [k, Number(v || 0)]));
   const money = await splitOf(n.gross_paise, { whatsapp: n.wa_billed, sms: n.sms_sent });
   return {
@@ -63,7 +76,8 @@ async function metrics(from, to) {
  * against yesterday morning — the fair comparison while the day is running)
  * and in full (the whole of yesterday).
  */
-async function compare() {
+async function compare({ channel = 'all' } = {}) {
+  const ch = ['whatsapp', 'web'].includes(channel) ? channel : 'all';
   const b = await db.one(
     `WITH l AS (SELECT now() AT TIME ZONE ${TZ} AS t)
      SELECT now() AS now,
@@ -83,7 +97,7 @@ async function compare() {
     const elapsed = now - start;
     const prevSamePoint = new Date(Math.min(prevStart.getTime() + elapsed, start.getTime()));
     const [current, samePoint, full] = await Promise.all([
-      metrics(start, now), metrics(prevStart, prevSamePoint), metrics(prevStart, start),
+      metrics(start, now, ch), metrics(prevStart, prevSamePoint, ch), metrics(prevStart, start, ch),
     ]);
     out[p] = {
       current: { from: start, to: now, ...current },

@@ -1301,7 +1301,10 @@ async function dailySummary() {
 
   return (await deliver('daily_summary', today, async () => {
     const { compare } = require('../admin/insights');
-    const c = (await compare()).day;
+    // WhatsApp only (user, 2026-10-15: "now give only WhatsApp based"); daily_summary_channel
+    // 'web' or 'all' to change. The owner's checks and TEST payments are never counted.
+    const channel = String(await settings.get('daily_summary_channel', 'whatsapp')).toLowerCase();
+    const c = (await compare({ channel })).day;
     const d = c.current; const y = c.previous_full;
     // WhatsApp-first (user, 2026-09-25): the chat's day, not the website's.
     const extra = await db.one(
@@ -1319,12 +1322,14 @@ async function dailySummary() {
               (SELECT reg_no FROM vehicle_reports r WHERE r.payment_id = p.id LIMIT 1) AS reg_no
          FROM payments p JOIN users u ON u.id = p.user_id
         WHERE p.status = 'paid' AND p.paid_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'
+          AND p.amount_paise > 0 AND (p.raw->>'test_mode') IS NULL AND NOT coalesce(u.is_internal, false)
+          ${channel === 'all' ? '' : `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') ${channel === 'web' ? '=' : '<>'} 'web'`}
         ORDER BY p.paid_at`);
     const vs = (a, b, money) => `${money ? T.rupees(a) : a}  (yesterday ${money ? T.rupees(b) : b})`;
     return {
       subject: `📊 GaadiPe today · ${T.rupees(d.gross_paise)} · ${d.payments} payment${d.payments === 1 ? '' : 's'} · ${d.checks} checks`,
       ...T.layout({
-        badge: { text: 'Daily summary', tone: 'info' },
+        badge: { text: channel === 'whatsapp' ? 'Daily summary · WhatsApp' : channel === 'web' ? 'Daily summary · website' : 'Daily summary', tone: 'info' },
         title: `Your day at GaadiPe — ${today}`,
         lead: d.payments
           ? `${d.payments} payment${d.payments === 1 ? '' : 's'} today, ${T.rupees(d.take_home_paise)} take-home after GST, fees and messaging.`
@@ -1352,7 +1357,9 @@ async function dailySummary() {
           ]) } : null,
         ],
         cta: { label: 'Open analytics', path: '/analytics' },
-        footer: `Sent once a day from ${hour}:00 IST. Switch it off under Settings → Emails in the admin panel.`,
+        // The time setting is "23:55" since 1 Oct (5e48a37); this line still read the old `hour`,
+        // so the summary failed to build every night until 15 Oct.
+        footer: `Sent once a day at ${String(await settings.get('daily_summary_hour_ist', '23:55'))} IST. Switch it off under Settings → Emails in the admin panel.`,
       }),
     };
   })) ? 1 : 0;
