@@ -399,6 +399,11 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
     await send.text(pay.mobile,
       `📋 Your report ${doc.report_number} could not be attached. Download it here until ${until}:${link}`);
   }
+  // The email tip after a paid report (2026-10-15, whatsapp/flow.js emailNudge): last, a few
+  // seconds after the report and its buttons, and only if they have no confirmed email.
+  if (sent.ok || link) {
+    setTimeout(() => require('../whatsapp/flow').emailNudge(pay.mobile, 'report').catch(() => {}), 8000).unref?.();
+  }
   // Once per report: re-sending it later (My reports) is not a new delivery.
   require('../events/track').fire({
     key: `delivered:${doc.id}`, name: 'report_delivered', channel: 'whatsapp',

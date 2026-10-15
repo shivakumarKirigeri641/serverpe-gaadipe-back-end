@@ -91,6 +91,7 @@ const BTN = {
   MY_MONITORING: 'my_monitoring',
   EMAIL: 'menu_email',
   EMAIL_CHANGE: 'email_change',
+  EMAIL_LATER: 'email_later',     // "Not now" on the email tip (emailNudge, 2026-10-15)
   EMAIL_RESEND: 'email_resend',
   WHAT_GET: 'what_get',
   TERMS: 'menu_terms',
@@ -713,6 +714,7 @@ const STEP_WORDS = {
   alert_paused: () => ['⏸', 'Paused a vehicle\'s alerts for 30 days'],
   alert_pause_cancelled: () => ['▶️', 'Kept alerts on (did not pause)'],
   alert_resumed: () => ['▶️', 'Resumed alerts'],
+  email_later: () => ['📧', 'Said "Not now" to adding an email'],
   renewal_renew: (d) => ['🔄', `Tapped "Renew now" on the renewal reminder${d.reg_no ? ` · ${d.reg_no}` : ''}`],
   renewal_monitoring: () => ['📋', 'Tapped "My monitoring" on the renewal reminder'],
   renewal_not_now: (d) => ['🙅', `Tapped "Not now" on the renewal reminder${d.reg_no ? ` · ${d.reg_no}` : ''}`],
@@ -1580,6 +1582,8 @@ async function deliverReport(mobile, regNo, message) {
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
   require('../owners/checkAlerts').noteCheck({ regNo, checker: mobile, channel: 'whatsapp' });
   await reportMenu(mobile, regNo, data, bought);
+  // The email tip after a check (2026-10-15) — once, for someone without a confirmed email.
+  await emailNudge(mobile, 'check');
   // (The separate tips-&-offers question is gone, 2026-10-09: it is the second Agree button now.)
 }
 
@@ -1740,6 +1744,44 @@ async function renewalTap(mobile, intent, message) {
   await reply(mobile, `👍 No problem.${reg ? ` Monitoring for *${reg}* simply ends on its date` : ' Monitoring simply ends on its date'} — nothing is charged.\n\n`
     + 'You can renew any time later: just send the vehicle number here.', ['check', 'menu']);
   return true;
+}
+
+/*
+ * ADD YOUR EMAIL, ASKED BY THE BOT (user, 2026-10-15: "instead of me manually asking them" —
+ * 2 of 211 customers had a confirmed email, so a WhatsApp outage cut alerts off). Only as a
+ * reply to something the customer just did, so inside their window, never a broadcast:
+ *   'report'  right after a paid report reaches them (routes/payments.js)
+ *   'check'   after a vehicle check
+ * Asked at most twice: once, and once more 30 days after a "Not now" (or no answer). Never to
+ * someone with a confirmed email, someone who said STOP, or mid-way through another step.
+ * Each ask is an event_log 'email_nudge'; "Not now" is 'email_nudge_later'.
+ */
+const EMAIL_LATER = BTN.EMAIL_LATER;
+async function emailNudge(mobile, at = 'check') {
+  try {
+    const u = await db.one(
+      `SELECT u.id, u.email_verified_at, s.wa_opt_out_at, s.state FROM users u
+         LEFT JOIN whatsapp_sessions s ON s.mobile = u.mobile WHERE u.mobile = $1`, [mobile]);
+    if (!u || u.email_verified_at || u.wa_opt_out_at) return false;
+    if (/^(email_|replace_|rp_|rm_|stop|feedback|owner_verify)/.test(String(u.state || ''))) return false;
+    const asked = await db.one(
+      `SELECT count(*)::int AS n, max(created_at) AS last FROM event_log WHERE user_id = $1 AND kind = 'email_nudge'`, [u.id]);
+    if (asked.n >= 2) return false;
+    if (asked.n === 1 && new Date(asked.last) > new Date(Date.now() - 30 * 864e5)) return false;
+    const out = await send.buttons(mobile,
+      (at === 'report'
+        ? '📧 *One more thing* — add your email so your alerts for this vehicle also reach you by email, '
+        : '📧 *Tip* — add your email so your vehicle alerts also reach you by email, ')
+      + 'even if WhatsApp is ever unavailable. It takes a minute: we send a 4-digit code to confirm it.',
+      [{ id: BTN.EMAIL, title: 'Add email' }, { id: EMAIL_LATER, title: 'Not now' }]).catch(() => ({ ok: false }));
+    if (!out?.ok) return false;
+    await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'email_nudge', $2)`,
+      [u.id, JSON.stringify({ mobile, at })]);
+    return true;
+  } catch (e) {
+    console.error('[wa] email nudge for %s: %s', mobile, e.message);
+    return false;
+  }
 }
 
 /** Send a still-valid report: the PDF, and a link that works until it lapses — then the next steps. */
@@ -2653,6 +2695,16 @@ async function handle(session, message, mobile) {
         await myMonitoring(mobile);
         return;
 
+      // "Not now" on the email tip (2026-10-15, emailNudge): asked once more in 30 days at most.
+      case EMAIL_LATER: {
+        const u = await store.upsertUser(mobile);
+        await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'email_nudge_later', $2)`,
+          [u.id, JSON.stringify({ mobile })]).catch(() => {});
+        await funnel(mobile, 'email_later');
+        await reply(mobile, '👍 No problem. You can add it any time from *Menu → Email for alerts*.', ['check', 'menu']);
+        return;
+      }
+
       case BTN.EMAIL:
       case BTN.EMAIL_CHANGE:
         await funnel(mobile, 'menu_email', { change: intent.id === BTN.EMAIL_CHANGE });
@@ -3039,4 +3091,4 @@ async function handle(session, message, mobile) {
 /** The free check for a number on the waiting list, now the records are back (jobs/waitlist.js). */
 const checkFromWaitlist = (mobile, regNo) => openVehicle(mobile, regNo, { type: 'system' }, 'waitlist: records service back');
 
-module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN, _sendValidReport: (m, r) => sendValidReport(m, r) };
+module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN, emailNudge, _sendValidReport: (m, r) => sendValidReport(m, r) };
