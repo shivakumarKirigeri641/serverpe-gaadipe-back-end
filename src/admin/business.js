@@ -34,18 +34,37 @@ function change(now, before, { worseUp = false } = {}) {
   return { previous: before, abs, pct, trend, note: null, good: trend === 'flat' ? null : (trend === 'up') !== worseUp };
 }
 
+/*
+ * WHICH ADMIN IS ASKING (user, 2026-10-15: "Business health says Vehicle searches 0 — today
+ * 15+ checked; check everywhere in this admin panel"). The main admin (X-View: whatsapp)
+ * sees WhatsApp: people who wrote, checks, agreements, WhatsApp payments; the web admin
+ * keeps the website's figures (2026-10-07). Same keys either way, so the page is unchanged.
+ */
+const waView = () => require('./consented').whatsappOnlyNow();
+
 /* Payment attempts: checkouts opened for money (free reports are not attempts). */
 async function attempts(from, to) {
   const r = await db.one(
     `SELECT count(*)::int AS n FROM payments
       WHERE created_at >= $1 AND created_at < $2 AND amount_paise > 0 AND coalesce(gateway, '') <> 'free'
-        AND coalesce(raw->>'channel', raw->'paid_from'->>'channel', 'whatsapp') = 'web'`, [from, to]);
+        AND coalesce(raw->>'channel', raw->'paid_from'->>'channel', 'whatsapp') ${waView() ? '<>' : '='} 'web'
+        AND (raw->>'test_mode') IS NULL`, [from, to]);
   return r.n;
 }
 
-/* The figures, for one window — the website's (2026-10-07: WhatsApp is retired;
-   every comparison is the website's, so the WhatsApp days do not distort it). */
+/* The figures, for one window — this admin's channel (see waView). */
 async function figures(from, to) {
+  if (waView()) {
+    const [t, m, a] = await Promise.all([command.waTotals(from, to), ledger.periodMoney(from, to, null, { channel: 'whatsapp', notMe: true }), attempts(from, to)]);
+    return {
+      // visitors = people (who agreed) who wrote on WhatsApp; sign_ins = new agreements.
+      visitors: t.chatting, searches: t.searches, sign_ins: t.agreed, lookups: t.api_calls,
+      reports: t.reports, attempts: a, paid: m.payments, revenue: m.gross_paise,
+      api_cost: m.api_cost_total_paise, messaging_cost: m.messaging_paise, gateway_cost: m.gateway_paise,
+      gst: m.gst_paise, refunds: m.refund_paise, net: m.net_paise, margin: m.margin_pct,
+      free_reports: m.free_reports, fees_estimated: m.fees_estimated,
+    };
+  }
   const [t, m, a] = await Promise.all([command.totals(from, to), ledger.periodMoney(from, to, null, { channel: 'website' }), attempts(from, to)]);
   return {
     visitors: t.visitors, searches: t.searches, sign_ins: t.sign_ins, lookups: t.api_calls,
@@ -74,13 +93,29 @@ const METRICS = [
   ['net', 'Net contribution', 'Website revenue after GST, the gateway, refunds, API and SMS.', { money: true }, '/profitability'],
 ];
 
+/* The same figures as the main admin names them (WhatsApp, 2026-10-15). */
+const WA_WORDS = {
+  visitors: ['WhatsApp chats', 'Different customers (who agreed) who wrote to GaadiPe on WhatsApp.', '/live'],
+  searches: ['Vehicle checks', 'Vehicle numbers checked on WhatsApp, found or not.', '/lookups'],
+  sign_ins: ['New customers', 'People who agreed to the Terms on WhatsApp.', '/customers'],
+  reports: ['Reports generated', 'Full reports (PDF) issued for WhatsApp payments.', '/documents'],
+  attempts: ['Payment attempts', 'Payment links opened for a paid report on WhatsApp.', '/payments'],
+  paid: ['Successful payments', 'WhatsApp payments completed (free and TEST reports not counted).', '/profitability'],
+  revenue: ['Revenue', 'What WhatsApp customers paid, GST included.', '/profitability'],
+  net: ['Net contribution', 'WhatsApp revenue after GST, the gateway, refunds, API and messaging.', '/profitability'],
+  messaging_cost: ['Messaging cost', 'WhatsApp templates and SMS, at the rates in Settings.', '/profitability'],
+};
+const metricsFor = () => (waView()
+  ? METRICS.map(([key, label, note, o, to]) => (WA_WORDS[key] ? [key, WA_WORDS[key][0], WA_WORDS[key][1], o, WA_WORDS[key][2]] : [key, label, note, o, to]))
+  : METRICS);
+
 async function health(q = {}) {
   const r = command.resolve({ range: q.range || 'today', from: q.from, to: q.to, compare: q.compare || 'previous' });
   const [cur, prev] = await Promise.all([figures(r.from, r.to), r.prevFrom ? figures(r.prevFrom, r.prevTo) : null]);
   return {
     range: { label: r.label, from: r.from, to: r.to, range: r.range },
     compare: r.prevFrom ? { label: r.compareLabel, from: r.prevFrom, to: r.prevTo } : null,
-    metrics: METRICS.map(([key, label, note, o, to]) => ({
+    metrics: metricsFor().map(([key, label, note, o, to]) => ({
       key, label, about: note, money: Boolean(o.money), worse_up: Boolean(o.worseUp), to,
       value: cur[key], ...change(cur[key], prev ? prev[key] : null, { worseUp: o.worseUp }),
     })),
@@ -94,6 +129,12 @@ async function health(q = {}) {
 /* The website's journey today: visits → checked a vehicle → signed in → paid
    (the same visits, from admin/analytics.js — 2026-10-07). */
 async function conversions(from, to) {
+  // The main admin: WhatsApp people — agreed → checked a vehicle → paid (2026-10-15).
+  if (waView()) {
+    const s = await command.waStageCounts(from, to);
+    const n = (k) => Number(s?.[k] || 0);
+    return { wa: true, visitors: n('agreed'), checkers: n('saw'), signed_in: n('pay_started'), payers: n('paid') };
+  }
   const visits = await require('./analytics').perVisit({ from, to });
   // Each step counts only visits that also made the step before it.
   const checked = visits.filter((v) => v.at.searched);
@@ -135,13 +176,17 @@ async function summary() {
       paid: today.paid, revenue: today.revenue, gst: today.gst, gateway_cost: today.gateway_cost,
       api_cost: today.api_cost, messaging_cost: today.messaging_cost, refunds: today.refunds, net: today.net,
     },
-    conversion: [
+    conversion: conv.wa ? [
+      { label: 'Agreed → Saw a vehicle', from: conv.visitors, to: conv.checkers, pct: rate(conv.checkers, conv.visitors), note: 'People who agreed on WhatsApp today and saw a vehicle check.' },
+      { label: 'Saw a vehicle → Payment link', from: conv.checkers, to: conv.signed_in, pct: rate(conv.signed_in, conv.checkers), note: 'Of those, how many asked for the ₹19 report (payment link sent).' },
+      { label: 'Payment link → Paid', from: conv.signed_in, to: conv.payers, pct: rate(conv.payers, conv.signed_in), note: 'Payment links that were paid.' },
+    ] : [
       { label: 'Visit → Vehicle check', from: conv.visitors, to: conv.checkers, pct: rate(conv.checkers, conv.visitors), note: 'Website visits that checked a vehicle.' },
       { label: 'Vehicle check → Sign-in', from: conv.checkers, to: conv.signed_in, pct: rate(conv.signed_in, conv.checkers), note: 'Visits that checked a vehicle and signed in.' },
       { label: 'Sign-in → Payment', from: conv.signed_in, to: conv.payers, pct: rate(conv.payers, conv.signed_in), note: 'Signed-in visits that paid.' },
     ],
     comparison: [
-      ['revenue', 'Revenue', true], ['paid', 'Paid reports'], ['visitors', 'Visitors'], ['searches', 'Vehicle checks'],
+      ['revenue', 'Revenue', true], ['paid', 'Paid reports'], ['visitors', conv.wa ? 'WhatsApp chats' : 'Visitors'], ['searches', 'Vehicle checks'],
       ['net', 'Net contribution', true],
     ].map(([k, label, money]) => ({ key: k, label, money: Boolean(money), value: today[k], ...change(today[k], yday[k]) })),
     compare_label: 'Today so far vs yesterday to the same time',

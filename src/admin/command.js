@@ -533,4 +533,4 @@ async function drill({ what, range, from, to, compare, previous = false, limit =
   };
 }
 
-module.exports = { overview, live, drill, resolve, totals, PRESETS, COMPARES };
+module.exports = { overview, live, drill, resolve, totals, waTotals, waStageCounts, PRESETS, COMPARES };

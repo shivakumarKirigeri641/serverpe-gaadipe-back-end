@@ -223,22 +223,29 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
      against yesterday counts website customers, website activity, website
      reports and website checks only, so the WhatsApp days do not distort them;
      the all-time totals still count everyone. */
-  const WEB_PAID = `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
-  const WEB_CHECK = `detail->>'channel' = 'web'`;
+  /* WHATSAPP AGAIN IN THE MAIN ADMIN (user, 2026-10-15: "Vehicle searches is 0 — check
+     everywhere in this admin panel"). The main admin (X-View: whatsapp) counts WhatsApp
+     customers, activity, reports and checks; the web admin keeps the website's. */
+  const wa = require('./consented').whatsappOnlyNow();
+  const WEB_PAID = wa ? `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') <> 'web'`
+    : `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
+  const WEB_CHECK = wa ? `coalesce(detail->>'channel', 'whatsapp') = 'whatsapp'` : `detail->>'channel' = 'web'`;
+  const JOINED = wa ? `coalesce(signup_channel, 'whatsapp') <> 'web'` : `signup_channel = 'web'`;
+  const ACTIVE = wa ? `channel = 'whatsapp'` : `channel = 'web'`;
   const today = await db.one(
     `WITH b AS (SELECT date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' AS d)
-     SELECT (SELECT count(*) FROM users, b WHERE created_at >= b.d AND signup_channel = 'web')::int AS joined,
+     SELECT (SELECT count(*) FROM users, b WHERE created_at >= b.d AND ${JOINED})::int AS joined,
             (SELECT count(*) FROM users, b WHERE created_at >= b.d - interval '1 day'
-                                              AND created_at <  now() - interval '1 day' AND signup_channel = 'web')::int AS joined_yesterday,
+                                              AND created_at <  now() - interval '1 day' AND ${JOINED})::int AS joined_yesterday,
             (SELECT count(DISTINCT coalesce(user_id::text, mobile)) FROM events, b
-              WHERE occurred_at >= b.d AND channel = 'web' AND coalesce(user_id::text, mobile) IS NOT NULL)::int AS active,
+              WHERE occurred_at >= b.d AND ${ACTIVE} AND coalesce(user_id::text, mobile) IS NOT NULL)::int AS active,
             (SELECT count(DISTINCT coalesce(user_id::text, mobile)) FROM events, b
-              WHERE occurred_at >= b.d - interval '1 day' AND occurred_at < now() - interval '1 day' AND channel = 'web'
+              WHERE occurred_at >= b.d - interval '1 day' AND occurred_at < now() - interval '1 day' AND ${ACTIVE}
                 AND coalesce(user_id::text, mobile) IS NOT NULL)::int AS active_yesterday,
-            -- New website customers today against the WHOLE of yesterday.
-            (SELECT count(*) FROM users u, b WHERE u.created_at >= b.d AND u.signup_channel = 'web')::int AS customers_today,
+            -- New customers today (this admin's channel) against the WHOLE of yesterday.
+            (SELECT count(*) FROM users u, b WHERE u.created_at >= b.d AND ${JOINED.replace(/signup_channel/g, 'u.signup_channel')})::int AS customers_today,
             (SELECT count(*) FROM users u, b WHERE u.created_at >= b.d - interval '1 day' AND u.created_at < b.d
-                AND u.signup_channel = 'web')::int AS customers_yesterday_full,
+                AND ${JOINED.replace(/signup_channel/g, 'u.signup_channel')})::int AS customers_yesterday_full,
             -- Full reports bought, and vehicle checks (user, 2026-10-03): all time,
             -- today, and the whole of yesterday (IST). A report counts once paid; a
             -- check is a customer's lookup on WhatsApp or the website (util/quota.js),

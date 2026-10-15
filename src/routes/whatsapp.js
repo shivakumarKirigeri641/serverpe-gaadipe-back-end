@@ -164,7 +164,9 @@ async function handle(body) {
           // Hi and stopped. Now the first message creates it (channel
           // whatsapp) and every message moves last_seen_at, and the session is
           // tied to it. Failure here must never cost the reply.
-          await customers.upsertUser(rec.mobile, { name: contact?.profile?.name, waId: m.from })
+          // channel 'whatsapp' (2026-10-15): the default became 'web' on 10 Oct, so WhatsApp
+          // newcomers were being counted as website customers.
+          await customers.upsertUser(rec.mobile, { name: contact?.profile?.name, waId: m.from, channel: 'whatsapp' })
             .then((u) => u && db.query(
               `UPDATE whatsapp_sessions SET user_id = $2 WHERE mobile = $1 AND user_id IS DISTINCT FROM $2`,
               [rec.mobile, u.id]))
