@@ -574,7 +574,8 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
   const from = await settings.num('alert_send_hour_ist', 19);
   const until = await settings.num('alert_send_until_hour_ist', 22);
   const hour = istNow().getUTCHours();
-  if (!byHand && (hour < from || hour >= until)) return { sent: 0 };
+  // A dry run sends nothing, so it may look at any hour (scripts/templates-today.js, 2026-10-15).
+  if (!byHand && !dryRun && (hour < from || hour >= until)) return { sent: 0 };
 
   const today = istNow().toISOString().slice(0, 10);
   const cadence = { dailyDays: Math.max(0, await settings.num('watch_status_daily_days', 7)),
@@ -627,7 +628,12 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
         && !(await send.optedOut(f.mobile).catch(() => true));
       const ways = [waOn ? 'whatsapp' : null, f.email && f.email_verified_at && !f.email_unsubscribed_at ? 'email' : null, devices ? `notification (${devices})` : null,
         String(await settings.get('sms_tpl_status', '') || '').trim() && await settings.bool('sms_alerts_enabled', false) ? 'sms' : null].filter(Boolean);
-      would.push({ mobile: `••${String(f.mobile).slice(-4)}`, name: f.name || null, vehicles: list.map((w) => w.reg_no),
+      // On WhatsApp: a free message inside their 24-hour window, else the template — the
+      // one that counts toward Meta's daily limit (2026-10-15).
+      const waDue = list.some((w) => w.dueWa);
+      const whatsapp = !waDue ? 'not due on WhatsApp today' : !waOn ? 'off (sending off or STOP)'
+        : await send.windowOpen(f.mobile).catch(() => false) ? 'free message (window open)' : 'template';
+      would.push({ user_id: String(userId), mobile: `••${String(f.mobile).slice(-4)}`, name: f.name || null, vehicles: list.map((w) => w.reg_no), whatsapp,
                    goes_as: ways.length ? ways.join(' + ') : 'NOT SENT (no confirmed email, no notification device, SMS not approved)' });
     }
     return { dryRun: true, people: would.length, would };
