@@ -15,7 +15,7 @@ const CATALOG = [
   { id: 'download_report', title: 'My reports',          does: 'Sends their report PDFs that are still downloadable.' },
   { id: 'my_monitoring',   title: 'My monitoring',       does: 'Shows each watched vehicle — end date, next alert, paused alerts, renew price.' },
   { id: 'menu_email',      title: 'Email for alerts',    does: 'Shows their confirmed email, or asks for one and confirms it with a 4-digit code.' },
-  { id: 'rp_pick',         title: 'Replace vehicle',     does: 'Starts Replace vehicle (₹11, GST included) — only works on paid monitoring within its window.' },
+  { id: 'rp_pick',         title: 'Replace vehicle',     does: 'Starts Replace vehicle (₹15, GST included — the price in Plans) — only works on paid monitoring within its window.' },
   { id: 'support',         title: 'Help & support',      does: 'Sends a support-ticket link, with the Terms, Privacy and Refund links.' },
   { id: 'feedback',        title: 'Feedback',            does: 'Asks them to type their feedback; the next message is saved as feedback.' },
   // The one-tap rating (2026-10-15, flow.js feedbackAsk) — pick all three together to ask "how useful?".
