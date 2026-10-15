@@ -90,6 +90,8 @@ router.get('/pricing', safe(async (_req, res) => {
   const validDays = await settings.num('report_valid_days', 7);
   res.json({
     price_paise: plan?.price_paise ?? null,
+    // The renewal price, as set in admin (2026-10-14) — the site's "₹11 to renew" reads it.
+    renewal_paise: plan?.renewal_paise ?? null,
     duration_days: plan?.duration_days ?? 28,
     report_valid_days: validDays,
     free_checks_per_day: await settings.num('free_checks_per_day', 10),
@@ -864,7 +866,13 @@ router.post('/check', safe(async (req, res) => {
         ? 'That is a lot of checks very quickly — please wait a minute and try again.'
         : q.reason === 'monthly'
           // Buying unlocks more (user, 2026-10-10): every report adds checks_per_report_bonus.
-          ? `You have used this month’s ${q.limit} checks. Buy a full report for any vehicle — ₹19, or ₹11 to renew one you bought — and get ${q.perReport} more checks this month.`
+          ? await (async () => {
+            // The prices as set in admin (2026-10-14), not typed in.
+            const p = await billing.reportPlan().catch(() => null);
+            const r = (x, d) => (x ? `₹${Math.round(Number(x) / 100)}` : d);
+            return `You have used this month’s ${q.limit} checks. Buy a full report for any vehicle — ${r(p?.price_paise, '₹19')}`
+              + `${p?.renewal_paise ? `, or ${r(p.renewal_paise)} to renew one you bought` : ''} — and get ${q.perReport} more checks this month.`;
+          })()
           : `You have used your ${q.limit} free checks for today. They reset tomorrow.`,
       reason: q.reason,
       quota: await quota.left(req.user.id).catch(() => null),
