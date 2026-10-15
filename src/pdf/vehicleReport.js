@@ -95,10 +95,19 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     const mNumber = adminView ? open : maskNumber;
     const masked = adminView ? '' : ' (masked)';
     const generatedAt = T.fmtDateTime(report.created_at || new Date());
+    /* WHEN THE RECORDS WERE FETCHED (user, 2026-10-15: "update the date & time stamp about the
+       fresh data fetch"). A report reprinted on download says so: the moment its data came from
+       the Government records, and the day it was first issued. */
+    const fetchedMs = Date.parse(data.fetched_at || '');
+    const createdMs = new Date(report.created_at || Date.now()).getTime();
+    const refreshed = Number.isFinite(fetchedMs) && fetchedMs - createdMs > 60 * 60 * 1000;
+    const fetchedAt = Number.isFinite(fetchedMs) ? T.fmtDateTime(new Date(fetchedMs)) : generatedAt;
 
     let y = T.header(doc, {
       title: 'VEHICLE REPORT',
-      subtitle: `Generated: ${T.fmtDate(report.created_at || new Date())}`,
+      subtitle: refreshed
+        ? `Updated: ${fetchedAt}`
+        : `Generated: ${T.fmtDate(report.created_at || new Date())}`,
       docNumber: report.report_number,
       business,
     });
@@ -396,6 +405,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       ['Name', requester.name || '—'],
       ['Mobile', requester.mobile || '—'],
       ['Requested on', generatedAt],
+      ['Records fetched', `${fetchedAt}${refreshed ? ' (updated on download)' : ''}`],
       ['Channel', titleCase(requester.channel || 'whatsapp')],
       ['Device', requester.device || '—'],
       ['IP address', requester.ip || '—'],

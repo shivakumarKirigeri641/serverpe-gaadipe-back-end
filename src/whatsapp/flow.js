@@ -1909,11 +1909,47 @@ async function feedbackAsk(mobile) {
   }
 }
 
+/*
+ * FRESH ON EVERY DOWNLOAD (user, 2026-10-15: "when the user downloads from the menu, call the API
+ * fresh; if it is down, use the saved one"). Within its download period a report is reprinted —
+ * same number, same link — from the Government records as they are now: ULIP live (never the paid
+ * RC backup), the RC saved last time standing in if VAHAN alone is down, challans the old ones if
+ * e-Challan alone is down. Nothing fresh at all: the saved PDF goes, as before. Asked again within
+ * the hour, the report just printed is sent without a new lookup.
+ */
+async function refreshReport(r) {
+  if (!r?.id) return { refreshed: false };
+  const row = await db.one(`SELECT * FROM vehicle_reports WHERE id = $1`, [r.id]);
+  if (!row || !row.valid_until || new Date(row.valid_until) <= new Date()) return { refreshed: false };
+  const at = Date.parse(row.snapshot?.fetched_at || '');
+  if (at && Date.now() - at < 60 * 60 * 1000) return { refreshed: false, recent: true, at: new Date(at) };
+  const data = await gateway.full(row.reg_no, { challans: 'all', refresh: 1, backup: 0, rc_saved: 1 }).catch(() => null);
+  if (!data?.success || !data.rc) return { refreshed: false };
+  const old = row.snapshot || {};
+  const merged = {
+    ...data,
+    challans: data.challans || old.challans || null,
+    counts: data.challans ? data.counts : { ...(data.counts || {}), ...(old.counts || {}) },
+    fastag: data.fastag || old.fastag || null,
+    fetched_at: new Date().toISOString(),
+  };
+  await require('../pay/report').rebuild(row, merged);
+  console.log('[wa] report %s reprinted from fresh records%s', row.report_number, data.rc_saved ? ' (VAHAN down — saved RC)' : '');
+  return { refreshed: true, at: new Date() };
+}
+
 /** Send a still-valid report: the PDF, and a link that works until it lapses — then the next steps. */
 async function sendValidReport(mobile, r, { next = true } = {}) {
   const ends = fmt(new Date(r.valid_until));
   const link = baseUrl() && r.access_token ? `${baseUrl()}/report/${r.access_token}` : null;
-  const caption = `📋 ${r.report_number} — ${r.reg_no}\nDownload again until ${ends}`
+  const fresh = await refreshReport(r).catch((e) => {
+    console.error('[wa] report %s fresh lookup: %s — sending the saved one', r.report_number, e.message);
+    return { refreshed: false };
+  });
+  // The moment the data came from the records, date and time (user, 2026-10-15).
+  const stamp = (d) => d.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+  const asOf = fresh.refreshed || fresh.recent ? `\n🔄 Fresh from Government records: ${stamp(fresh.at)}` : '';
+  const caption = `📋 ${r.report_number} — ${r.reg_no}${asOf}\nDownload again until ${ends}`
     + (link ? `\n${link}` : '');
 
   // Rebuilt first if missing or printed with an older layout (pay/rebuild.js).
