@@ -11,7 +11,10 @@
  *            service, no offer: to EVERY customer who agreed in this panel's channel,
  *            from the usual (transactional) header. Its variables may be 0 to 3.
  *
- *   overview()    the mode's template, today's count against sms_promo_per_day, batches
+ * The templates themselves live in sms_templates (migration 187, 2026-10-15) — chosen from a list,
+ * each with its kind, DLT message id, wording and header — no longer typed into Settings.
+ *
+ *   overview()    the chosen template, all templates, today's count against sms_promo_per_day, batches
  *   recipients()  who the mode may reach (consented.agreedSql — the Customers rule)
  *   send()        values + chosen customers → notify_queue; jobs/reach.js sends a few a
  *                 minute, only 10 am – 9 pm IST (a batch outside waits for 10 am)
@@ -59,17 +62,71 @@ function nextWindow(at = new Date()) {
   return new Date(day.getTime() - 5.5 * 3600e3);
 }
 
-async function template(mode = 'promo') {
-  const m = modeOf(mode);
-  const id = String(await settings.get(`sms_tpl_${m}`, '') || '').trim();
-  const text = String(await settings.get(`sms_tpl_${m}_text`, '') || '').trim();
-  // The promotional template needs the promotional header; a service message goes from the usual one.
-  const sender = m === 'promo'
+/*
+ * THE TEMPLATES (user, 2026-10-15: "one selectable SMS template, and typing 1, 2 or 3 parameters
+ * based on which template I select"; migration 187). Each approved DLT template is kept once in
+ * sms_templates; the broadcast picks one, and its kind decides who may receive it.
+ */
+const varsOf = (body) => (String(body || '').match(/\{#var#\}/gi) || []).length;
+
+/** The header a template goes from: its own, else the promotional / usual one. */
+async function senderOf(row) {
+  if (row.sender) return row.sender;
+  return row.kind === 'promo'
     ? String(await settings.get('sms_promo_sender_id', '') || '').trim() || process.env.FAST2SMS_PROMO_SENDER_ID || ''
     : process.env.FAST2SMS_SENDER_ID || '';
-  const count = (text.match(/\{#var#\}/gi) || []).length;
-  const vars = text ? count : (m === 'promo' ? 3 : 0);
-  return { mode: m, id, text, sender, vars, ready: Boolean(id && text && sender) };
+}
+
+const shape = async (r) => ({
+  key: String(r.id), name: r.name, mode: r.kind, id: r.dlt_id, text: r.body, own_sender: r.sender || null,
+  sender: await senderOf(r), vars: varsOf(r.body), active: r.is_active, modified_at: r.modified_at,
+  ready: Boolean(r.dlt_id && r.body && await senderOf(r)),
+});
+
+async function templates({ all = false } = {}) {
+  const { rows } = await db.query(`SELECT * FROM sms_templates ${all ? '' : 'WHERE is_active'} ORDER BY kind DESC, name, id`);
+  return Promise.all(rows.map(shape));
+}
+
+/** One template by its key, or the first active one — null when there is none. */
+async function template(key) {
+  const r = /^\d+$/.test(String(key || ''))
+    ? await db.one(`SELECT * FROM sms_templates WHERE id = $1 AND is_active`, [Number(key)])
+    : await db.one(`SELECT * FROM sms_templates WHERE is_active ORDER BY kind DESC, name, id LIMIT 1`);
+  return r ? shape(r) : null;
+}
+
+/** Add or change a template. { ok, template } or { ok: false, error }. */
+async function saveTemplate(input, adminId) {
+  const name = String(input?.name || '').replace(/\s+/g, ' ').trim();
+  const kind = MODES.includes(input?.kind) ? input.kind : null;
+  const dltId = String(input?.dlt_id || '').trim();
+  const body = String(input?.body || '').replace(/\r/g, '').trim();
+  const sender = String(input?.sender || '').trim().toUpperCase() || null;
+  if (!name || name.length > 60) return { ok: false, error: 'Give the template a short name (up to 60 characters).' };
+  if (!kind) return { ok: false, error: 'Choose whether it is a service notice or promotional.' };
+  if (!/^\d{3,25}$/.test(dltId)) return { ok: false, error: 'The DLT message id is the number Fast2SMS shows for the approved template.' };
+  if (!body || body.length > 500) return { ok: false, error: 'Paste the approved wording exactly, with {#var#} where each value goes.' };
+  if (varsOf(body) > 5) return { ok: false, error: 'At most 5 {#var#} values.' };
+  if (sender && !/^[A-Z0-9]{6}$/.test(sender)) return { ok: false, error: 'The header (sender id) is 6 letters or digits — or leave it empty for the usual one.' };
+  try {
+    const id = /^\d+$/.test(String(input?.key || '')) ? Number(input.key) : null;
+    const r = id
+      ? await db.one(`UPDATE sms_templates SET name = $2, kind = $3, dlt_id = $4, body = $5, sender = $6, modified_at = now()
+                       WHERE id = $1 AND is_active RETURNING *`, [id, name, kind, dltId, body, sender])
+      : await db.one(`INSERT INTO sms_templates (name, kind, dlt_id, body, sender, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [name, kind, dltId, body, sender, adminId || null]);
+    return r ? { ok: true, template: await shape(r) } : { ok: false, error: 'That template is gone.' };
+  } catch (e) {
+    if (e.code === '23505') return { ok: false, error: 'A template with that DLT message id is already in the list.' };
+    throw e;
+  }
+}
+
+/** Take a template off the list (kept for the batches that used it). */
+async function removeTemplate(key) {
+  const { rowCount } = await db.query(`UPDATE sms_templates SET is_active = false, modified_at = now() WHERE id = $1`, [Number(key) || 0]);
+  return { ok: rowCount > 0 };
 }
 
 const dayStart = () => {
@@ -85,6 +142,7 @@ async function sentToday() {
 async function batches() {
   const { rows } = await db.query(
     `SELECT q.note AS batch, min(q.kind) AS kind, min(q.created_at) AS created_at, min(q.send_at) AS send_at, (array_agg(q.vals))[1] AS vals,
+            (array_agg(t.name))[1] AS template,
             count(*)::int AS total,
             count(*) FILTER (WHERE q.status = 'queued')::int AS queued,
             count(*) FILTER (WHERE q.status = 'sent')::int AS sent,
@@ -92,18 +150,20 @@ async function batches() {
             count(*) FILTER (WHERE q.status = 'failed')::int AS failed,
             count(*) FILTER (WHERE q.status = 'cancelled')::int AS cancelled,
             (array_agg(a.name))[1] AS admin
-       FROM notify_queue q LEFT JOIN admin_users a ON a.id = q.admin_id
+       FROM notify_queue q LEFT JOIN admin_users a ON a.id = q.admin_id LEFT JOIN sms_templates t ON t.id = q.template_id
       WHERE q.channel = 'sms' AND q.kind IN ('promo', 'service') AND q.note ~ '^(promo|service):'
       GROUP BY q.note ORDER BY min(q.created_at) DESC LIMIT 20`);
   return rows;
 }
 
-async function overview(mode = 'promo') {
-  const t = await template(mode);
+/** The chosen template (or the first), every template to choose from, today's count and the batches. */
+async function overview(key) {
+  const t = await template(key);
   const cap = await settings.num('sms_promo_per_day', 500);
   const today = await sentToday();
   const ist = istNow().getUTCHours();
-  return { mode: t.mode, template: t, cap, today, left: Math.max(0, cap - today), in_window: ist >= 10 && ist < 21, batches: await batches() };
+  return { mode: t?.mode || 'service', template: t, templates: await templates(), cap, today, left: Math.max(0, cap - today),
+           in_window: ist >= 10 && ist < 21, batches: await batches() };
 }
 
 const FILTERS = {
@@ -143,14 +203,13 @@ async function recipients({ mode = 'promo', filter = 'all', q = '', limit = 1000
 }
 
 /** Queue the batch. { ok, queued, not_opted, over_cap, send_at, batch } or { ok: false, error }. */
-async function send({ mode = 'promo', userIds = [], vals = [], note = '' }, adminId) {
-  const t = await template(mode);
-  const what = t.mode === 'promo' ? 'promotional' : 'service (Service Implicit)';
-  if (!t.id) return { ok: false, error: `Put the DLT message id of the approved ${what} template in Settings (sms_tpl_${t.mode}) first.` };
-  if (!t.text) return { ok: false, error: `Paste the approved ${what} wording, with any {#var#}, in Settings (sms_tpl_${t.mode}_text) first.` };
+async function send({ template: key, userIds = [], vals = [], note = '' }, adminId) {
+  if (!/^\d+$/.test(String(key || ''))) return { ok: false, error: 'Choose a template first.' };
+  const t = await template(key);
+  if (!t) return { ok: false, error: 'That template is not in the list any more.' };
   if (!t.sender) {
-    return { ok: false, error: t.mode === 'promo' ? 'Put your promotional header (6 digits) in Settings (sms_promo_sender_id) first.'
-      : 'The SMS sender id (FAST2SMS_SENDER_ID) is not set on the server.' };
+    return { ok: false, error: t.mode === 'promo' ? 'This promotional template has no header: give it one, or put your 6-digit promotional header in Settings (sms_promo_sender_id).'
+      : 'The SMS sender id (FAST2SMS_SENDER_ID) is not set on the server — or give this template its own header.' };
   }
   const v = (vals || []).slice(0, t.vars).map((x) => String(x ?? '').replace(/\s+/g, ' ').trim());
   if (v.length !== t.vars || v.some((x) => !x)) return { ok: false, error: `The template needs all ${t.vars} value${t.vars === 1 ? '' : 's'}.` };
@@ -174,11 +233,11 @@ async function send({ mode = 'promo', userIds = [], vals = [], note = '' }, admi
   const at = nextWindow();
   const batch = `${t.mode}:${new Date().toISOString()}${note ? ` ${String(note).slice(0, 80)}` : ''}`;
   const { rows } = await db.query(
-    `INSERT INTO notify_queue (channel, kind, user_id, mobile, vals, send_at, admin_id, note)
-     SELECT 'sms', $6, u.id, right(regexp_replace(u.mobile, '\\D', '', 'g'), 10), $1::jsonb, $2, $3, $4
+    `INSERT INTO notify_queue (channel, kind, user_id, mobile, vals, send_at, admin_id, note, template_id)
+     SELECT 'sms', $6, u.id, right(regexp_replace(u.mobile, '\\D', '', 'g'), 10), $1::jsonb, $2, $3, $4, $7
        FROM users u WHERE u.id = ANY($5::bigint[])
-     RETURNING id`, [JSON.stringify(v), at, adminId || null, batch, take, t.mode]);
-  return { ok: true, mode: t.mode, queued: rows.length, not_opted: ids.length - go.length, over_cap: go.length - take.length,
+     RETURNING id`, [JSON.stringify(v), at, adminId || null, batch, take, t.mode, Number(t.key)]);
+  return { ok: true, mode: t.mode, template: t.name, queued: rows.length, not_opted: ids.length - go.length, over_cap: go.length - take.length,
            send_at: at, batch, preview: fill(t.text, v) };
 }
 
@@ -189,4 +248,4 @@ async function cancel(batch) {
   return { ok: true, cancelled: rowCount };
 }
 
-module.exports = { overview, recipients, send, cancel, fill, nextWindow, smsLength, template };
+module.exports = { overview, recipients, send, cancel, fill, nextWindow, smsLength, template, templates, saveTemplate, removeTemplate, senderOf };

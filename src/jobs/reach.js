@@ -29,7 +29,7 @@ async function runOnce() {
       try {
         if (channel === 'sms') {
           const out = await require('../util/sms').sendTemplate(q.kind, q.mobile, Array.isArray(q.vals) ? q.vals : [],
-            { queueId: q.id, adminId: q.admin_id });
+            { queueId: q.id, adminId: q.admin_id, templateId: q.template_id || null });
           status = out.simulated || out.ok ? 'sent' : out.skipped ? 'skipped' : 'failed';
           result = out.simulated ? 'simulated (no SMS provider here)' : out.ok ? null : out.error || null;
         } else {

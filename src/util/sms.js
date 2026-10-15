@@ -182,17 +182,23 @@ async function send(mobile, text, { variables = {}, templateId = null } = {}) {
 const KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers', 'manual', 'status', 'promo'];
 const PROMOTIONAL = ['offers', 'promo'];
 async function sendTemplate(kind, mobile, values = [], meta = {}) {
-  const out = await sendTemplateRaw(kind, mobile, values);
+  const out = await sendTemplateRaw(kind, mobile, values, meta);
   await logSms({ kind, mobile, out, values: values.map((v) => String(v ?? '')), queueId: meta.queueId || null, adminId: meta.adminId || null });
   return out;
 }
-async function sendTemplateRaw(kind, mobile, values = []) {
+async function sendTemplateRaw(kind, mobile, values = [], meta = {}) {
   if (!KINDS.includes(kind)) return { ok: false, error: 'unknown_kind' };
   const settings = require('./settings');
   // The master switch is for the automatic SMS; a manual or promotional send from the admin is a decision of its own.
   // 'service' too (2026-10-13): only ever sent by hand, from the admin's SMS broadcast or the web admin.
   if (!['manual', 'promo', 'service'].includes(kind) && !(await settings.bool('sms_alerts_enabled', false))) return { ok: false, skipped: true, error: 'sms_alerts_off' };
-  const messageId = String(await settings.get(`sms_tpl_${kind}`, '') || '').trim();
+  /* A broadcast SMS carries its own template (sms_templates, migration 187, 2026-10-15): its
+     message id and header; everything else uses the one template Settings name for its kind. */
+  const tpl = meta.templateId
+    ? await require('../db').one(`SELECT dlt_id, sender, kind FROM sms_templates WHERE id = $1`, [meta.templateId]).catch(() => null)
+    : null;
+  if (meta.templateId && !tpl) return { ok: false, skipped: true, error: 'its SMS template was deleted' };
+  const messageId = tpl ? tpl.dlt_id : String(await settings.get(`sms_tpl_${kind}`, '') || '').trim();
   if (!messageId) return { ok: false, skipped: true, error: `no approved template for ${kind}` };
   const m = String(mobile || '').replace(/\D/g, '').slice(-10);
   if (m.length !== 10) return { ok: false, error: 'bad_mobile' };
@@ -218,8 +224,8 @@ async function sendTemplateRaw(kind, mobile, values = []) {
   }
   try {
     if (PROVIDER !== 'fast2sms') throw new Error(`template SMS is set up for Fast2SMS only (provider ${PROVIDER})`);
-    const promoSender = PROMOTIONAL.includes(kind)
-      ? (String(await settings.get('sms_promo_sender_id', '') || '').trim() || process.env.FAST2SMS_PROMO_SENDER_ID || null) : null;
+    const promoSender = tpl?.sender || (PROMOTIONAL.includes(kind)
+      ? (String(await settings.get('sms_promo_sender_id', '') || '').trim() || process.env.FAST2SMS_PROMO_SENDER_ID || null) : null);
     if (PROMOTIONAL.includes(kind) && !promoSender) throw new Error('no promotional sender id (Settings sms_promo_sender_id)');
     const out = await sendViaFast2sms({ mobile: m, messageId, values: cut, sender: promoSender });
     console.log('[sms] %s sent to ••••%s', kind, m.slice(-4));

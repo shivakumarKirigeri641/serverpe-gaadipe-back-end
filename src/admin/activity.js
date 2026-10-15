@@ -70,7 +70,7 @@ async function notifications(admin) {
   const { rows } = await db.query(
     `SELECT id, rule_key, severity, source, title, description, detail, status, created_at, last_seen_at
        FROM admin_alerts WHERE status <> 'resolved' OR created_at > now() - interval '3 days'
-      ORDER BY (status <> 'resolved') DESC, last_seen_at DESC LIMIT 40`);
+      ORDER BY coalesce(last_seen_at, created_at) DESC, id DESC LIMIT 40`);   // newest first, open or resolved (user, 2026-10-15)
   const items = rows.map((al) => ({
     id: String(al.id), title: al.title, text: al.description, severity: al.severity, group: GROUP(al), status: al.status,
     at: al.last_seen_at || al.created_at, to: linkOf(al), unread: new Date(al.last_seen_at || al.created_at) > readAt,
