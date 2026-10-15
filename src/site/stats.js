@@ -24,10 +24,18 @@ let cache = { at: 0, value: null };
    agreed to the Terms (user, 2026-10-09): someone who only said Hi is not a
    customer. agreedSql also leaves out anyone who said STOP. */
 const { agreedSql } = require('../admin/consented');
-const REAL = `u.is_internal = false AND ${agreedSql('u.mobile', { whatsappOnly: false })}`;
 const NOT_STOPPED = 'true';
 
+/*
+ * WHICH CHANNEL'S NUMBERS (user, 2026-10-15: "currently serving WhatsApp, give WhatsApp only").
+ * site_stats_channel: 'whatsapp' — customers who agreed on WhatsApp and their WhatsApp
+ * payments; 'web' — the website's; 'all' — both. Switch it with the site's mode.
+ */
 async function compute() {
+  const channel = String(await settings.get('site_stats_channel', 'all')).toLowerCase();
+  const REAL = `u.is_internal = false AND ${agreedSql('u.mobile', { whatsappOnly: channel === 'whatsapp', webOnly: channel === 'web' })}`;
+  const PAID_CH = channel === 'whatsapp' ? `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') <> 'web'`
+    : channel === 'web' ? `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'` : '';
   const row = await db.one(`
     WITH checked AS (
       SELECT uv.vehicle_id, uv.check_count
@@ -41,10 +49,10 @@ async function compute() {
       (SELECT count(*) FROM users u WHERE ${REAL} AND ${NOT_STOPPED})::int                AS customers,
       (SELECT count(*) FROM vehicles_checked)::int                                          AS vehicles,
       (SELECT coalesce(sum(check_count), 0) FROM checked)::int                              AS checks,
-      (SELECT count(*) FROM api_calls a LEFT JOIN users u ON u.id = a.user_id
-        WHERE NOT a.cache_hit AND a.ok AND coalesce(u.is_internal, false) = false)::int     AS records_fetched,
+      (SELECT count(*) FROM api_calls a ${channel === 'all' ? 'LEFT ' : ''}JOIN users u ON u.id = a.user_id
+        WHERE NOT a.cache_hit AND a.ok AND ${channel === 'all' ? 'coalesce(u.is_internal, false) = false' : REAL})::int AS records_fetched,
       (SELECT count(*) FROM payments p JOIN users u ON u.id = p.user_id
-        WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${REAL})::int                    AS reports_bought,
+        WHERE p.status = 'paid' AND p.amount_paise > 0 AND (p.raw->>'test_mode') IS NULL ${PAID_CH} AND ${REAL})::int AS reports_bought,
       (SELECT count(*) FROM subscriptions s JOIN users u ON u.id = s.user_id
         WHERE s.is_active AND s.ends_on >= CURRENT_DATE AND ${REAL})::int                   AS watching,
       (SELECT count(*) FROM vehicles_checked
