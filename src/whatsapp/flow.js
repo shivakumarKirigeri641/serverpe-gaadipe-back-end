@@ -598,6 +598,8 @@ async function whatYouGet(mobile) {
     + `🔔 *${days} days of monitoring included* — a message before any document expires, and when a new challan appears.\n\n`
     + (renew ? `🔄 *Renew for ${renew}* — another ${days} days.\n\n` : '')
     + '🚛 *Fleets (5+ vehicles)* — one Excel report of every vehicle, by email, every evening.\n\n'
+    // Said upfront (2026-10-15): people rated 1★ expecting the owner's phone number.
+    + '🔒 *Never shared:* an owner\'s mobile number or address — they are private by law, and we don\'t receive them.\n\n'
     + `Sample report: ${require('../mail/customer').SITE()}/sample-report.pdf`,
   ['check', { id: BTN.FLEET, title: 'Fleet (5+ vehicles)' }, 'menu']);
 }
@@ -748,6 +750,7 @@ const STEP_WORDS = {
   alert_pause_cancelled: () => ['▶️', 'Kept alerts on (did not pause)'],
   alert_resumed: () => ['▶️', 'Resumed alerts'],
   email_later: () => ['📧', 'Said "Not now" to adding an email'],
+  asked_owner_contact: () => ['🔒', 'Asked for the owner\'s phone number / address — told we never share it'],
   feedback_rating: (d) => [d.rating >= 5 ? '😊' : d.rating >= 3 ? '🙂' : '😞', `Rated GaadiPe ${d.rating}/5${d.reg_no ? ` · ${d.reg_no}` : ''}`],
   renewal_renew: (d) => ['🔄', `Tapped "Renew now" on the renewal reminder${d.reg_no ? ` · ${d.reg_no}` : ''}`],
   renewal_monitoring: () => ['📋', 'Tapped "My monitoring" on the renewal reminder'],
@@ -1902,6 +1905,14 @@ async function welcome(mobile) {
  * @param {object} message                     the raw WhatsApp message
  * @param {string} mobile                      10 digits
  */
+/* Asking for the owner's contact (2026-10-15), English, Hindi and Hinglish: the owner (or malik /
+   maalik / मालिक) named with a number, phone, contact, mobile or address, either way round. */
+const OWNER_CONTACT_RE = new RegExp([
+  '\\b(owner|owners|malik|maalik|maalik\'?s)\\b.{0,30}\\b(mobile|phone|contact|number|no\\.?|num|address|addr|whats ?app)\\b',
+  '\\b(mobile|phone|contact|number|address|whats ?app)\\b.{0,30}\\b(of|ka|ki|ke)?\\s*(the\\s+)?(owner|malik|maalik)\\b',
+  'मालिक.{0,20}(नंबर|नम्बर|मोबाइल|फ़ोन|फोन|पता)', '(नंबर|नम्बर|मोबाइल|फ़ोन|फोन|पता).{0,20}मालिक',
+].join('|'), 'i');
+
 /* Asking not to be messaged, in the words people actually use (user, 2026-09-30). */
 const OPT_OUT_RE = new RegExp([
   "\\b(don'?t|do not|dont|pls don'?t|please don'?t)\\s+(message|msg|text|contact|disturb|send)",
@@ -2096,6 +2107,23 @@ async function handle(session, message, mobile) {
   }
   // The alert template's "Only alert changes" / "Keep me updated" — tapped or typed.
   if (await alertChoice(mobile, intent.text, message)) return;
+  /*
+   * "GIVE ME THE OWNER'S NUMBER" (user, 2026-10-15: "people give 1★ just for the mobile
+   * number"). Asked for, it is answered at once and plainly — before any rating question —
+   * so the expectation is set rather than disappointed. Only when owner / malik is named, so
+   * a plain vehicle number or "my mobile number" is never caught.
+   */
+  // Not while they are typing feedback or why they said STOP — "no owner number, useless" is feedback.
+  if (intent.kind === 'text' && !['feedback', 'stop_reason'].includes(state) && OWNER_CONTACT_RE.test(intent.text || '')) {
+    await funnel(mobile, 'asked_owner_contact');
+    await reply(mobile,
+      '🙏 Sorry, we can\'t share a vehicle owner\'s *mobile number* or *address*. It is private and protected by law — '
+      + 'and the Government records don\'t give it to us either.\n\n'
+      + 'If you need to reach the owner — about a parked vehicle or an accident — the *local traffic police* or the *RTO* can help.\n\n'
+      + 'What GaadiPe *can* show: insurance, PUC, tax and fitness, challans, loan and the number of owners — send any vehicle number.',
+      ['check', { id: BTN.WHAT_GET, title: 'What do I get?' }, 'menu']);
+    return;
+  }
   /*
    * "DON'T MESSAGE ME" IS STOP TOO (user, 2026-09-30). Someone wrote "Don't
    * message me" after seeing the price; the bot read it as a vehicle number and
