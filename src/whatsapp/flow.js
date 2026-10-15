@@ -95,6 +95,9 @@ const BTN = {
   EMAIL_RESEND: 'email_resend',
   WHAT_GET: 'what_get',
   SO_FAR: 'menu_so_far',          // "GaadiPe so far" — the home page's numbers (2026-10-15)
+  FB_GOOD: 'fb_good',             // the paid customer's one-tap rating (feedbackAsk, 2026-10-15)
+  FB_OK: 'fb_ok',
+  FB_BAD: 'fb_bad',
   TERMS: 'menu_terms',
   STOP_MENU: 'menu_stop',
   STOP_CONFIRM: 'stop_confirm',
@@ -478,6 +481,7 @@ async function myMonitoring(mobile) {
     { id: BTN.MY_VEHICLES, title: 'My vehicles' },
   ].filter(Boolean).slice(0, 2);
   await reply(mobile, `📋 *My monitoring*\n\n${blocks.join('\n\n')}${more}\n\n${how}`, [...firsts, 'menu']);
+  await feedbackAsk(mobile);   // the paying customer's one-tap rating, when due (2026-10-15)
 }
 
 /* ─────────── REPLACE VEHICLE (user, 2026-10-13; pay/replace.js) — ₹9 + GST ── */
@@ -744,6 +748,7 @@ const STEP_WORDS = {
   alert_pause_cancelled: () => ['▶️', 'Kept alerts on (did not pause)'],
   alert_resumed: () => ['▶️', 'Resumed alerts'],
   email_later: () => ['📧', 'Said "Not now" to adding an email'],
+  feedback_rating: (d) => [d.rating >= 5 ? '😊' : d.rating >= 3 ? '🙂' : '😞', `Rated GaadiPe ${d.rating}/5${d.reg_no ? ` · ${d.reg_no}` : ''}`],
   renewal_renew: (d) => ['🔄', `Tapped "Renew now" on the renewal reminder${d.reg_no ? ` · ${d.reg_no}` : ''}`],
   renewal_monitoring: () => ['📋', 'Tapped "My monitoring" on the renewal reminder'],
   renewal_not_now: (d) => ['🙅', `Tapped "Not now" on the renewal reminder${d.reg_no ? ` · ${d.reg_no}` : ''}`],
@@ -1611,8 +1616,9 @@ async function deliverReport(mobile, regNo, message) {
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
   require('../owners/checkAlerts').noteCheck({ regNo, checker: mobile, channel: 'whatsapp' });
   await reportMenu(mobile, regNo, data, bought);
-  // The email tip after a check (2026-10-15) — once, for someone without a confirmed email.
-  await emailNudge(mobile, 'check');
+  // The email tip after a check (2026-10-15) — once, for someone without a confirmed email;
+  // else, for a paying customer, the one-tap rating. Never both at once.
+  if (!(await emailNudge(mobile, 'check'))) await feedbackAsk(mobile);
   // (The separate tips-&-offers question is gone, 2026-10-09: it is the second Agree button now.)
 }
 
@@ -1811,6 +1817,53 @@ async function emailNudge(mobile, at = 'check') {
     return true;
   } catch (e) {
     console.error('[wa] email nudge for %s: %s', mobile, e.message);
+    return false;
+  }
+}
+
+/*
+ * HOW USEFUL WAS IT? — PAYING CUSTOMERS ONLY (user, 2026-10-15: "for paid customers, I want
+ * feedback"). Asked by the bot, as a reply to something they just did (a vehicle check, the
+ * alert's "Thanks", My monitoring) — never a broadcast — at least 2 days after a real payment
+ * (60 days at most), once per payment and at most once a fortnight. Three one-tap answers;
+ * the tap is saved as feedback with a rating (5 / 3 / 1), then whatever they type next is
+ * saved too (state 'feedback'). "Not useful" also raises the unhappy-customer alert.
+ */
+const FB_RATE = { fb_good: [5, 'Very useful'], fb_ok: [3, 'It\'s okay'], fb_bad: [1, 'Not useful'] };
+async function feedbackAsk(mobile) {
+  try {
+    const p = await db.one(
+      `SELECT p.id, p.user_id, s.state, coalesce(u.display_name, u.wa_profile_name) AS name,
+              (SELECT r.reg_no FROM vehicle_reports r WHERE r.payment_id = p.id LIMIT 1) AS reg_no
+         FROM payments p JOIN users u ON u.id = p.user_id
+         LEFT JOIN whatsapp_sessions s ON s.mobile = u.mobile
+        WHERE u.mobile = $1 AND p.status = 'paid' AND p.amount_paise > 0 AND (p.raw->>'test_mode') IS NULL
+          AND NOT coalesce(u.is_internal, false) AND s.wa_opt_out_at IS NULL
+          AND p.paid_at < now() - interval '2 days' AND p.paid_at > now() - interval '60 days'
+        ORDER BY p.paid_at DESC LIMIT 1`, [mobile]);
+    if (!p) return false;
+    if (/^(email_|replace_|rp_|rm_|stop|feedback|owner_verify)/.test(String(p.state || ''))) return false;
+    const already = await db.one(
+      `SELECT 1 FROM event_log WHERE user_id = $1 AND kind = 'feedback_ask'
+          AND (detail->>'payment_id' = $2 OR created_at > now() - interval '14 days') LIMIT 1`, [p.user_id, String(p.id)]);
+    if (already) return false;
+    const gave = await db.one(`SELECT 1 FROM feedback WHERE user_id = $1 AND created_at > now() - interval '14 days' LIMIT 1`, [p.user_id]);
+    if (gave) return false;
+    const first = String(p.name || '').split(' ')[0];
+    const out = await send.buttons(mobile,
+      `⭐ *Quick question${first ? `, ${first}` : ''}* — how useful has GaadiPe been${p.reg_no ? ` for *${p.reg_no}*` : ''}? One tap helps us a lot.`,
+      [{ id: BTN.FB_GOOD, title: '😊 Very useful' }, { id: BTN.FB_OK, title: '🙂 It\'s okay' }, { id: BTN.FB_BAD, title: '😞 Not useful' }])
+      .catch(() => ({ ok: false }));
+    if (!out?.ok) return false;
+    await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'feedback_ask', $2)`,
+      [p.user_id, JSON.stringify({ mobile, payment_id: String(p.id), reg_no: p.reg_no })]);
+    if (p.reg_no) {
+      await db.query(`UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+        [mobile, JSON.stringify({ pending_reg: p.reg_no })]);
+    }
+    return true;
+  } catch (e) {
+    console.error('[wa] feedback ask for %s: %s', mobile, e.message);
     return false;
   }
 }
@@ -2037,6 +2090,8 @@ async function handle(session, message, mobile) {
     await funnel(mobile, tapped.step, tapped.open && tapped.open !== 'list' ? { reg_no: tapped.open } : {});
     if (tapped.open === 'list') await myVehicles(mobile, message);
     else if (tapped.open) await openVehicle(mobile, tapped.open, message, 'alert button');
+    // "Thanks" on an alert is a happy moment: the paying customer's one-tap rating (2026-10-15).
+    if (tapped.step === 'alert_thanks') await feedbackAsk(mobile);
     return;
   }
   // The alert template's "Only alert changes" / "Keep me updated" — tapped or typed.
@@ -2762,6 +2817,31 @@ async function handle(session, message, mobile) {
         await soFar(mobile);
         return;
 
+      // The paid customer's one-tap rating (feedbackAsk, 2026-10-15).
+      case BTN.FB_GOOD:
+      case BTN.FB_OK:
+      case BTN.FB_BAD: {
+        const [rating, words] = FB_RATE[intent.id];
+        const user = await store.upsertUser(mobile);
+        const reg = await pendingReg(mobile);
+        await db.query(
+          `INSERT INTO feedback (user_id, mobile, reg_no, body, rating, channel) VALUES ($1, $2, $3, $4, $5, 'whatsapp')`,
+          [user.id, mobile, reg, `[Tapped] ${words}`, rating]);
+        await funnel(mobile, 'feedback_rating', { rating, reg_no: reg });
+        if (rating <= 1) {
+          require('../util/unhappy').flag({ mobile, said: `Rated GaadiPe "${words}"${reg ? ` for ${reg}` : ''}`, why: 'low rating',
+            source: 'the WhatsApp rating', rating }).catch(() => {});
+        }
+        await setState(mobile, 'feedback', 'rated, asked why');
+        await send.buttons(mobile, rating >= 5
+          ? '🙏 Thank you! Is there anything we could do even better? Just type it — or tap Menu.'
+          : rating >= 3
+            ? '🙏 Thank you. What would make GaadiPe more useful for you? Just type it — every message is read.'
+            : '😔 Sorry to hear that. What went wrong? Just type it — we read every message and will try to put it right.',
+        [{ id: BTN.MENU, title: 'Menu' }]).catch(() => {});
+        return;
+      }
+
       case BTN.TERMS:
         await funnel(mobile, 'menu_terms');
         await termsAndPrivacy(mobile);
@@ -3127,4 +3207,4 @@ async function handle(session, message, mobile) {
 /** The free check for a number on the waiting list, now the records are back (jobs/waitlist.js). */
 const checkFromWaitlist = (mobile, regNo) => openVehicle(mobile, regNo, { type: 'system' }, 'waitlist: records service back');
 
-module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN, emailNudge, _sendValidReport: (m, r) => sendValidReport(m, r) };
+module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN, emailNudge, feedbackAsk, _sendValidReport: (m, r) => sendValidReport(m, r) };
