@@ -244,20 +244,31 @@ async function recordCalls(userId, vehicleId, data) {
       [userId || null, vehicleId, data.vehicle_number, dataset, c.path,
        c.outcome === 'FOUND', c.outcome || null,
        c.outcome === 'FOUND' ? null : String(c.code ?? ''), c.ms || null, cost]);
-    apiEvent(row?.id, { userId, regNo: data.vehicle_number, ok: c.outcome === 'FOUND', dataset,
+    apiEvent(row?.id, { userId, regNo: data.vehicle_number, ok: c.outcome === 'FOUND', dataset, path: c.path,
                         cacheHit: false, cost, ms: c.ms, code: c.outcome === 'FOUND' ? null : String(c.code ?? c.outcome ?? '') });
   }
 }
 
 /* Each Government-records call, into the command center's event stream
    (user, 2026-09-25) — keyed by its api_calls row, like the backfill. */
-function apiEvent(id, { userId, regNo, ok, dataset, cacheHit, cost, ms, code }) {
+/* Which provider, in the log line (user, 2026-10-15: "which API provider are you calling to get 'ok'"):
+   "ULIP VAHAN/01 · FOUND", "IDSPay RC backup · FOUND", "eChallan.app · NOT_FOUND". */
+const providerOf = (path) => {
+  const p = String(path || '').toUpperCase();
+  if (p === 'RCBACKUP') return 'IDSPay RC backup (₹3)';
+  if (/^(ECHALLANAPP|ECHALLAN_APP)/.test(p)) return 'eChallan.app';
+  if (/^(VAHAN|ECHALLAN|FASTAG)/.test(p)) return `ULIP ${p}`;
+  return p || 'cache';
+};
+
+function apiEvent(id, { userId, regNo, ok, dataset, path, cacheHit, cost, ms, code }) {
   if (!id) return;
   require('../events/track').fire({
     key: `api:${id}`, name: ok ? 'vehicle_api_success' : 'vehicle_api_failed', channel: 'system',
     userId, regNo, status: ok ? 'ok' : 'failed', errorCode: code || null,
     durationMs: Number.isFinite(ms) ? ms : undefined,
-    meta: { dataset, cache_hit: cacheHit, cost_paise: cost || 0 },
+    meta: { dataset, cache_hit: cacheHit, cost_paise: cost || 0, provider: cacheHit ? 'cache' : providerOf(path),
+            label: cacheHit ? 'from cache (no call)' : `${providerOf(path)}${ok ? '' : ` · ${code || 'no data'}`}` },
   });
 }
 
