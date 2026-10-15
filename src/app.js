@@ -237,7 +237,8 @@ app.listen(config.port, () => {
   // paid. Hourly is plenty — a date a month away does not move.
   require('./jobs/expiryWatch').start(Number(process.env.EXPIRY_TICK_SECONDS) || 3600);
   // Three days before monitoring ends, once per subscription.
-  require('./jobs/renewal').start(Number(process.env.RENEWAL_TICK_SECONDS) || 6 * 3600);
+  // Hourly (2026-10-15): it now sends only 7–10 pm, and a 6-hour tick could miss that window.
+  require('./jobs/renewal').start(Number(process.env.RENEWAL_TICK_SECONDS) || 3600);
   // Broadcasts, sent a few a minute (back 2026-10-09; manual and strict — admin/broadcasts.js, whatsapp/send.js).
   require('./jobs/broadcast').start(Number(process.env.BROADCAST_TICK_SECONDS) || 60);
   // SMS and notifications queued from the web admin (migration 155, 2026-10-10).

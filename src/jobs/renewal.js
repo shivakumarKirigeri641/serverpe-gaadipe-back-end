@@ -117,6 +117,12 @@ function mailFor(person, { regNo, endsOn, paise, days }) {
 
 async function runOnce({ limit = 20 } = {}) {
   if (String(await settings.get('renewal_enabled', 'true')).toLowerCase() === 'false') return { off: true };
+  /* THE EVENING ONLY (user, 2026-10-15: "the template goes after 7 pm, right?"): the same
+     7–10 pm window as every alert (alert_send_hour_ist / alert_send_until_hour_ist). */
+  const from = await settings.num('alert_send_hour_ist', 19);
+  const until = await settings.num('alert_send_until_hour_ist', 22);
+  const hour = new Date(Date.now() + 5.5 * 3600 * 1000).getUTCHours();
+  if (hour < from || hour >= until) return { told: 0, reason: 'outside the evening window' };
   const rows = await due(limit);
   let told = 0;
 
