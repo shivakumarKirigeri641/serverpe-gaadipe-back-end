@@ -18,6 +18,11 @@ const CATALOG = [
   { id: 'rp_pick',         title: 'Replace vehicle',     does: 'Starts Replace vehicle (₹11, GST included) — only works on paid monitoring within its window.' },
   { id: 'support',         title: 'Help & support',      does: 'Sends a support-ticket link, with the Terms, Privacy and Refund links.' },
   { id: 'feedback',        title: 'Feedback',            does: 'Asks them to type their feedback; the next message is saved as feedback.' },
+  // The one-tap rating (2026-10-15, flow.js feedbackAsk) — pick all three together to ask "how useful?".
+  { id: 'fb_good',         title: '😊 Very useful',      does: 'Saves a 5★ rating, thanks them and asks what could be even better; what they type is saved too.' },
+  { id: 'fb_ok',           title: '🙂 It\'s okay',        does: 'Saves a 3★ rating and asks what would make GaadiPe more useful; what they type is saved too.' },
+  { id: 'fb_bad',          title: '😞 Not useful',       does: 'Saves a 1★ rating, asks what went wrong (saved too) and raises the unhappy-customer alert to you.' },
+  { id: 'menu_so_far',     title: 'GaadiPe so far',      does: 'Shows how many customers GaadiPe has served, vehicles checked, challans found and more.' },
   { id: 'menu',            title: 'Menu',                does: 'Opens the full GaadiPe menu.' },
 ];
 const BY_ID = Object.fromEntries(CATALOG.map((b) => [b.id, b]));
