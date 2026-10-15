@@ -248,10 +248,11 @@ async function sendTemplateRaw(kind, mobile, values = [], meta = {}) {
   if (PROMOTIONAL.includes(kind)) {
     const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours();
     if (h < 10 || h >= 21) return { ok: false, skipped: true, error: 'outside 10 am - 9 pm (promotional)' };
+    // A test (scripts/test-sms.js, 2026-10-15) may skip the opt-in for GaadiPe's own internal numbers only.
     const ok = await require('../db').one(
       `SELECT 1 FROM users WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $1
-          AND promo_consent_at IS NOT NULL AND promo_consent_withdrawn_at IS NULL
-          AND deactivated_at IS NULL LIMIT 1`, [m]).catch(() => null);
+          AND ((promo_consent_at IS NOT NULL AND promo_consent_withdrawn_at IS NULL) OR ($2 AND is_internal))
+          AND deactivated_at IS NULL LIMIT 1`, [m, Boolean(meta.test)]).catch(() => null);
     if (!ok) return { ok: false, skipped: true, error: 'not opted in to offers' };
   }
   const cut = values.map((v) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 30));
