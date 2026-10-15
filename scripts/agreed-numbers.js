@@ -7,8 +7,9 @@
  *   node scripts/agreed-numbers.js              WhatsApp agreements (what the main admin counts)
  *   node scripts/agreed-numbers.js --all        WhatsApp and website agreements
  *   node scripts/agreed-numbers.js --file x.txt also write one number per line to x.txt
+ *   node scripts/agreed-numbers.js --comma      one comma-separated line instead
  *
- * Prints the count, then one comma-separated line of 10-digit numbers to paste.
+ * Prints the count, then the 10-digit numbers, one per line.
  */
 require('dotenv').config();
 const fs = require('fs');
@@ -32,7 +33,8 @@ const file = args.includes('--file') ? args[args.indexOf('--file') + 1] : null;
       ORDER BY a.m`);
   const list = rows.map((r) => r.m);
   console.log(`${list.length} numbers (${all ? 'WhatsApp + website' : 'WhatsApp'} agreements; STOP, internal and closed accounts left out)\n`);
-  console.log(list.join(','));
+  // One per line (user: "no, line by line"); --comma for a single comma-separated line.
+  console.log(list.join(args.includes('--comma') ? ',' : '\n'));
   if (file) { fs.writeFileSync(file, `${list.join('\n')}\n`); console.log(`\nAlso written to ${file}, one per line.`); }
   process.exit(0);
 })().catch((e) => { console.error(e.message); process.exit(1); });
