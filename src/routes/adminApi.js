@@ -1617,6 +1617,11 @@ router.put('/plans/:code', needs('settings'), safe(async (req, res) => {
     if (!Number.isInteger(off) || off < 0) return res.status(400).json({ error: 'bad_discount', message: 'The discount must be ₹0 or more.' });
     if (price - off < 100) return res.status(400).json({ error: 'bad_discount', message: 'At least ₹1 must be left to pay.' });
   }
+  // The renewal price (2026-10-14: "₹11 renewal configurable in admin"), GST inclusive, at least ₹1.
+  if (renewal_paise !== undefined && renewal_paise !== null) {
+    const r = Number(renewal_paise);
+    if (!Number.isInteger(r) || r < 100) return res.status(400).json({ error: 'bad_renewal', message: 'The renewal price must be ₹1 or more.' });
+  }
 
   const { rows } = await db.query(
     `UPDATE plans SET
