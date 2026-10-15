@@ -642,6 +642,23 @@ router.post('/whatsapp/reply-many/:id/stop', needs('settings'), safe(async (req,
   const out = require('../admin/replyMany').stop(req.params.id);
   return out ? res.json(out) : res.status(404).json({ error: 'Not found.' });
 }));
+/* The monitoring update now, to chosen paid customers (2026-10-15; admin/monitoringSend.js). */
+router.get('/monitoring/customers', needs('dashboard.view'), safe(async (_req, res) => res.json(await require('../admin/monitoringSend').list())));
+router.post('/monitoring/send', needs('settings'), safe(async (req, res) => {
+  try {
+    const out = await require('../admin/monitoringSend').start({ userIds: req.body?.user_ids, adminId: req.admin.id });
+    await auth.audit({ adminId: req.admin.id, action: 'monitoring_update_sent', ip: ipOf(req), detail: { people: out.total, user_ids: req.body?.user_ids } });
+    res.json(out);
+  } catch (e) { fail(res, e); }
+}));
+router.get('/monitoring/send/:id', safe(async (req, res) => {
+  const out = require('../admin/monitoringSend').get(req.params.id);
+  return out ? res.json(out) : res.status(404).json({ error: 'Not found — the server may have restarted.' });
+}));
+router.post('/monitoring/send/:id/stop', needs('settings'), safe(async (req, res) => {
+  const out = require('../admin/monitoringSend').stop(req.params.id);
+  return out ? res.json(out) : res.status(404).json({ error: 'Not found.' });
+}));
 /* The buttons a reply may carry, and what each does (2026-10-13; whatsapp/replyButtons.js). */
 router.get('/whatsapp/reply-buttons', safe(async (_req, res) => res.json({ buttons: require('../whatsapp/replyButtons').CATALOG })));
 
