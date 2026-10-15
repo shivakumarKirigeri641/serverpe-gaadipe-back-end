@@ -172,13 +172,17 @@ async function runOnce({ limit = 20 } = {}) {
       /* Inside their 24-hour window no template is needed (2026-10-14): the same words and
          the same three buttons as a free message — the ids are the template's payloads. */
       const inWindow = await send.windowOpen(r.mobile).catch(() => false);
-      const out = inWindow ? await send.buttons(r.mobile,
+      /* No template until it exists (2026-10-15): wa_template_renewal stays empty until
+         gp_renewal_en_v1 is approved, so nothing is tried — and refused by Meta — outside
+         the window. Email and the phone notification above still go. */
+      const tpl = String(await settings.get('wa_template_renewal', '') || '').trim();
+      const out = !inWindow && !tpl ? { ok: false, error: 'no renewal template yet' } : inWindow ? await send.buttons(r.mobile,
         `🔔 *Monitoring ending soon*\n\nHello *${name}*, the monitoring for your vehicle *${r.reg_no}* ends on *${istDay(r.ends_on)}*. `
         + `After that, document expiry and challan alerts for it will stop.\n\nTo continue for *${days} more days*, the renewal is *${money(priced.paise)}*.`,
         [{ id: `ren|r|${r.reg_no}`, title: 'Renew now' }, { id: `ren|m|${r.reg_no}`, title: 'My monitoring' }, { id: `ren|n|${r.reg_no}`, title: 'Not now' }],
         { footer: 'Team GaadiPe · Vehicle Monitoring' }).catch(() => ({ ok: false })) : await send.template(
         r.mobile,
-        await settings.get('wa_template_renewal', 'gp_renewal_en_v1'),
+        tpl,
         // {{4}} is the window and {{5}} the price: Meta numbers variables in the
         // order they appear, and the days figure comes first in the sentence.
         [name, r.reg_no, istDay(r.ends_on), days, money(priced.paise)],
