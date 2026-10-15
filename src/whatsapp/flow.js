@@ -94,6 +94,7 @@ const BTN = {
   EMAIL_LATER: 'email_later',     // "Not now" on the email tip (emailNudge, 2026-10-15)
   EMAIL_RESEND: 'email_resend',
   WHAT_GET: 'what_get',
+  SO_FAR: 'menu_so_far',          // "GaadiPe so far" — the home page's numbers (2026-10-15)
   TERMS: 'menu_terms',
   STOP_MENU: 'menu_stop',
   STOP_CONFIRM: 'stop_confirm',
@@ -385,8 +386,9 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
       { id: BTN.CHECK_ANOTHER,   title: 'Check a vehicle',  description: 'Any Indian number — basics are free' },
       { id: BTN.MY_VEHICLES,     title: 'My vehicles',      description: 'Pick one — its report, or a fresh check' },
       { id: BTN.MY_MONITORING,   title: 'My monitoring',    description: 'Watched vehicles, end dates, next alert, paused alerts' },
-      { id: BTN.DOWNLOAD_REPORT, title: 'My reports',       description: 'Send my report PDF again' },
-      ownerRow || { id: BTN.INVOICE, title: 'My GST invoice', description: 'The tax invoice for a payment' },
+      // My reports carries the GST invoice too (2026-10-15), so its row goes to "GaadiPe so far".
+      { id: BTN.DOWNLOAD_REPORT, title: 'My reports',       description: 'Report PDFs again, and GST invoices' },
+      ownerRow || { id: BTN.SO_FAR, title: 'GaadiPe so far', description: 'Customers served, vehicles checked, challans found' },
       { id: BTN.EMAIL,           title: 'Email for alerts',
         description: user?.email_verified_at ? `✓ ${user.email}` : 'Add and confirm your email for reports & alerts' },
       { id: BTN.WHAT_GET,        title: 'What do I get?',   description: 'Free check, full report, monitoring, fleets' },
@@ -597,6 +599,28 @@ async function whatYouGet(mobile) {
 }
 
 /*
+ * GAADIPE SO FAR (user, 2026-10-15: "a separate option in the menu — on tap, how many customers
+ * served, vehicles served, checks, expiries found… what the marketing site shows"). The same
+ * numbers and words as the home page (site/stats.js, site_stats_channel), each shown only when
+ * it is big enough to show there (site_stats_min) — totals only, never a person or a plate.
+ */
+const SO_FAR_ROWS = [
+  ['customers', '👥', 'Customers served'], ['vehicles', '🚗', 'Vehicles checked'], ['checks', '🔍', 'Vehicle checks run'],
+  ['records_fetched', '🏛️', 'Government records fetched'], ['reports_bought', '📄', 'Full reports bought'],
+  ['watching', '🔔', 'Vehicles being watched now'], ['expired_found', '⚠️', 'Vehicles found with expired insurance or PUC'],
+  ['challans_found', '🧾', 'Pending challans found'], ['states', '🗺️', 'States & UTs'],
+];
+async function soFar(mobile) {
+  const s = await require('../site/stats').get().catch(() => null);
+  const lines = s ? SO_FAR_ROWS.filter(([k]) => s[k] != null)
+    .map(([k, icon, label]) => `${icon} ${label}: *${Number(s[k]).toLocaleString('en-IN')}*`) : [];
+  await reply(mobile, lines.length
+    ? `📊 *GaadiPe so far*\n\n${lines.join('\n')}\n\n_Real numbers from our records, updated every few minutes. Our own test checks are not counted._`
+    : '📊 *GaadiPe so far*\n\nWe are just getting started — the numbers appear here as they grow. Check a vehicle to be part of them! 🙏',
+  ['check', { id: BTN.WHAT_GET, title: 'What do I get?' }, 'menu']);
+}
+
+/*
  * CURRENT OFFERS (user, 2026-10-13: "one more option in menu: current offers"). Read
  * live, so it is never out of date: the admin's own line (Settings offers_text — a
  * festival offer, say), the report price with any discount, the renewal and replace
@@ -684,7 +708,8 @@ const STEP_EVENT = {
  * the admin's (util/activity.js). d is the step's detail.
  */
 const MENU_WORDS = { menu_my_vehicles: 'My vehicles', menu_my_monitoring: 'My monitoring', menu_email: 'Email for alerts',
-  menu_what_get: 'What do I get?', menu_terms: 'Terms & privacy', menu_offers: 'Current offers', menu_stop: 'Stop / delete account' };
+  menu_what_get: 'What do I get?', menu_terms: 'Terms & privacy', menu_offers: 'Current offers', menu_stop: 'Stop / delete account',
+  menu_so_far: 'GaadiPe so far' };
 const STEP_WORDS = {
   hi: () => ['👋', 'Said Hi on WhatsApp'],
   agreed: (d) => ['✅', d.offers ? 'Agreed to the Terms + news & offers' : 'Agreed to the Terms (no offers)'],
@@ -1215,7 +1240,7 @@ async function sendReports(mobile) {
     }
   }
 
-  if (live.length) await afterReport(mobile, live.length === 1 ? live[0].reg_no : null);
+  if (live.length) await afterReport(mobile, live.length === 1 ? live[0].reg_no : null, { invoice: true });
 
   if (!live.length) {
     const reg = rows[0].reg_no;
@@ -1225,9 +1250,9 @@ async function sendReports(mobile) {
     await setState(mobile, 'owner_start', 'reports lapsed');
     await send.buttons(mobile,
       `Your report for *${reg}* can no longer be downloaded — its download period has ended.\n\n`
-      + 'Send the vehicle number again to check today\'s records.',
+      + 'Send the vehicle number again to check today\'s records. Your GST invoice is still available below.',
       [{ id: BTN.CHECK_ANOTHER, title: 'Check a vehicle' },
-       { id: BTN.FEEDBACK,      title: 'Feedback' },
+       { id: BTN.INVOICE,       title: 'GST invoice' },     // My reports carries the invoice (2026-10-15)
        { id: BTN.MENU,          title: 'Menu' }]);
   }
 }
@@ -1713,11 +1738,13 @@ async function start(mobile) {
  * a report is handed over, three ways on. Reply buttons need the 24-hour window,
  * which a tap or a message has just opened; shut, they are simply not sent.
  */
-async function afterReport(mobile, regNo) {
+/* `invoice` (2026-10-15): from My reports, which now carries the GST invoice — its menu row
+   went to "GaadiPe so far" — the middle button is the invoice instead of Feedback. */
+async function afterReport(mobile, regNo, { invoice = false } = {}) {
   await send.buttons(mobile,
     `${regNo ? `✅ That is your full report for *${regNo}*.` : '✅ Those are your reports.'} What would you like to do next?`,
     [{ id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' },
-     { id: BTN.FEEDBACK,      title: 'Feedback' },
+     invoice ? { id: BTN.INVOICE, title: 'GST invoice' } : { id: BTN.FEEDBACK, title: 'Feedback' },
      { id: BTN.MENU,          title: 'Menu' }]).catch(() => {});
 }
 
@@ -2728,6 +2755,11 @@ async function handle(session, message, mobile) {
       case BTN.WHAT_GET:
         await funnel(mobile, 'menu_what_get');
         await whatYouGet(mobile);
+        return;
+
+      case BTN.SO_FAR:
+        await funnel(mobile, 'menu_so_far');
+        await soFar(mobile);
         return;
 
       case BTN.TERMS:
