@@ -27,6 +27,43 @@ const configured = () => Boolean(PROVIDER);
  * The key goes in the `authorization` HEADER: sent in the POST body Fast2SMS
  * answers 401, which reads exactly like a wrong key.
  */
+/*
+ * THE GOVERNMENT TEMPLATE ID → FAST2SMS'S MESSAGE ID (user, 2026-10-15: "I need to input those 3
+ * params, that's it — the platform must take care of this SMS"). The DLT portal names a template by
+ * a 19-digit id (1277179182202755003); Fast2SMS's DLT route wants its own Message ID for it. Given
+ * the long one, it is looked up once in Fast2SMS's DLT Manager (a read-only GET) and remembered;
+ * if that lookup fails, the id goes as it was given — never worse than before.
+ */
+const messageIds = new Map();
+async function fast2smsMessageId(id) {
+  const s = String(id || '').trim();
+  if (!/^\d{15,25}$/.test(s)) return s;                       // already Fast2SMS's own (short) id
+  if (messageIds.has(s)) return messageIds.get(s);
+  const key = process.env.FAST2SMSAPIKEY || process.env.FAST2SMS_API_KEY || '';
+  if (!key) return s;
+  try {
+    const res = await fetch(`https://www.fast2sms.com/dev/dlt_manager?type=template&authorization=${encodeURIComponent(key)}`,
+      { headers: { authorization: key }, signal: AbortSignal.timeout(10000) });
+    const body = await res.json().catch(() => null);
+    // Whatever the nesting, the entry that carries this DLT template id also carries its message id.
+    let found = null;
+    const walk = (x) => {
+      if (found || !x || typeof x !== 'object') return;
+      if (!Array.isArray(x) && Object.values(x).some((v) => String(v).trim() === s)) {
+        const k = Object.keys(x).find((n) => /^message_?id$/i.test(n)) || Object.keys(x).find((n) => /^(msg_?id|id)$/i.test(n));
+        if (k && String(x[k]).trim() && String(x[k]).trim() !== s) { found = String(x[k]).trim(); return; }
+      }
+      Object.values(x).forEach(walk);
+    };
+    walk(body);
+    if (found) { messageIds.set(s, found); console.log('[sms] DLT template %s is Fast2SMS message %s', s, found); return found; }
+    console.warn('[sms] DLT template %s not found in the Fast2SMS DLT Manager — sending with it as given', s);
+  } catch (e) {
+    console.warn('[sms] Fast2SMS DLT Manager lookup failed (%s) — sending with %s as given', e.message, s);
+  }
+  return s;
+}
+
 async function sendViaFast2sms({ mobile, variables, messageId: givenId = null, values: givenValues = null, sender: givenSender = null }) {
   const key = process.env.FAST2SMSAPIKEY || process.env.FAST2SMS_API_KEY || '';
   // A promotional template goes from the promotional header (2026-10-13); everything else from the usual one.
@@ -227,7 +264,7 @@ async function sendTemplateRaw(kind, mobile, values = [], meta = {}) {
     const promoSender = tpl?.sender || (PROMOTIONAL.includes(kind)
       ? (String(await settings.get('sms_promo_sender_id', '') || '').trim() || process.env.FAST2SMS_PROMO_SENDER_ID || null) : null);
     if (PROMOTIONAL.includes(kind) && !promoSender) throw new Error('no promotional sender id (Settings sms_promo_sender_id)');
-    const out = await sendViaFast2sms({ mobile: m, messageId, values: cut, sender: promoSender });
+    const out = await sendViaFast2sms({ mobile: m, messageId: await fast2smsMessageId(messageId), values: cut, sender: promoSender });
     console.log('[sms] %s sent to ••••%s', kind, m.slice(-4));
     return { ok: true, id: out.id };
   } catch (e) {

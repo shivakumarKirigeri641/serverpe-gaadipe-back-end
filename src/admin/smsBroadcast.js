@@ -26,6 +26,9 @@ const db = require('../db');
 const settings = require('../util/settings');
 
 const VAR_MAX = 30;                 // DLT allows about 30 characters per {#var#}
+/* A value's slot, as DLT writes it: {#var#}, or typed — {#alphanumeric#}, {#numeric#}, {#urlott#},
+   {#cbn#}, {#email#} … (user, 2026-10-15: gp_winback_v1 uses {#alphanumeric#} and {#urlott#}). */
+const SLOT = /\{#[a-z_]+#\}/gi;
 const OPTED = `u.promo_consent_at IS NOT NULL AND u.promo_consent_withdrawn_at IS NULL`;
 const MODES = ['promo', 'service'];
 const modeOf = (m) => (MODES.includes(m) ? m : 'promo');
@@ -34,7 +37,7 @@ const istNow = () => new Date(Date.now() + 5.5 * 3600e3);
 /** The approved wording with the values put in. */
 const fill = (text, vals) => {
   let i = 0;
-  return String(text || '').replace(/\{#var#\}/gi, () => (vals[i++] ?? '…'));
+  return String(text || '').replace(SLOT, () => (vals[i++] ?? '…'));
 };
 
 /*
@@ -67,7 +70,7 @@ function nextWindow(at = new Date()) {
  * based on which template I select"; migration 187). Each approved DLT template is kept once in
  * sms_templates; the broadcast picks one, and its kind decides who may receive it.
  */
-const varsOf = (body) => (String(body || '').match(/\{#var#\}/gi) || []).length;
+const varsOf = (body) => (String(body || '').match(SLOT) || []).length;
 
 /** The header a template goes from: its own, else the promotional / usual one. */
 async function senderOf(row) {
@@ -92,7 +95,8 @@ async function templates({ all = false } = {}) {
 async function template(key) {
   const r = /^\d+$/.test(String(key || ''))
     ? await db.one(`SELECT * FROM sms_templates WHERE id = $1 AND is_active`, [Number(key)])
-    : await db.one(`SELECT * FROM sms_templates WHERE is_active ORDER BY kind DESC, name, id LIMIT 1`);
+    // The page opens on the template added or changed last — the one in use (2026-10-15).
+    : await db.one(`SELECT * FROM sms_templates WHERE is_active ORDER BY modified_at DESC, id DESC LIMIT 1`);
   return r ? shape(r) : null;
 }
 
@@ -106,8 +110,8 @@ async function saveTemplate(input, adminId) {
   if (!name || name.length > 60) return { ok: false, error: 'Give the template a short name (up to 60 characters).' };
   if (!kind) return { ok: false, error: 'Choose whether it is a service notice or promotional.' };
   if (!/^\d{3,25}$/.test(dltId)) return { ok: false, error: 'The DLT message id is the number Fast2SMS shows for the approved template.' };
-  if (!body || body.length > 500) return { ok: false, error: 'Paste the approved wording exactly, with {#var#} where each value goes.' };
-  if (varsOf(body) > 5) return { ok: false, error: 'At most 5 {#var#} values.' };
+  if (!body || body.length > 500) return { ok: false, error: 'Paste the approved wording exactly, with its {#…#} slots where each value goes.' };
+  if (varsOf(body) > 5) return { ok: false, error: 'At most 5 values ({#…#} slots).' };
   if (sender && !/^[A-Z0-9]{6}$/.test(sender)) return { ok: false, error: 'The header (sender id) is 6 letters or digits — or leave it empty for the usual one.' };
   try {
     const id = /^\d+$/.test(String(input?.key || '')) ? Number(input.key) : null;
