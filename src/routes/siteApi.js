@@ -94,7 +94,7 @@ router.get('/pricing', safe(async (_req, res) => {
     renewal_paise: plan?.renewal_paise ?? null,
     duration_days: plan?.duration_days ?? 28,
     report_valid_days: validDays,
-    free_checks_per_day: await settings.num('free_checks_per_day', 5),
+    free_checks_per_day: await settings.num('free_checks_per_day', 6),
     // How a full report is unlocked: pay | both | refer (user, 2026-09-21).
     unlock: await unlockMode(),
     // What a free check shows, so the home page's example matches it exactly.
