@@ -75,6 +75,40 @@ const docState = (col) => `CASE WHEN x.rc_checked_at IS NULL AND x.${col} IS NUL
   WHEN x.${col} < ${IST_TODAY} THEN 'expired'
   WHEN x.${col} < ${IST_TODAY} + $1::int THEN 'soon' ELSE 'valid' END`;
 
+/*
+ * THE NUMBER PLATE'S COLOUR (user, 2026-10-15: "yellow board or white board or green board"),
+ * read from what the RC says — never guessed from the number alone:
+ *   red     temporary registration (T0425KA…)        blue   diplomatic (CD / CC / UN)
+ *   black   self-drive rental (class or permit says rent / self drive)
+ *   yellow  transport: a transport category (LGV, HGV, 2WT, 3WT …) or a commercial class
+ *           (Goods Carrier, Motor Cab, Maxi Cab, Bus, Tipper …)
+ *   green   electric, private; green_yellow electric, transport (yellow letters)
+ *   white   everything else the RC names     unknown   no RC class yet
+ * With no RC class, a FASTag marked commercial still says yellow. Plates used before
+ * these colours (army, BH series) read as their class does.
+ */
+const PLATES = ['white', 'yellow', 'green', 'green_yellow', 'black', 'red', 'blue', 'unknown'];
+const TRANSPORT_CAT = '^(2WT|3WT|LGV|LPV|MGV|MPV|HGV|HPV|HTV|MTV|LTV)';
+const TRANSPORT_CLASS = '(goods|carrier|\\mcab\\M|taxi|\\mbus\\M|omni ?bus|maxi|tipper|truck|tanker|transport|rickshaw|tourist'
+  + '|delivery van|articulated|passenger|commercial|construction equipment|e-cart|school|educational)';
+const plateSql = ({ reg, cls, cat, fuel, permit, tagCommercial }) => {
+  const transport = `(coalesce(${cat}, '') ~* '${TRANSPORT_CAT}' OR coalesce(${cls}, '') ~* '${TRANSPORT_CLASS}')
+      AND concat_ws(' ', ${cls}, ${cat}) !~* 'non[- ]?transport'`;
+  const electric = `(coalesce(${fuel}, '') ~* '(electric|bov|battery)' AND coalesce(${fuel}, '') !~* 'hybrid')`;
+  return `CASE
+    WHEN ${reg} ~ '^T[0-9]' THEN 'red'
+    WHEN ${reg} ~ '^[0-9]{2,3}(CD|CC|UN)' THEN 'blue'
+    WHEN coalesce(${cls}, ${cat}) IS NULL THEN CASE WHEN ${tagCommercial} = 'true' THEN 'yellow' ELSE 'unknown' END
+    WHEN concat_ws(' ', ${cls}, ${permit}) ~* '(\\mrent|self[- ]?drive)' THEN 'black'
+    WHEN ${transport} THEN CASE WHEN ${electric} THEN 'green_yellow' ELSE 'yellow' END
+    WHEN ${electric} THEN 'green'
+    ELSE 'white' END`;
+};
+const PLATE_OF_ROW = plateSql({
+  reg: 'v.reg_no', cls: `coalesce(v.vehicle_class, rc.data->>'vehicle_class')`, cat: `rc.data->>'vehicle_category'`,
+  fuel: `coalesce(v.fuel, rc.data->>'fuel')`, permit: `rc.data->>'permit_type'`, tagCommercial: `fg.data->'active_tag'->>'commercial'`,
+});
+
 /* ─────────────────────────────── the explorer ─────────────────────────────── */
 
 /*
@@ -92,6 +126,7 @@ const BASE = `
               ELSE substring(v.reg_no from 1 for 2) END AS rto,
          rc.fetched_at AS rc_checked_at, rc.data->>'vehicle_category' AS category,
          rc.data->>'registered_at' AS registered_at,
+         ${PLATE_OF_ROW} AS plate,
          ch.fetched_at AS challan_checked_at,
          CASE WHEN ch.data IS NULL THEN NULL ELSE coalesce((ch.data->>'pending_count')::int, 0) END AS challans_pending,
          CASE WHEN ch.data IS NULL THEN NULL ELSE coalesce((ch.data->>'pending_count')::int, 0)
@@ -107,6 +142,7 @@ const BASE = `
     FROM vehicles v
     LEFT JOIN vehicle_snapshots rc ON rc.vehicle_id = v.id AND rc.dataset = 'rc'
     LEFT JOIN vehicle_snapshots ch ON ch.vehicle_id = v.id AND ch.dataset = 'challan'
+    LEFT JOIN vehicle_snapshots fg ON fg.vehicle_id = v.id AND fg.dataset = 'fastag'
     LEFT JOIN LATERAL (
       SELECT count(*)::int AS lookups, min(e.occurred_at) AS first_lookup, max(e.occurred_at) AS last_lookup,
              count(*) FILTER (WHERE e.channel = 'whatsapp')::int AS wa_lookups,
@@ -196,6 +232,9 @@ function whereOf(q, admin, args) {
   if (q.rto) w.push(`x.rto = ${bind(plate.normalize(q.rto))}`);
   for (const k of ['maker', 'model', 'fuel']) if (q[k]) w.push(`x.${k} ILIKE ${bind(`%${String(q[k]).trim()}%`)}`);
   if (q.vclass) w.push(`(x.vehicle_class ILIKE ${bind(`%${String(q.vclass).trim()}%`)} OR x.category ILIKE $${args.length})`);
+  // The board's colour (2026-10-15); "green" takes both electric boards.
+  if (q.plate === 'green') w.push(`x.plate IN ('green', 'green_yellow')`);
+  else if (PLATES.includes(q.plate)) w.push(`x.plate = ${bind(q.plate)}`);
 
   // The WhatsApp admin (X-View: whatsapp, 2026-10-09): never a vehicle only ever checked on the website.
   if (require('./consented').view.getStore()?.whatsappOnly) w.push('NOT (x.web_lookups > 0 AND x.wa_lookups = 0)');
@@ -245,7 +284,7 @@ function whereOf(q, admin, args) {
 const rowOut = (r) => ({
   id: String(r.id), reg_no: r.reg_no, display: plate.pretty(r.reg_no),
   maker: r.maker, model: r.model, variant: null, fuel: r.fuel, vehicle_class: r.vehicle_class, category: r.category,
-  state: r.state, rto: r.rto, registered_at: r.registered_at,
+  plate: r.plate, state: r.state, rto: r.rto, registered_at: r.registered_at,
   first_seen: r.first_lookup && r.first_seen_at ? new Date(Math.min(new Date(r.first_lookup), new Date(r.first_seen_at))) : (r.first_lookup || r.first_seen_at),
   last_seen: r.last_activity,
   lookups: r.lookups, failed_lookups: r.failed_lookups, wa_lookups: r.wa_lookups, web_lookups: r.web_lookups,
@@ -294,7 +333,11 @@ async function stats() {
   const d30 = command.resolve({ range: '30d', compare: 'none' });
   const dv = (a, b) => `count(DISTINCT e.reg_no) FILTER (WHERE e.occurred_at >= '${a.toISOString()}' AND e.occurred_at < '${b.toISOString()}')::int`;
   const earliest = new Date(Math.min(m.prevFrom, w.prevFrom, d30.from));
-  const [p, all] = await Promise.all([
+  /* Vehicles by board colour (2026-10-15) — with the explorer's own everyday filters (this
+     admin's view, archived left out), so a tap lists exactly the number it shows. */
+  const boardArgs = [await soonDays()];
+  const boardWhere = whereOf({}, {}, boardArgs);
+  const [p, all, boards] = await Promise.all([
     db.one(`SELECT ${dv(t.from, t.to)} AS today, ${dv(t.prevFrom, t.prevTo)} AS yesterday,
                    ${dv(w.from, w.to)} AS week, ${dv(w.prevFrom, w.prevTo)} AS prev_week,
                    ${dv(m.from, m.to)} AS month, ${dv(m.prevFrom, m.prevTo)} AS prev_month,
@@ -313,6 +356,8 @@ async function stats() {
                    count(*) FILTER (WHERE paid)::int AS paid, count(*) FILTER (WHERE NOT paid)::int AS unpaid,
                    count(*) FILTER (WHERE wa)::int AS whatsapp, count(*) FILTER (WHERE web)::int AS web
               FROM per`),
+    db.query(`SELECT x.plate, count(*)::int AS n FROM (${WITH_STATES}) x
+               ${boardWhere.length ? `WHERE ${boardWhere.join(' AND ')}` : ''} GROUP BY 1`, boardArgs),
   ]);
   return {
     total: all.total, today: p.today, yesterday: p.yesterday, d7: p.week, d30: p.d30,
@@ -323,6 +368,7 @@ async function stats() {
     },
     repeat: all.repeat, paid: all.paid, unpaid: all.unpaid, whatsapp: all.whatsapp, web: all.web,
     lookups_today: p.lookups_today,
+    boards: Object.fromEntries(boards.rows.map((b) => [b.plate, b.n])),
   };
 }
 
@@ -468,6 +514,11 @@ async function profile(input, { admin, canSensitive, canApi } = {}) {
   ]);
 
   const snap = Object.fromEntries(snaps.rows.map((s) => [s.dataset, s]));
+  const { plate: board } = await db.one(
+    `SELECT ${PLATE_OF_ROW} AS plate FROM vehicles v
+       LEFT JOIN vehicle_snapshots rc ON rc.vehicle_id = v.id AND rc.dataset = 'rc'
+       LEFT JOIN vehicle_snapshots fg ON fg.vehicle_id = v.id AND fg.dataset = 'fastag'
+      WHERE v.id = $1`, [v.id]);
   const rc = snap.rc?.data || null;
   const checked = snap.rc?.fetched_at || null;
   const has = (x) => x != null && String(x).trim() !== '';
@@ -726,7 +777,7 @@ async function profile(input, { admin, canSensitive, canApi } = {}) {
     vehicle: {
       id: vid, reg_no: reg, display: plate.pretty(reg), maker: v.maker || rc?.maker || null, model: v.model || rc?.model || null,
       variant: null, fuel: v.fuel || rc?.fuel || null, vehicle_class: v.vehicle_class || rc?.vehicle_class || null,
-      category: rc?.vehicle_category || null, age_years: age, state: reg.slice(0, 2),
+      category: rc?.vehicle_category || null, plate: board, permit_type: rc?.permit_type || null, age_years: age, state: reg.slice(0, 2),
       rto: /^[A-Z]{2}\d{2}/.test(reg) ? reg.slice(0, 4) : reg.slice(0, 2), registered_at: rc?.registered_at || null,
       rto_name: await require('./geo').rtoNameOf(reg).catch(() => null),
       first_seen: v.first_seen_at, last_seen: v.last_seen_at, last_updated: checked,
@@ -811,7 +862,8 @@ async function rawResponse(input, dataset, { canSensitive }) {
 
 const EXPORT_FIELDS = {
   reg_no: ['Vehicle number', (r) => r.reg_no], maker: ['Manufacturer', (r) => r.maker], model: ['Model', (r) => r.model],
-  fuel: ['Fuel', (r) => r.fuel], vehicle_class: ['Vehicle class', (r) => r.vehicle_class], state: ['State', (r) => r.state],
+  fuel: ['Fuel', (r) => r.fuel], vehicle_class: ['Vehicle class', (r) => r.vehicle_class],
+  plate: ['Number plate', (r) => String(r.plate || 'unknown').replace('green_yellow', 'green (yellow letters)')], state: ['State', (r) => r.state],
   rto: ['RTO', (r) => r.rto], first_seen: ['First seen', (r) => r.first_seen], last_seen: ['Last seen', (r) => r.last_seen],
   lookups: ['Lookups', (r) => r.lookups], reports: ['Reports generated', (r) => r.reports], paid: ['Reports purchased', (r) => r.paid],
   revenue: ['Revenue (₹)', (r) => (r.paid_paise / 100).toFixed(2)], last_channel: ['Last channel', (r) => r.last_channel],
@@ -853,5 +905,5 @@ async function exportCsv(q, admin) {
 
 module.exports = {
   list, stats, quick, profile, reveal, rawResponse, exportCsv, find, maskMobile,
-  VIEWS, EXPORT_FIELDS: Object.fromEntries(Object.entries(EXPORT_FIELDS).map(([k, [l]]) => [k, l])),
+  VIEWS, _plateSql: plateSql, EXPORT_FIELDS:Object.fromEntries(Object.entries(EXPORT_FIELDS).map(([k, [l]]) => [k, l])),
 };
