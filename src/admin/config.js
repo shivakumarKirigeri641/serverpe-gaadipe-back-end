@@ -60,8 +60,10 @@ const GROUPS = [
     ['whatsapp_templates_paused_until', 'WhatsApp: templates paused until', 'Set by itself when Meta says "spam rate limit hit" (24 hours). While set, no alert, reminder or broadcast template goes; replies still go. Clear it to end the pause early.'],
     ['watch_daily_status_enabled', 'Monitoring: "today\'s update" on (true / false)', 'The status update (email, notification, SMS once approved) to everyone monitoring a vehicle, paid or free, even when nothing changed. false: they hear only when something happens.'],
     // The cadence (user, 2026-10-10: "first 7 days every day, then alternate days, then only when changes").
-    ['watch_status_daily_days', 'Monitoring update: every day for the first N days', '7: counted per vehicle from the day its monitoring started.'],
-    ['watch_status_alternate_until_day', 'Monitoring update: every other day until day N', '28: after the daily days, every other day until this day of monitoring; after it, only when something changes. 0 = every other day while monitoring runs.'],
+    ['watch_status_daily_days', 'Monitoring update: every day for the first N days', '0: counted per vehicle from the day its monitoring started; 0 = no daily stretch (2026-10-15).'],
+    ['watch_status_every_days', 'Monitoring update on WhatsApp: every N days', '3: after any daily days, the WhatsApp update goes every N days (days 1, 4, 7 …). 2 = every other day.'],
+    ['watch_status_email_every_days', 'Monitoring update by email and notification: every N days', '2: the same update by email and phone notification every N days (days 1, 3, 5 …) — free, so it can be more often.'],
+    ['watch_status_alternate_until_day', 'Monitoring update: until day N', '28: routine updates stop after this day of monitoring; after it, only when something changes. 0 = while monitoring runs.'],
     ['sms_tpl_status', 'SMS template id: monitoring update', '2 values: vehicle, short status ("all clear", "PUC expired"). Empty = not sent by SMS.'],
     ['watch_daily_status_every_days', 'Monitoring: "today\'s update" every N days (retired)', 'Replaced on 10 Oct 2026 by the daily / every-other-day settings above.'],
     ['whatsapp_marketing_gap_days', 'WhatsApp: days between marketing to one person', 'No second marketing message to the same customer within this many days (7).'],

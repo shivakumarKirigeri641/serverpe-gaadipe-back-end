@@ -459,10 +459,14 @@ async function myMonitoring(mobile) {
     `SELECT kind FROM event_log WHERE user_id = $1 AND kind IN ('watch_status_off', 'watch_status_on')
       ORDER BY created_at DESC, id DESC LIMIT 1`, [user.id]).catch(() => null);
   const quiet = choice?.kind === 'watch_status_off';
-  const dailyDays = await settings.num('watch_status_daily_days', 7);
+  const dailyDays = await settings.num('watch_status_daily_days', 0);
+  const every = await settings.num('watch_status_every_days', 3);
+  const mailEvery = await settings.num('watch_status_email_every_days', 2);
+  const cadence = `every ${every === 2 ? 'other day' : `${every} days`} on WhatsApp`
+    + (mailEvery !== every ? ` (every ${mailEvery === 2 ? 'other day' : `${mailEvery} days`} by email)` : '');
   const how = quiet
     ? '🔕 _Routine updates are off — you hear from us only when something changes._'
-    : `🔔 _Routine updates: daily for the first ${dailyDays} days, then every other day — plus an alert whenever something changes._`;
+    : `🔔 _Routine updates: ${dailyDays > 0 ? `daily for the first ${dailyDays} days, then ` : ''}${cadence} — plus an alert at once whenever something changes._`;
   // Two of these, most needed first, then Menu (WhatsApp allows three buttons).
   const replaceable = rows.some((s) => s.replace?.ok);
   const firsts = [

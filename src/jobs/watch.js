@@ -548,13 +548,24 @@ async function lifecycle() {
  * on an evening a real alert went out. By email, browser notification and — once its
  * DLT template is approved (sms_tpl_status) — SMS; WhatsApp only if it is switched on.
  */
-async function dueToday(w, { dailyDays, altUntil }) {
+/*
+ * EVERY N DAYS, BY CHANNEL (user, 2026-10-15: "every alternate day or once in 3 days";
+ * "email every 2 days is fine?"). After the daily stretch (watch_status_daily_days, now 0),
+ * every `every` days until watch_status_alternate_until_day (28): WhatsApp every
+ * watch_status_every_days (3), email and phone notifications every
+ * watch_status_email_every_days (2) — email costs nothing and cannot hurt the WhatsApp
+ * account. With no daily stretch the first update is the day after monitoring starts
+ * (day 1, then 1 + every …); after a daily stretch the next day is a rest day, as before.
+ */
+async function dueToday(w, { dailyDays, altUntil, every = 2 }) {
   const startIst = new Date(new Date(w.created_at).getTime() + 5.5 * 3600e3).toISOString().slice(0, 10);
   const age = Math.floor((Date.parse(istNow().toISOString().slice(0, 10)) - Date.parse(startIst)) / 86400e3);   // 0 = the first day
   if (age < 0) return false;
   if (age < dailyDays) return true;
   if (altUntil > 0 && age >= altUntil) return false;
-  return (age - dailyDays) % 2 === 1;      // the day after the daily stretch is a rest day
+  const n = Math.max(1, every);
+  const offset = dailyDays > 0 ? n - 1 : 1 % n;
+  return (age - dailyDays) % n === offset;
 }
 
 async function dailyStatus({ mobile = null, everyone = false, dryRun = false, gapMs = 0, onEach = null } = {}) {
@@ -568,6 +579,8 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
   const today = istNow().toISOString().slice(0, 10);
   const cadence = { dailyDays: Math.max(0, await settings.num('watch_status_daily_days', 7)),
                     altUntil: Math.max(0, await settings.num('watch_status_alternate_until_day', 28)) };
+  const waEvery = Math.max(1, await settings.num('watch_status_every_days', 2));
+  const mailEvery = Math.max(1, await settings.num('watch_status_email_every_days', 2));
   const { rows: all } = await db.query(
     `SELECT w.id, w.user_id, w.vehicle_id, w.last_checked_at, w.created_at, w.subscription_id, v.reg_no,
             u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
@@ -592,8 +605,13 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
         AND NOT EXISTS (SELECT 1 FROM alert_snoozes sz WHERE sz.user_id = w.user_id AND sz.vehicle_id = w.vehicle_id
                           AND sz.document = 'all' AND sz.until > now())
       ORDER BY w.user_id, v.reg_no`, [today, mobile ? String(mobile).replace(/\D/g, '').slice(-10) : null]);
+  // Which channel each vehicle is due on today (2026-10-15); by hand, every channel.
   const rows = [];
-  for (const w of all) if (everyone || mobile || await dueToday(w, cadence)) rows.push(w);
+  for (const w of all) {
+    w.dueWa = Boolean(everyone || mobile) || await dueToday(w, { ...cadence, every: waEvery });
+    w.dueMail = Boolean(everyone || mobile) || await dueToday(w, { ...cadence, every: mailEvery });
+    if (w.dueWa || w.dueMail) rows.push(w);
+  }
 
   const people = new Map();
   for (const r of rows) {
@@ -630,9 +648,15 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
        RETURNING id`, [userId, JSON.stringify({ ist_date: today, vehicles: list.map((w) => w.reg_no) }), today]);
     if (!claim) continue;
 
-    const lines = [];
-    for (const w of list) lines.push({ reg: w.reg_no, ...statusOf(await previous(w.vehicle_id)) });
+    const allLines = [];
+    for (const w of list) allLines.push({ reg: w.reg_no, ...statusOf(await previous(w.vehicle_id)) });
     const first = list[0];
+    // WhatsApp (and SMS in its place) carries the vehicles due on WhatsApp today; email and
+    // notifications the ones due by email (2026-10-15). Either may be empty.
+    const waList = list.filter((w) => w.dueWa);
+    const lines = allLines.filter((_, i) => list[i].dueWa);
+    const mailLines = allLines.filter((_, i) => list[i].dueMail);
+    const waFirst = waList[0] || first;
     const checked = list.map((w) => new Date(w.last_checked_at || w.created_at)).sort((a, b) => b - a)[0];
     const name = String(first.name || 'there').split(' ')[0];
 
@@ -647,7 +671,7 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
     let out = { ok: false, error: 'no confirmed email, no notification device, SMS not approved' };
     const errors = [];
     let wa = null;
-    if (require('../config').config.whatsapp.enabled && !(await send.optedOut(first.mobile).catch(() => true))) {
+    if (lines.length && require('../config').config.whatsapp.enabled && !(await send.optedOut(first.mobile).catch(() => true))) {
       if (await send.windowOpen(first.mobile).catch(() => false)) {
         const body = '✅ *Today\'s update from GaadiPe*\n\n'
           + lines.map((l) => `🚗 *${l.reg}*\n${l.text.split(' · ').map((t) => `• ${t}`).join('\n')}`).join('\n\n')
@@ -665,8 +689,8 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
         const expired = [...new Set(lines.flatMap((l) => l.expired))];
         const challans = lines.some((l) => l.challans);
         wa = await require('../whatsapp/monitorAlert').sendAlert(first.mobile, {
-          name, vehicle: lines.length === 1 ? first.reg_no : `${first.reg_no} +${lines.length - 1} more`,
-          vehicleId: list.length === 1 ? first.vehicle_id : null,
+          name, vehicle: lines.length === 1 ? waFirst.reg_no : `${waFirst.reg_no} +${lines.length - 1} more`,
+          vehicleId: waList.length === 1 ? waFirst.vehicle_id : null,
           document: [expired.length ? expired.join(', ') : null, challans ? 'Challans' : null].filter(Boolean).join(', ') || 'All documents',
           expiry: expired.length ? 'Expired' : 'Not applicable',
           status: summary, settingKey: 'template_daily_status',
@@ -675,22 +699,22 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
       if (wa.ok) out = { ok: true, channel: 'whatsapp' };
       else errors.push(`whatsapp: ${wa.error}`);
     }
-    if (first.email && first.email_verified_at && !first.email_unsubscribed_at) {
+    if (mailLines.length && first.email && first.email_verified_at && !first.email_unsubscribed_at) {
       const C = require('../mail/customer');
-      const m = await C.deliver(first.email, statusMail(first, lines, checked), first.email_token).catch((e) => ({ ok: false, error: e.message }));
+      const m = await C.deliver(first.email, statusMail(first, mailLines, checked), first.email_token).catch((e) => ({ ok: false, error: e.message }));
       if (m.ok) out = { ok: true, channel: out.ok ? `${out.channel}+email` : 'email' };
       else errors.push(m.skipped ? 'email held (test mode)' : `email: ${m.error}`);
     }
-    const pushed = await require('../site/push').toCustomer(userId, {
-      title: lines.length === 1 ? `✅ ${first.reg_no}: today's update` : `✅ Today's update on ${lines.length} vehicles`,
-      body: lines.map((l) => (lines.length > 1 ? `${l.reg}: ${l.text}` : l.text)).join(' · ').slice(0, 300),
-      url: lines.length === 1 ? `/chat?reg=${encodeURIComponent(first.reg_no)}` : '/chat', tag: `status-${today}`, kind: 'status',
+    const pushed = !mailLines.length ? 0 : await require('../site/push').toCustomer(userId, {
+      title: mailLines.length === 1 ? `✅ ${mailLines[0].reg}: today's update` : `✅ Today's update on ${mailLines.length} vehicles`,
+      body: mailLines.map((l) => (mailLines.length > 1 ? `${l.reg}: ${l.text}` : l.text)).join(' · ').slice(0, 300),
+      url: mailLines.length === 1 ? `/chat?reg=${encodeURIComponent(mailLines[0].reg)}` : '/chat', tag: `status-${today}`, kind: 'status',
     }).catch((e) => { errors.push(`push: ${e.message}`); return 0; });
     if (pushed) out = { ok: true, channel: out.ok ? `${out.channel}+push` : 'push' };
     // SMS once the 'status' DLT template is approved: [vehicle, short status] — only when WhatsApp did not deliver.
-    if (!wa?.ok) {
+    if (lines.length && !wa?.ok) {
       const sms = await require('../util/sms').sendTemplate('status', first.mobile,
-        [lines.length === 1 ? first.reg_no : `${first.reg_no} +${lines.length - 1}`, lines.map((l) => (l.expired.length ? `${l.expired.join(', ')} expired` : l.challans ? 'challans pending' : 'all clear')).join('; ')]);
+        [lines.length === 1 ? waFirst.reg_no : `${waFirst.reg_no} +${lines.length - 1}`, lines.map((l) => (l.expired.length ? `${l.expired.join(', ')} expired` : l.challans ? 'challans pending' : 'all clear')).join('; ')]);
       if (sms.ok) out = { ok: true, channel: out.ok ? `${out.channel}+sms` : 'sms' };
     }
     if (!out.ok && errors.length) out.error = errors.join('; ');
@@ -729,7 +753,7 @@ function statusMail(person, lines, checked) {
     intro: cards.map((c) => c.html),
     textBlocks: cards.map((c) => c.text),
     cta: { label: lines.length === 1 ? `Open ${lines[0].reg} in GaadiPe` : 'Open GaadiPe', url: `${C.SITE()}/chat${lines.length === 1 ? `?reg=${encodeURIComponent(lines[0].reg)}` : ''}` },
-    footer: 'You get this every day in the first week of monitoring, then every other day, and later only when something changes.',
+    footer: 'You get this update every couple of days while monitoring runs, and an alert at once whenever something changes.',
     footerHtml: person.email_token
       ? `<a href="${T.esc(`${C.API()}/email/unsubscribe/${person.email_token}`)}" style="color:#0f766e;">Unsubscribe</a>` : '',
   });
@@ -791,4 +815,4 @@ function start(everySeconds = 60) {
   console.log(`  watch job: every ${everySeconds}s`);
 }
 
-module.exports = { start, runOnce, checkOne, findings, lifecycle, due, eveningDigest, dailyStatus, statusLine, notify, alertMail };
+module.exports = { start, runOnce, checkOne, findings, lifecycle, due, eveningDigest, dailyStatus, statusLine, notify, alertMail, _dueToday: dueToday };
