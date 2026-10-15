@@ -99,6 +99,7 @@ const notDone = (kind, refExpr) => `NOT EXISTS (SELECT 1 FROM admin_notification
  */
 const WEBADMIN = () => (process.env.WEBADMIN_URL || 'https://webadmin.gaadipe.in').replace(/\/+$/, '');
 const SOURCE_NAMES = { google_ads: 'Google Ads', meta_ads: 'Meta ads (Facebook / Instagram)', google: 'Google search',
+  shared_report: 'A shared GaadiPe report',
   organic: 'Other search', social: 'Social media', whatsapp: 'WhatsApp', referral: 'Another website', direct: 'Direct / typed the address' };
 const sourceName = (s) => SOURCE_NAMES[s] || (s ? s.replace(/_/g, ' ') : null);
 

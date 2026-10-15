@@ -289,10 +289,16 @@ async function notifyReportPaid(result, user, veh, { ends, amount }) {
     + 'Insurance, PUC, road tax, fitness and permit: I will warn you before each one '
     + 'expires, whenever that is — no end date.\n\n'
     + 'Nothing renews automatically.\n\n'
-    + 'Everything is one tap away below.',
-    [{ id: 'download_report', title: 'My report' },
+    + 'Everything is one tap away below.'
+    + (delivered.ok && veh ? '\n\n_Selling or buying? *Share report* gives a summary link you can forward._' : ''),
+    // The report was just sent, so its place goes to "Share report" (2026-10-15, site/shares.js).
+    [delivered.ok && veh ? { id: 'share_report', title: 'Share report' } : { id: 'download_report', title: 'My report' },
      { id: 'invoice',         title: 'My GST invoice' },
      { id: 'check_another',   title: 'Check a vehicle' }]);
+  if (veh) {
+    await require('../db').query(`UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+      [user.mobile, JSON.stringify({ pending_reg: veh.reg_no })]).catch(() => {});
+  }
 
   await sendInvoice(user, result.payment.id);
 }

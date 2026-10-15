@@ -108,6 +108,14 @@ router.get('/testimonials', safe(async (_req, res) => {
   res.json({ testimonials: await require('../site/testimonials').list() });
 }));
 
+/** A shared report's summary, public (gaadipe.in/s/<token>, src/site/shares.js, 2026-10-15). */
+router.get('/share/:token', safe(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const out = await require('../site/shares').view(req.params.token);
+  if (!out) return res.status(404).json({ error: 'not_found', message: 'This shared report has ended or was switched off.' });
+  res.json({ share: out });
+}));
+
 /** "GaadiPe so far" — public totals for the home page (src/site/stats.js). */
 router.get('/stats', safe(async (_req, res) => {
   res.set('Cache-Control', 'public, max-age=300');

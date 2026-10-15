@@ -95,6 +95,7 @@ const BTN = {
   EMAIL_RESEND: 'email_resend',
   WHAT_GET: 'what_get',
   SO_FAR: 'menu_so_far',          // "GaadiPe so far" — the home page's numbers (2026-10-15)
+  SHARE_REPORT: 'share_report',   // a link to the report's summary (site/shares.js, 2026-10-15)
   FB_GOOD: 'fb_good',             // the paid customer's one-tap rating (feedbackAsk, 2026-10-15)
   FB_OK: 'fb_ok',
   FB_BAD: 'fb_bad',
@@ -750,6 +751,7 @@ const STEP_WORDS = {
   alert_pause_cancelled: () => ['▶️', 'Kept alerts on (did not pause)'],
   alert_resumed: () => ['▶️', 'Resumed alerts'],
   email_later: () => ['📧', 'Said "Not now" to adding an email'],
+  report_shared: (d) => ['🔗', `Shared the report summary of ${d.reg_no}${d.again ? ' (same link again)' : ''}`],
   asked_owner_contact: () => ['🔒', 'Asked for the owner\'s phone number / address — told we never share it'],
   feedback_rating: (d) => [d.rating >= 5 ? '😊' : d.rating >= 3 ? '🙂' : '😞', `Rated GaadiPe ${d.rating}/5${d.reg_no ? ` · ${d.reg_no}` : ''}`],
   renewal_renew: (d) => ['🔄', `Tapped "Renew now" on the renewal reminder${d.reg_no ? ` · ${d.reg_no}` : ''}`],
@@ -1749,12 +1751,48 @@ async function start(mobile) {
  */
 /* `invoice` (2026-10-15): from My reports, which now carries the GST invoice — its menu row
    went to "GaadiPe so far" — the middle button is the invoice instead of Feedback. */
+/* With one vehicle's report (2026-10-15): "Share report" — a summary link for a buyer, seller or
+   family (site/shares.js) — takes the place of Feedback (the rating is asked by itself later),
+   or of Check other vehicle when the invoice button is there. */
 async function afterReport(mobile, regNo, { invoice = false } = {}) {
+  const share = regNo ? { id: BTN.SHARE_REPORT, title: 'Share report' } : null;
+  const buttons = invoice
+    ? [share || { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }, { id: BTN.INVOICE, title: 'GST invoice' }, { id: BTN.MENU, title: 'Menu' }]
+    : [{ id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }, share || { id: BTN.FEEDBACK, title: 'Feedback' }, { id: BTN.MENU, title: 'Menu' }];
+  if (regNo) {
+    await db.query(`UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+      [mobile, JSON.stringify({ pending_reg: regNo })]).catch(() => {});
+  }
   await send.buttons(mobile,
-    `${regNo ? `✅ That is your full report for *${regNo}*.` : '✅ Those are your reports.'} What would you like to do next?`,
-    [{ id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' },
-     invoice ? { id: BTN.INVOICE, title: 'GST invoice' } : { id: BTN.FEEDBACK, title: 'Feedback' },
-     { id: BTN.MENU,          title: 'Menu' }]).catch(() => {});
+    `${regNo ? `✅ That is your full report for *${regNo}*.` : '✅ Those are your reports.'} What would you like to do next?`
+      + (regNo ? '\n\n_Selling or buying? *Share report* gives a summary link you can forward._' : ''),
+    buttons).catch(() => {});
+}
+
+/*
+ * "Share report" tapped (2026-10-15): a link to the summary of their latest paid, still-
+ * downloadable report of that vehicle (pending_reg), or of their latest such report.
+ */
+async function shareReport(mobile) {
+  const user = await store.upsertUser(mobile);
+  const reg = await pendingReg(mobile);
+  const r = await db.one(
+    `SELECT r.id, r.reg_no FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
+      WHERE r.user_id = $1 AND p.status = 'paid' AND p.amount_paise > 0 AND r.valid_until > now()
+        AND ($2::text IS NULL OR r.reg_no = $2)
+      ORDER BY r.id DESC LIMIT 1`, [user.id, reg]);
+  const out = r ? await require('../site/shares').create(user.id, r.id) : { ok: false };
+  if (!out.ok) {
+    await reply(mobile, 'A summary can be shared while a paid report can still be downloaded (7 days after buying it).\n\n'
+      + 'Send the vehicle number to check it again.', ['check', 'menu']);
+    return;
+  }
+  await funnel(mobile, 'report_shared', { reg_no: out.reg_no, again: Boolean(out.again) });
+  await reply(mobile,
+    `🔗 *Share ${out.reg_no}*\n\nForward this link to the buyer, seller or family:\n${out.url}\n\n`
+    + `It shows a *summary* — insurance, PUC, tax, loan, challans and owners as ✅ / ⚠️, with the date checked. `
+    + `Never the owner's name, a document number or your PDF. It works until *${dayIn(out.expires_at)}*.`,
+    ['check', 'menu']);
 }
 
 /*
@@ -2843,6 +2881,10 @@ async function handle(session, message, mobile) {
       case BTN.SO_FAR:
         await funnel(mobile, 'menu_so_far');
         await soFar(mobile);
+        return;
+
+      case BTN.SHARE_REPORT:
+        await shareReport(mobile);
         return;
 
       // The paid customer's one-tap rating (feedbackAsk, 2026-10-15).

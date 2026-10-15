@@ -162,6 +162,8 @@ function touchOf({ utm = {}, referrer = '', landing = '' }) {
   let source;
   let adCampaign = null;
   if (!src && googleAd) { source = 'google_ads'; adCampaign = q.get('gad_campaignid') || null; }
+  // Arrived on a shared report's page (gaadipe.in/s/<token>, 2026-10-15): the share brought them.
+  else if (!src && q && /^\/s\/[2-9A-Za-z]{6,12}\/?$/.test(new URL(String(landing || ''), 'https://gaadipe.in').pathname)) source = 'shared_report';
   else if (src) {
     source = /google/.test(src) && /(cpc|ppc|paid|ads)/.test(med) ? 'google_ads'
       : /(facebook|instagram|meta|fb|ig)/.test(src) ? (/(cpc|paid|ads)/.test(med) ? 'meta_ads' : 'social')
