@@ -381,7 +381,8 @@ async function runOnce({ limit = 20 } = {}) {
 
     // WhatsApp, once GaadiPe has a number: the approved template, one message,
     // every document on one line because a parameter may not contain a newline.
-    if (config.whatsapp.enabled) {
+    // Not even tried for someone GaadiPe may not start a conversation with (2026-10-15, send.mayStart).
+    if (config.whatsapp.enabled && (await require('../whatsapp/send').mayStart(row.mobile)).ok) {
       const send = require('../whatsapp/send');
       const name = String(row.display_name || row.wa_profile_name || '').split(' ')[0] || 'there';
       // Inside the 24-hour window (they wrote or tapped a button): a free message,

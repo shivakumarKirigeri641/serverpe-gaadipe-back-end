@@ -531,6 +531,19 @@ async function qualityRating() {
   return quality.value;
 }
 
+/*
+ * MAY GAADIPE START A CONVERSATION WITH THEM AT ALL (user, 2026-10-15: "make sure the platform
+ * never tries the template — it's risky"). Asked by every job BEFORE it prepares a template, so a
+ * template is never even attempted for someone who did not agree, said STOP, or while templates
+ * are paused. template() still checks the same at the door, as the last guard.
+ */
+async function mayStart(mobile) {
+  if (await optedOut(mobile).catch(() => true)) return { ok: false, why: 'opted_out' };
+  if (!(await agreedTerms(mobile))) return { ok: false, why: 'not_agreed' };
+  if (await templatesPausedUntil()) return { ok: false, why: 'templates_paused' };
+  return { ok: true };
+}
+
 /** Agreed to the Terms — on WhatsApp or on the website. */
 async function agreedTerms(mobile) {
   const row = await db.one(
@@ -581,5 +594,5 @@ async function optedOut(mobile) {
   return Boolean(row);
 }
 
-module.exports = { _unmasked: unmasked, text, buttons, list, document, template, windowOpen, toWaId, allowed, optedOut,
+module.exports = { _unmasked: unmasked, text, buttons, list, document, template, windowOpen, toWaId, allowed, optedOut, mayStart,
                    agreedTerms, optedInToOffers, categoryOf, consentGate, _varCount: varCount };

@@ -92,6 +92,9 @@ async function tellOnWhatsApp(r, c) {
       + `${line.split(' · ').map((t) => `• ${t}`).join('\n')}\n\n`
       + `Your report ${r.report_number} now includes them${link ? ` — download it again:\n${link}` : '.'}`);
   }
+  // Not even tried for someone GaadiPe may not start a conversation with (2026-10-15, send.mayStart).
+  const may = await send.mayStart(r.mobile);
+  if (!may.ok) return { ok: false, error: may.why };
   // gp_monitoringalert_en_v1 (2026-10-12): 3 document, 4 expiry date, 5 status (whatsapp/monitorAlert.js).
   const name = String(r.name || 'there').split(' ')[0];
   return require('../whatsapp/monitorAlert').sendAlert(r.mobile, {

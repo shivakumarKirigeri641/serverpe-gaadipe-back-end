@@ -17,9 +17,10 @@
  * on the same failure. The remaining people stay pending and go out on a later
  * tick, once whatever broke is working again.
  *
- * A failed send is retried on a later tick, up to three times; "not allowed"
- * (WHATSAPP_ALLOWED_RECEPIENTS) and "blocked" are not failures to retry, they
- * are decisions, and are recorded as skipped.
+ * ONE ATTEMPT PER PERSON (user, 2026-10-15: "make sure no re-tries please" — a template sent
+ * again and again is the risky pattern). A failed send is recorded and never tried again;
+ * "not allowed", "blocked", STOP and not agreed are decisions, recorded as skipped. While
+ * templates are paused (Meta's spam brake) nothing is tried at all; the people wait.
  */
 
 const db = require('../db');
@@ -27,13 +28,16 @@ const settings = require('../util/settings');
 const send = require('../whatsapp/send');
 const { config } = require('../config');
 
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 1;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-/** Refusals from the door in send.js: a decision, not a fault to retry. */
-const DECIDED = new Set(['recipient_not_allowed', 'blocked', 'opted_out']);
+/** Refusals from the door in send.js: a decision, not a fault. */
+const DECIDED = new Set(['recipient_not_allowed', 'blocked', 'opted_out', 'not_agreed', 'not_opted_in_to_offers']);
 
 async function runOnce() {
   if (!config.whatsapp.enabled) return { off: true };
+  // Paused by Meta's spam brake: nobody is tried, so nobody is used up as "failed".
+  const pausedUntil = Date.parse(String(await settings.get('whatsapp_templates_paused_until', '') || ''));
+  if (pausedUntil > Date.now()) return { paused: true };
   const perTick = Math.max(1, await settings.num('whatsapp_broadcast_per_tick', 5));
 
   const { rows } = await db.query(

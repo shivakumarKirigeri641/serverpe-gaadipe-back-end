@@ -165,7 +165,8 @@ async function runOnce({ limit = 20 } = {}) {
 
     // WhatsApp, once there is a number: the approved template. Every parameter
     // is non-empty and single-line, which is what Meta requires.
-    if (config.whatsapp.enabled) {
+    // Not even tried for someone GaadiPe may not start a conversation with (2026-10-15, send.mayStart).
+    if (config.whatsapp.enabled && (await require('../whatsapp/send').mayStart(r.mobile)).ok) {
       const send = require('../whatsapp/send');
       const name = String(r.display_name || r.wa_profile_name || '').split(' ')[0] || 'there';
       const days = String(priced.plan.duration_days || 28);
