@@ -215,6 +215,8 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
          ON CONFLICT (user_id, vehicle_id) DO UPDATE
                 SET is_active = true, subscription_id = EXCLUDED.subscription_id,
                     expires_on = EXCLUDED.expires_on, expires_at = EXCLUDED.expires_at,
+                    -- A new paid period: the 3-day update cycle starts again from today (migration 190).
+                    period_started_at = now(),
                     modified_at = now()`,
         [pay.user_id, vehicleId, sub.id, endsOn.toISOString().slice(0, 10),
          endsOn.toISOString(), String(checkEvery), Math.max(1, Math.round(checkEvery / 60))]);

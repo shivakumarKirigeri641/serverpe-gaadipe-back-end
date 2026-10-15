@@ -56,7 +56,8 @@ async function due(limit = 50) {
   const { rows } = await db.query(
     `SELECT w.id, w.user_id, w.vehicle_id, w.expires_at, w.fail_count,
             w.challan_interval_hours, w.created_at,
-            extract(epoch FROM (now() - w.created_at)) / 86400 AS age_days,
+            -- Age within THIS paid period: a renewal checks at the opening pace again (migration 190).
+            extract(epoch FROM (now() - coalesce(w.period_started_at, w.created_at))) / 86400 AS age_days,
             v.reg_no, u.mobile, u.wa_profile_name, u.is_paused, u.preferred_language
        FROM watches w
        JOIN vehicles v ON v.id = w.vehicle_id
@@ -562,7 +563,8 @@ async function lifecycle() {
  * (day 1, then 1 + every …); after a daily stretch the next day is a rest day, as before.
  */
 async function dueToday(w, { dailyDays, altUntil, every = 2 }) {
-  const startIst = new Date(new Date(w.created_at).getTime() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  // Counted from the start of THIS paid period — a renewal starts a new cycle (migration 190).
+  const startIst = new Date(new Date(w.period_started_at || w.created_at).getTime() + 5.5 * 3600e3).toISOString().slice(0, 10);
   const age = Math.floor((Date.parse(istNow().toISOString().slice(0, 10)) - Date.parse(startIst)) / 86400e3);   // 0 = the first day
   if (age < 0) return false;
   if (age < dailyDays) return true;
@@ -587,7 +589,7 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
   const waEvery = Math.max(1, await settings.num('watch_status_every_days', 2));
   const mailEvery = Math.max(1, await settings.num('watch_status_email_every_days', 2));
   const { rows: all } = await db.query(
-    `SELECT w.id, w.user_id, w.vehicle_id, w.last_checked_at, w.created_at, w.subscription_id, v.reg_no,
+    `SELECT w.id, w.user_id, w.vehicle_id, w.last_checked_at, w.created_at, w.period_started_at, w.subscription_id, v.reg_no,
             u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
             u.email, u.email_verified_at, u.email_unsubscribed_at, u.email_token
        FROM watches w
