@@ -89,6 +89,9 @@ const SEGMENTS = {
   stopped:      `ws.wa_opt_out_at IS NOT NULL`,
   // Opted in to offers and newsletters, not withdrawn — who a promotional SMS may go to (2026-10-13).
   offers:       `u.promo_consent_at IS NOT NULL AND u.promo_consent_withdrawn_at IS NULL`,
+  // Who confirmed their email — the backup for alerts if WhatsApp stops (user, 2026-10-15).
+  email_confirmed: `u.email_verified_at IS NOT NULL`,
+  email_pending:   `u.email_verified_at IS NULL AND nullif(btrim(u.email), '') IS NOT NULL`,
   // Said STOP once, and messages are on again — START, or Undo (user, 2026-10-02).
   came_back:    `ws.wa_opt_out_at IS NULL AND EXISTS (SELECT 1 FROM event_log eo WHERE eo.kind = 'funnel'
                   AND eo.detail->>'step' = 'opt_out' AND eo.detail->>'mobile' = u.mobile)`,
@@ -129,6 +132,10 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
          FROM (SELECT ${SESSION_COLS} FROM site_sessions s) x GROUP BY user_id
      )
      SELECT u.id, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name, u.is_internal, u.is_paused,
+            -- Email as a status only, never the address in the list (user, 2026-10-15: a badge).
+            CASE WHEN u.email_verified_at IS NOT NULL THEN 'confirmed'
+                 WHEN nullif(btrim(u.email), '') IS NOT NULL THEN 'pending' ELSE 'none' END AS email_status,
+            u.email_verified_at,
             coalesce(vi.sign_ins, 0) AS sign_ins, coalesce(vi.seconds_on_site, 0) AS seconds_on_site,
             vi.last_sign_in_at, vi.last_sign_out_at, coalesce(vi.online, 0) > 0 AS online,
             u.created_at, u.last_seen_at,
