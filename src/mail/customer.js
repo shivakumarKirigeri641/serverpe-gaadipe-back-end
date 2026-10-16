@@ -500,7 +500,29 @@ function announcementMail(user, { subject, body }) {
   return { subject: String(subject || '').replace(/\{name\}/g, first), ...out };
 }
 
+/*
+ * HOW WAS GAADIPE? (user, 2026-10-16, Hot leads → Feedback, outside the WhatsApp window).
+ * Three one-tap ratings, each opening gaadipe.in/feedback with the stars already chosen and the
+ * customer recognised by their email token (never their number in the link).
+ */
+function feedbackMail(user, { regNo = null } = {}) {
+  const first = String(user.display_name || '').split(' ')[0] || 'there';
+  const link = (stars) => `${SITE()}/feedback?src=email_paid&rating=${stars}&t=${encodeURIComponent(user.email_token)}${regNo ? `&reg=${encodeURIComponent(regNo)}` : ''}`;
+  const pill = (stars, label, bg) => `<a href="${esc(link(stars))}" style="display:inline-block;margin:4px;padding:10px 14px;border-radius:999px;background:${bg};color:#0b1f1c;font-size:14px;font-weight:700;text-decoration:none;">${label}</a>`;
+  const out = T.layout({
+    tagline: 'One quick question',
+    title: `How useful has GaadiPe been${regNo ? ` for ${regNo}` : ''}?`,
+    lead: `Hi ${first}, one tap tells us — it takes 5 seconds and helps us make GaadiPe better for you.`,
+    blocks: [`<div style="text-align:center;margin:8px 0 4px 0;">${pill(5, '😊 Very useful', '#dcfce7')}${pill(3, '🙂 It\'s okay', '#fef9c3')}${pill(1, '😞 Not useful', '#fee2e2')}</div>`
+      + '<div style="font-size:12px;color:#6b8380;text-align:center;">You can add a line about what to improve on the next page — optional.</div>'],
+    footer: 'You are receiving this because you bought a GaadiPe report and confirmed this email address.',
+    footerHtml: user.email_token ? footerFor(user.email_token, '') : '',
+  });
+  out.text = `Hi ${first}, how useful has GaadiPe been${regNo ? ` for ${regNo}` : ''}?\n\nVery useful: ${link(5)}\nIt's okay: ${link(3)}\nNot useful: ${link(1)}\n\nUnsubscribe: ${API()}/email/unsubscribe/${user.email_token}`;
+  return { subject: `How useful has GaadiPe been${regNo ? ` for ${regNo}` : ''}? (one tap)`, ...out };
+}
+
 module.exports = {
   setEmail, validEmail, checkEmail, checkName, onlyTo, deliver, storedRecord, queuePurchase,
-  confirmMail, dailyMail, digestMail, rewardMail, purchaseMail, announcementMail, istDay, SITE, API,
+  confirmMail, dailyMail, digestMail, rewardMail, purchaseMail, announcementMail, feedbackMail, istDay, SITE, API,
 };

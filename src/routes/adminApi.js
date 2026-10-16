@@ -642,6 +642,18 @@ router.post('/whatsapp/reply-many/:id/stop', needs('settings'), safe(async (req,
   const out = require('../admin/replyMany').stop(req.params.id);
   return out ? res.json(out) : res.status(404).json({ error: 'Not found.' });
 }));
+/* Hot leads: email not confirmed, and feedback from paid customers — inside and outside the window (2026-10-16; admin/engage.js). */
+router.get('/engage', needs('dashboard.view'), safe(async (_req, res) => res.json(await require('../admin/engage').list())));
+router.post('/engage/confirm-email', needs('settings'), safe(async (req, res) => {
+  const out = await require('../admin/engage').sendConfirmEmails(req.body?.user_ids);
+  await auth.audit({ adminId: req.admin.id, action: 'engage_confirm_email', ip: ipOf(req), detail: { ...out, user_ids: req.body?.user_ids } });
+  res.json(out);
+}));
+router.post('/engage/feedback-email', needs('settings'), safe(async (req, res) => {
+  const out = await require('../admin/engage').sendFeedbackEmails(req.body?.user_ids, req.admin.id);
+  await auth.audit({ adminId: req.admin.id, action: 'engage_feedback_email', ip: ipOf(req), detail: { ...out, user_ids: req.body?.user_ids } });
+  res.json(out);
+}));
 /* The monitoring update now, to chosen paid customers (2026-10-15; admin/monitoringSend.js). */
 router.get('/monitoring/customers', needs('dashboard.view'), safe(async (_req, res) => res.json(await require('../admin/monitoringSend').list())));
 router.post('/monitoring/send', needs('settings'), safe(async (req, res) => {

@@ -148,7 +148,12 @@ router.post('/feedback', safe(async (req, res) => {
   const digits = String(b.mobile || '').replace(/\D/g, '').slice(-10);
   const mobile = /^[6-9]\d{9}$/.test(digits) ? digits : null;
   const src = String(b.src || '').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 30);
-  const user = mobile ? await db.one(`SELECT id FROM users WHERE mobile = $1`, [mobile]) : null;
+  /* From the feedback email (2026-10-16): the customer's email token says who it is, so the
+     note is linked to them without their number ever being in a link. */
+  const tokenUser = /^[a-f0-9]{20,64}$/.test(String(b.t || ''))
+    ? await db.one(`SELECT id, mobile FROM users WHERE email_token = $1`, [String(b.t)]) : null;
+  const user = tokenUser || (mobile ? await db.one(`SELECT id FROM users WHERE mobile = $1`, [mobile]) : null);
+  const mobileFor = mobile || tokenUser?.mobile || null;
 
   recent.push(now); feedbackHits.set(ip, recent);
   /* Where it was asked (2026-10-10): first_check, report, free_end, menu — and the
@@ -157,15 +162,15 @@ router.post('/feedback', safe(async (req, res) => {
   const text = body || `${'★'.repeat(rating)} (no message)`;
   await db.query(
     `INSERT INTO feedback (user_id, mobile, body, rating, name, channel) VALUES ($1, $2, $3, $4, $5, $6)`,
-    [user?.id || null, mobile, reg ? `[${reg}] ${text}` : text, rating, name, src ? `web:${src}` : 'web']);
+    [user?.id || null, mobileFor, reg ? `[${reg}] ${text}` : text, rating, name, src ? `web:${src}` : 'web']);
   {
     const act = require('../util/activity');
     act.log('💬', `Feedback${rating ? ` ${rating}★` : ''}${reg ? ` about ${reg}` : ''} · “${String(text).slice(0, 150)}”`,
-      { who: act.who(name, mobile), detail: 'website' });
+      { who: act.who(name, mobileFor), detail: src === 'email_paid' ? 'from the feedback email' : 'website' });
   }
   // 1–2 stars, or angry words, reach the admin at once (util/unhappy.js).
   const why = Number(rating) <= 2 ? 'low rating' : require('../util/unhappy').kind(body);
-  if (why && mobile) require('../util/unhappy').flag({ mobile, said: body || `${rating}★`, why, source: 'the website feedback page', rating }).catch(() => {});
+  if (why && mobileFor) require('../util/unhappy').flag({ mobile: mobileFor, said: body || `${rating}★`, why, source: 'the website feedback page', rating }).catch(() => {});
   res.json({ ok: true });
 }));
 
