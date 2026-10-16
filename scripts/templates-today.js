@@ -3,6 +3,8 @@
  * may get a template today?"). A forecast, read-only: nothing is sent, no provider is called.
  *
  *   node scripts/templates-today.js           counts, and each person (last 4 digits only)
+ *   node scripts/templates-today.js --outside only those outside their 24-hour window — the
+ *                                             templates, which count toward the 250 (2026-10-16)
  *
  * A template is what WhatsApp needs when the customer's 24-hour window is closed — and what
  * counts toward Meta's 250 a day. Inside the window the same words go as a free message.
@@ -69,7 +71,13 @@ const last4 = (m) => `••${String(m || '').slice(-4)}`;
   const templ = all.filter(([, p]) => p.template).length;
   console.log(`\n${all.length} customer(s) due something tonight · ${templ} would need a TEMPLATE (counts toward the 250), `
     + `${all.length - templ} free message or other channel.\n`);
-  for (const [m, p] of all) console.log(`${p.template ? '📨' : '💬'} ${last4(m)}  ${p.what.join(' · ')}`);
+  // --outside: only the templates — people outside their 24-hour window (user, 2026-10-16).
+  const outside = process.argv.includes('--outside');
+  if (outside) console.log('Only those outside their 24-hour window (they get the template):\n');
+  for (const [m, p] of all) {
+    if (outside && !p.template) continue;
+    console.log(`${p.template ? '📨' : '💬'} ${last4(m)}  ${p.what.join(' · ')}`);
+  }
   console.log('\nPlus change alerts (new challan, a changed document) found by tonight\'s checks — not knowable ahead.');
   console.log('Each customer is counted once toward the limit however many messages they get.');
   process.exit(0);
