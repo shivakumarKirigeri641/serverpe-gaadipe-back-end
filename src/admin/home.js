@@ -36,6 +36,27 @@ const NM = require('./notMe');
  */
 const AGREED = (col) => require('./consented').agreedSql(col);
 
+/*
+ * EVERY NUMBER IN THIS PANEL'S CHANNEL (user, 2026-10-16: "the Overview — is it WhatsApp-based?").
+ * Checks, payments, money, reports and monitoring counted the website too. Now, as on the
+ * Customers page: the main admin (X-View: whatsapp) counts WhatsApp, the web admin the website,
+ * and with no view header everything. A payment's channel is where it was paid from.
+ */
+const C = () => {
+  const { whatsappOnlyNow, webOnlyNow } = require('./consented');
+  const wa = whatsappOnlyNow(); const web = webOnlyNow();
+  const PAY_CH = (p) => `coalesce(${p}.raw->>'channel', ${p}.raw->'paid_from'->>'channel', 'whatsapp')`;
+  return {
+    pay: (p) => (wa ? `${PAY_CH(p)} <> 'web'` : web ? `${PAY_CH(p)} = 'web'` : 'true'),
+    check: (e) => (wa ? `coalesce(${e}.detail->>'channel', 'whatsapp') = 'whatsapp'` : web ? `${e}.detail->>'channel' = 'web'` : 'true'),
+    report: (r) => (wa ? `coalesce(${r}.channel, 'whatsapp') <> 'web'` : web ? `${r}.channel = 'web'` : 'true'),
+    // Monitoring belongs to the channel its payment came from.
+    sub: (s) => (wa || web ? `EXISTS (SELECT 1 FROM payments sp WHERE sp.subscription_id = ${s}.id AND sp.status = 'paid'
+                   AND ${wa ? `${PAY_CH('sp')} <> 'web'` : `${PAY_CH('sp')} = 'web'`})` : 'true'),
+    wa, web,
+  };
+};
+
 /**
  * Everything waiting on a person.
  *
@@ -46,6 +67,7 @@ const AGREED = (col) => require('./consented').agreedSql(col);
 async function attention() {
   const items = [];
   const add = (level, title, detail, to) => items.push({ level, title, detail, to });
+  const ch = C();
 
   const row = await db.one(
     `SELECT
@@ -54,14 +76,14 @@ async function attention() {
          WHERE status = 'open' AND created_at < now() - interval '24 hours')         AS tickets_stale,
        (SELECT count(*)::int FROM feedback WHERE created_at > now() - interval '7 days') AS feedback_week,
        (SELECT count(*)::int FROM payments p
-         WHERE p.status = 'created' AND p.created_at > now() - interval '24 hours' AND ${NM.pay('p')}) AS payments_stuck,
+         WHERE p.status = 'created' AND p.created_at > now() - interval '24 hours' AND ${NM.pay('p')} AND ${ch.pay('p')}) AS payments_stuck,
        (SELECT count(*)::int FROM customer_emails
          WHERE status = 'failed' AND attempts >= 5)                                  AS emails_failed,
        (SELECT count(*)::int FROM whatsapp_broadcast_targets WHERE status = 'failed') AS broadcast_failed,
        (SELECT count(*)::int FROM subscriptions s
-         WHERE s.is_active AND s.ends_on BETWEEN CURRENT_DATE AND CURRENT_DATE + 3 AND ${NM.user('s.user_id')}) AS ending_soon,
+         WHERE s.is_active AND s.ends_on BETWEEN CURRENT_DATE AND CURRENT_DATE + 3 AND ${NM.user('s.user_id')} AND ${ch.sub('s')}) AS ending_soon,
        (SELECT count(*)::int FROM vehicle_reports r
-         WHERE r.created_at > now() - interval '24 hours' AND ${NM.user('r.user_id')}) AS reports_today,
+         WHERE r.created_at > now() - interval '24 hours' AND ${NM.user('r.user_id')} AND ${ch.report('r')}) AS reports_today,
        (SELECT count(*)::int FROM security_events
          WHERE created_at > now() - interval '24 hours')                             AS security_today,
        (SELECT count(*)::int FROM api_calls
@@ -131,6 +153,7 @@ async function attention() {
 
 /** The numbers worth seeing first, each against the day before. */
 async function today() {
+  const ch = C();
   return db.one(
     `WITH b AS (
        SELECT date_trunc('day', now() ${IST}) AS today,
@@ -141,22 +164,22 @@ async function today() {
        (SELECT count(*)::int FROM users u, b
          WHERE NOT u.is_internal AND ${AGREED('u.mobile')} AND u.created_at ${IST} >= b.yesterday AND u.created_at ${IST} < b.today) AS signed_up_before,
        (SELECT count(*)::int FROM event_log e, b
-         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND e.created_at ${IST} >= b.today) AS checks,
+         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND ${ch.check('e')} AND e.created_at ${IST} >= b.today) AS checks,
        (SELECT count(*)::int FROM event_log e, b
-         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND e.created_at ${IST} >= b.yesterday
+         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND ${ch.check('e')} AND e.created_at ${IST} >= b.yesterday
            AND e.created_at ${IST} < b.today)                                             AS checks_before,
        (SELECT count(*)::int FROM payments p, b
-         WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.today) AS paid,
+         WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')} AND ${ch.pay('p')} AND p.paid_at ${IST} >= b.today) AS paid,
        (SELECT count(*)::int FROM payments p, b
-         WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')}
+         WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')} AND ${ch.pay('p')}
            AND p.paid_at ${IST} >= b.yesterday AND p.paid_at ${IST} < b.today)            AS paid_before,
        (SELECT coalesce(sum(amount_paise), 0)::int FROM payments p, b
-         WHERE p.status = 'paid' AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.today)      AS earned_paise,
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND ${ch.pay('p')} AND p.paid_at ${IST} >= b.today)      AS earned_paise,
        (SELECT coalesce(sum(amount_paise), 0)::int FROM payments p, b
-         WHERE p.status = 'paid' AND ${NM.pay('p')}
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND ${ch.pay('p')}
            AND p.paid_at ${IST} >= b.yesterday AND p.paid_at ${IST} < b.today)            AS earned_before_paise,
        (SELECT count(*)::int FROM subscriptions s
-         WHERE s.is_active AND s.ends_on >= CURRENT_DATE AND ${NM.user('s.user_id')})     AS monitoring,
+         WHERE s.is_active AND s.ends_on >= CURRENT_DATE AND ${NM.user('s.user_id')} AND ${ch.sub('s')})     AS monitoring,
        -- Only those who agreed, never STOP (2026-09-30, 2026-10-13), and not the owner (2026-10-10).
        (SELECT count(*)::int FROM users u WHERE NOT u.is_internal AND ${AGREED('u.mobile')}) AS customers,
        (SELECT count(*)::int FROM whatsapp_sessions WHERE wa_opt_out_at IS NOT NULL)       AS customers_stopped,
@@ -184,7 +207,7 @@ async function funnelToday() {
        ${step('buy_tapped')}  AS tapped_buy,
        ${step('link_sent')}   AS got_link,
        (SELECT count(DISTINCT p.user_id)::int FROM payments p, b
-         WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.today) AS paid`);
+         WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')} AND ${C().pay('p')} AND p.paid_at ${IST} >= b.today) AS paid`);
   return [
     { step: 'Said Hi', n: row.said_hi },
     { step: 'Agreed to terms', n: row.agreed },
@@ -197,6 +220,7 @@ async function funnelToday() {
 
 /** The last fourteen days, for the one chart worth having on a home screen. */
 async function recent() {
+  const ch = C();
   const { rows } = await db.query(
     `WITH days AS (
        SELECT generate_series(
@@ -207,10 +231,10 @@ async function recent() {
             (SELECT count(*)::int FROM users u
               WHERE NOT u.is_internal AND ${AGREED('u.mobile')} AND u.created_at ${IST} >= days.d AND u.created_at ${IST} < days.d + interval '1 day') AS signed_up,
             (SELECT count(*)::int FROM event_log e
-              WHERE e.kind = 'vehicle_check' AND ${NM.event('e')}
+              WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND ${ch.check('e')}
                 AND e.created_at ${IST} >= days.d AND e.created_at ${IST} < days.d + interval '1 day') AS checks,
             (SELECT count(*)::int FROM payments p
-              WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')}
+              WHERE p.status = 'paid' AND p.amount_paise > 0 AND ${NM.pay('p')} AND ${ch.pay('p')}
                 AND p.paid_at ${IST} >= days.d AND p.paid_at ${IST} < days.d + interval '1 day')       AS paid
        FROM days ORDER BY days.d`);
   return rows;
