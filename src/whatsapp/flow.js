@@ -1985,7 +1985,15 @@ const OWNER_CONTACT_RE = new RegExp([
   '\\b(owner|owners|malik|maalik|maalik\'?s)\\b.{0,30}\\b(mobile|phone|contact|number|no\\.?|num|address|addr|whats ?app)\\b',
   '\\b(mobile|phone|contact|number|address|whats ?app)\\b.{0,30}\\b(of|ka|ki|ke)?\\s*(the\\s+)?(owner|malik|maalik)\\b',
   'मालिक.{0,20}(नंबर|नम्बर|मोबाइल|फ़ोन|फोन|पता)', '(नंबर|नम्बर|मोबाइल|फ़ोन|फोन|पता).{0,20}मालिक',
+  /* Without "owner" (user, 2026-10-16: "Mobile number chahie"): asking for a mobile or phone
+     number is, here, asking for the owner's — "need/want/give the mobile number", "number
+     chahiye / do / batao". Talk of their OWN number is excluded below (OWN_NUMBER_RE). */
+  '\\b(mobile|phone|contact|cell)\\s*(number|no\\.?|num)?\\s*(chahi?y?e|chahie|chaiye|chaahiye|chahiye|do|dijiye|dedo|de do|batao|bataiye|bata do|milega|mil sakta)\\b',
+  '\\b(need|want|give|send|share|get)\\s+(me\\s+)?(the\\s+|his\\s+|her\\s+|their\\s+)?(mobile|phone|contact)\\s*(number|no\\.?)?\\b',
+  '(मोबाइल|फ़ोन|फोन)\\s*(नंबर|नम्बर)?\\s*(चाहिए|चाहिये|दो|दीजिए|बताओ|बताइए)',
 ].join('|'), 'i');
+/* Their own number — "my number", "mera number", "change my mobile" — is not asking for the owner's. */
+const OWN_NUMBER_RE = /\b(my|mera|meri|mere|apna|apni|apne|own)\s+(mobile|phone|number|no\.?|contact)|\b(change|update|badal|badalna)\b.{0,20}\b(mobile|phone|number)|मेरा\s*(नंबर|नम्बर|मोबाइल)/i;
 
 /* Asking not to be messaged, in the words people actually use (user, 2026-09-30). */
 const OPT_OUT_RE = new RegExp([
@@ -2188,7 +2196,8 @@ async function handle(session, message, mobile) {
    * a plain vehicle number or "my mobile number" is never caught.
    */
   // Not while they are typing feedback or why they said STOP — "no owner number, useless" is feedback.
-  if (intent.kind === 'text' && !['feedback', 'stop_reason'].includes(state) && OWNER_CONTACT_RE.test(intent.text || '')) {
+  if (intent.kind === 'text' && !['feedback', 'stop_reason'].includes(state) && OWNER_CONTACT_RE.test(intent.text || '')
+      && !OWN_NUMBER_RE.test(intent.text || '')) {
     await funnel(mobile, 'asked_owner_contact');
     await reply(mobile,
       '🙏 Sorry, we can\'t share a vehicle owner\'s *mobile number* or *address*. It is private and protected by law — '
