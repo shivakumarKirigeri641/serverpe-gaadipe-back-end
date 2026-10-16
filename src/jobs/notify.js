@@ -1324,7 +1324,7 @@ async function dailySummary() {
          FROM payments p JOIN users u ON u.id = p.user_id
         WHERE p.status = 'paid' AND p.paid_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'
           AND p.amount_paise > 0 AND (p.raw->>'test_mode') IS NULL AND NOT coalesce(u.is_internal, false)
-          ${channel === 'all' ? '' : `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') ${channel === 'web' ? '=' : '<>'} 'web'`}
+          ${channel === 'all' ? '' : `AND coalesce(nullif(p.raw->>'channel', ''), 'whatsapp') ${channel === 'web' ? '=' : '<>'} 'web'`}
         ORDER BY p.paid_at`);
     const vs = (a, b, money) => `${money ? T.rupees(a) : a}  (yesterday ${money ? T.rupees(b) : b})`;
     return {

@@ -34,8 +34,9 @@ const NOT_STOPPED = 'true';
 async function compute() {
   const channel = String(await settings.get('site_stats_channel', 'all')).toLowerCase();
   const REAL = `u.is_internal = false AND ${agreedSql('u.mobile', { whatsappOnly: channel === 'whatsapp', webOnly: channel === 'web' })}`;
-  const PAID_CH = channel === 'whatsapp' ? `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') <> 'web'`
-    : channel === 'web' ? `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'` : '';
+  // A payment's own channel, never the browser it was paid in (2026-10-16, migration 191).
+  const PAID_CH = channel === 'whatsapp' ? `AND coalesce(nullif(p.raw->>'channel', ''), 'whatsapp') <> 'web'`
+    : channel === 'web' ? `AND coalesce(nullif(p.raw->>'channel', ''), 'whatsapp') = 'web'` : '';
   const row = await db.one(`
     WITH checked AS (
       SELECT uv.vehicle_id, uv.check_count

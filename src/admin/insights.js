@@ -28,7 +28,9 @@ const REAL_PAY = `amount_paise > 0 AND (raw->>'test_mode') IS NULL AND ${NOT_ME}
  * 'whatsapp' counts WhatsApp customers, checks, payments and reports; 'web' the website's;
  * 'all' (the default) both, as before.
  */
-const PAY_CH = (ch) => (ch === 'all' ? '' : `AND coalesce(raw->>'channel', raw->'paid_from'->>'channel', 'whatsapp') ${ch === 'web' ? '=' : '<>'} 'web'`);
+// A payment's own channel (2026-10-16): paid_from.channel is only the browser it was paid in — every
+// WhatsApp purchase has 'web' there, which zeroed the WhatsApp summary's payments and revenue.
+const PAY_CH = (ch) => (ch === 'all' ? '' : `AND coalesce(nullif(raw->>'channel', ''), 'whatsapp') ${ch === 'web' ? '=' : '<>'} 'web'`);
 const CHECK_CH = (ch) => (ch === 'all' ? '' : ch === 'web' ? `AND detail->>'channel' = 'web'` : `AND coalesce(detail->>'channel', 'whatsapp') = 'whatsapp'`);
 const USER_CH = (ch) => (ch === 'all' ? '' : ch === 'web' ? `AND signup_channel = 'web'` : `AND coalesce(signup_channel, 'whatsapp') <> 'web'`);
 const metricsSql = (ch = 'all') => `
