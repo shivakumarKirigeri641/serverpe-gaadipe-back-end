@@ -78,6 +78,11 @@ async function get() {
   for (const [k, v] of Object.entries(cache.value)) {
     if (Number(v) >= (floor[k] ?? min)) out[k] = Number(v);
   }
+  /* THE LATEST HUNDRED (user, 2026-10-16: "every increment of 100 customers, a celebration
+     animation" — "always, for any visitor, once on landing"). 100, 200, 300 … reached; the
+     home page celebrates it. site_milestone_enabled = false turns it off. */
+  const c = Number(cache.value.customers || 0);
+  if (c >= 100 && await settings.bool('site_milestone_enabled', true)) out.milestone = Math.floor(c / 100) * 100;
   return Object.keys(out).length ? { ...out, as_of: new Date(cache.at).toISOString() } : null;
 }
 
