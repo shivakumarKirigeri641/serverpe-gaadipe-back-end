@@ -392,7 +392,7 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
       { id: BTN.MY_MONITORING,   title: 'My monitoring',    description: 'Watched vehicles, end dates, next alert, paused alerts' },
       // My reports carries the GST invoice too (2026-10-15), so its row goes to "GaadiPe so far".
       { id: BTN.DOWNLOAD_REPORT, title: 'My reports',       description: 'Report PDFs again, and GST invoices' },
-      ownerRow || { id: BTN.SO_FAR, title: 'GaadiPe so far', description: 'Customers served, vehicles checked, challans found' },
+      ownerRow || { id: BTN.SO_FAR, title: 'GaadiPe so far', description: 'People served, vehicles checked, challans found' },
       { id: BTN.EMAIL,           title: 'Email for alerts',
         description: user?.email_verified_at ? `✓ ${user.email}` : 'Add and confirm your email for reports & alerts' },
       { id: BTN.WHAT_GET,        title: 'What do I get?',   description: 'Free check, full report, monitoring, fleets' },
@@ -612,7 +612,7 @@ async function whatYouGet(mobile) {
  * it is big enough to show there (site_stats_min) — totals only, never a person or a plate.
  */
 const SO_FAR_ROWS = [
-  ['customers', '👥', 'Customers served'], ['vehicles', '🚗', 'Vehicles checked'], ['checks', '🔍', 'Vehicle checks run'],
+  ['customers', '👥', 'People served'], ['vehicles', '🚗', 'Vehicles checked'], ['checks', '🔍', 'Vehicle checks run'],
   ['records_fetched', '🏛️', 'Government records fetched'], ['reports_bought', '📄', 'Full reports bought'],
   ['watching', '🔔', 'Vehicles being watched now'], ['expired_found', '⚠️', 'Vehicles found with expired insurance or PUC'],
   ['challans_found', '🧾', 'Pending challans found'], ['states', '🗺️', 'States & UTs'],
