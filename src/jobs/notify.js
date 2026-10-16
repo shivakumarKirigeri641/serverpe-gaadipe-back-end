@@ -1317,7 +1317,8 @@ async function buildDailySummary(dayIso = null) {
     const live = !dayIso;
     const bounds = await db.one(
       `SELECT d AT TIME ZONE 'Asia/Kolkata' AS a, (d + interval '1 day') AT TIME ZONE 'Asia/Kolkata' AS b,
-              (d - interval '1 day') AT TIME ZONE 'Asia/Kolkata' AS p, to_char(d, 'YYYY-MM-DD') AS iso
+              (d - interval '1 day') AT TIME ZONE 'Asia/Kolkata' AS p, to_char(d, 'YYYY-MM-DD') AS iso,
+              to_char(d - interval '1 day', 'YYYY-MM-DD') AS piso
          FROM (SELECT coalesce($1::date::timestamp, date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata')) AS d) x`, [dayIso]);
     const today = bounds.iso;
     const end = live ? new Date() : bounds.b;
@@ -1325,8 +1326,9 @@ async function buildDailySummary(dayIso = null) {
     if (live) { const c = (await compare({ channel })).day; d = c.current; y = c.previous_full; }
     else { [d, y] = await Promise.all([metrics(bounds.a, bounds.b, channel), metrics(bounds.p, bounds.a, channel)]); }
     const word = live ? 'today' : `on ${today}`;
-    // WhatsApp-first (user, 2026-09-25): the chat's day, not the website's.
-    const extra = await db.one(
+    // WhatsApp-first (user, 2026-09-25): the chat's day, not the website's — and the day before's,
+    // for the comparison (user, 2026-10-16: "the comparison with yesterday, with inc/dec %").
+    const extraOf = (iso, from, to) => db.one(
       `SELECT (SELECT count(*) FROM whatsapp_messages WHERE direction = 'in' AND created_at >= $2 AND created_at < $3)::int AS wa_in,
               (SELECT count(DISTINCT mobile) FROM whatsapp_messages WHERE direction = 'in' AND created_at >= $2 AND created_at < $3)::int AS wa_people,
               (SELECT count(*) FROM event_log WHERE kind = 'funnel' AND detail->>'step' = 'opt_out'
@@ -1334,7 +1336,8 @@ async function buildDailySummary(dayIso = null) {
               (SELECT count(*) FROM event_log WHERE kind = 'watch_digest' AND detail->>'ist_date' = $1)::int AS alerts,
               (SELECT count(*) FROM contact_messages WHERE created_at >= $2 AND created_at < $3)::int AS contacts,
               (SELECT count(*) FROM whatsapp_sessions WHERE last_inbound_at > now() - interval '15 minutes')::int AS online`,
-      [today, bounds.a, end]);
+      [iso, from, to]);
+    const [extra, extraBefore] = await Promise.all([extraOf(today, bounds.a, end), extraOf(bounds.piso, bounds.p, bounds.a)]);
     const { rows: paid } = await db.query(
       `SELECT p.amount_paise, p.paid_at, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
               (SELECT reg_no FROM vehicle_reports r WHERE r.payment_id = p.id LIMIT 1) AS reg_no
@@ -1343,7 +1346,21 @@ async function buildDailySummary(dayIso = null) {
           AND p.amount_paise > 0 AND (p.raw->>'test_mode') IS NULL AND NOT coalesce(u.is_internal, false)
           ${channel === 'all' ? '' : `AND coalesce(nullif(p.raw->>'channel', ''), 'whatsapp') ${channel === 'web' ? '=' : '<>'} 'web'`}
         ORDER BY p.paid_at`, [bounds.a, end]);
-    const vs = (a, b, money) => `${money ? T.rupees(a) : a}  (day before ${money ? T.rupees(b) : b})`;
+    /* UP OR DOWN, AND BY HOW MUCH (user, 2026-10-16): "▲ +50%", "▼ 20%", "▲ new" when the day
+       before had none, "= same". Conversion moves in percentage points, not per cent of a per cent. */
+    const delta = (a, b) => {
+      const x = Number(a || 0); const z = Number(b || 0);
+      if (x === z) return '= same';
+      if (!z) return '▲ new';
+      const pct = Math.round(((x - z) / z) * 100);
+      return pct > 0 ? `▲ +${pct}%` : `▼ ${Math.abs(pct)}%`;
+    };
+    const vs = (a, b, money) => `${money ? T.rupees(a) : a}  (day before ${money ? T.rupees(b) : b} · ${delta(a, b)})`;
+    const pts = (a, b) => {
+      const p = Math.round((Number(a || 0) - Number(b || 0)) * 10) / 10;
+      return p === 0 ? '= same' : p > 0 ? `▲ +${p} pts` : `▼ ${Math.abs(p)} pts`;
+    };
+    const tile = (a, b, money) => `${money ? T.rupees(a) : a}  ${delta(a, b)}`;
     return {
       subject: `📊 GaadiPe ${live ? 'today' : today} · ${T.rupees(d.gross_paise)} · ${d.payments} payment${d.payments === 1 ? '' : 's'} · ${d.checks} checks`,
       ...T.layout({
@@ -1352,23 +1369,23 @@ async function buildDailySummary(dayIso = null) {
         lead: d.payments
           ? `${d.payments} payment${d.payments === 1 ? '' : 's'} ${word}, ${T.rupees(d.take_home_paise)} take-home after GST, fees and messaging.`
           : `No payments ${word}. Here is how the day went.`,
-        stats: [['Revenue', T.rupees(d.gross_paise)], ['Take-home', T.rupees(d.take_home_paise)],
-                ['Payments', String(d.payments)], ['Checks', String(d.checks)]],
+        stats: [['Revenue', tile(d.gross_paise, y.gross_paise, true)], ['Take-home', tile(d.take_home_paise, y.take_home_paise, true)],
+                ['Payments', tile(d.payments, y.payments)], ['Checks', tile(d.checks, y.checks)]],
         sections: [
           { heading: live ? 'Today against yesterday' : `${today} against the day before`, rows: [
             ['Revenue', vs(d.gross_paise, y.gross_paise, true)], ['Take-home', vs(d.take_home_paise, y.take_home_paise, true)],
             ['Payments', vs(d.payments, y.payments)], ['Vehicle checks', vs(d.checks, y.checks)],
             ['People checking', vs(d.active_users, y.active_users)], ['New customers', vs(d.new_users, y.new_users)],
             ['New vehicles', vs(d.new_vehicles, y.new_vehicles)],
-            ['Conversion', `${d.conversion}%  (day before ${y.conversion}%)`],
+            ['Conversion', `${d.conversion}%  (day before ${y.conversion}% · ${pts(d.conversion, y.conversion)})`],
             ['Abandoned payments', vs(d.abandoned, y.abandoned)],
           ] },
           { heading: live ? 'Also today' : `Also on ${today}`, rows: [
-            ['Reports issued', String(d.reports)], ['Evening alerts sent', String(extra.alerts)],
-            ['WhatsApp messages received', `${extra.wa_in} from ${extra.wa_people} people`],
-            ['Replied STOP', String(extra.stops)], ['Contact messages', String(extra.contacts)],
-            ['Feedback', String(d.feedback)], ...(live ? [['Chatting right now', String(extra.online)]] : []),
-            ['Messaging cost', T.rupees(d.messaging_paise)],
+            ['Reports issued', vs(d.reports, y.reports)], ['Evening alerts sent', vs(extra.alerts, extraBefore.alerts)],
+            ['WhatsApp messages received', `${extra.wa_in} from ${extra.wa_people} people  (day before ${extraBefore.wa_in} from ${extraBefore.wa_people} · ${delta(extra.wa_in, extraBefore.wa_in)})`],
+            ['Replied STOP', vs(extra.stops, extraBefore.stops)], ['Contact messages', vs(extra.contacts, extraBefore.contacts)],
+            ['Feedback', vs(d.feedback, y.feedback)], ...(live ? [['Chatting right now', String(extra.online)]] : []),
+            ['Messaging cost', vs(d.messaging_paise, y.messaging_paise, true)],
           ] },
           paid.length ? { heading: live ? 'Payments today' : `Payments on ${today}`, rows: paid.map((r) => [
             `${T.ist(r.paid_at).split(', ')[1]}`, `${T.rupees(r.amount_paise)} · ${r.name || T.mobile(r.mobile)}${r.reg_no ? ` · ${r.reg_no}` : ''}`,
