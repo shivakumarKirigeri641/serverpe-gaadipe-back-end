@@ -325,4 +325,4 @@ async function heatmap({ days = 30 } = {}) {
   return { days, grid, max: Math.max(0, ...rows.map((r) => r.checks)) };
 }
 
-module.exports = { compare, fleet, heatmap, groupOf };
+module.exports = { compare, fleet, heatmap, groupOf, metrics };

@@ -1300,70 +1300,89 @@ async function dailySummary() {
   const now = new Date(Date.now() + 5.5 * 3600 * 1000);
   const today = now.toISOString().slice(0, 10);
 
-  return (await deliver('daily_summary', today, async () => {
-    const { compare } = require('../admin/insights');
+  return (await deliver('daily_summary', today, () => buildDailySummary())) ? 1 : 0;
+}
+
+/*
+ * THE SUMMARY FOR ANY DAY (user, 2026-10-16: "a script to send me the mail of yesterday's
+ * summary"). No day: today so far, as the 11:55 pm email. A day (YYYY-MM-DD, IST): that whole
+ * day against the one before (scripts/resend-summary.js).
+ */
+async function buildDailySummary(dayIso = null) {
+  {
+    const { compare, metrics } = require('../admin/insights');
     // WhatsApp only (user, 2026-10-15: "now give only WhatsApp based"); daily_summary_channel
     // 'web' or 'all' to change. The owner's checks and TEST payments are never counted.
     const channel = String(await settings.get('daily_summary_channel', 'whatsapp')).toLowerCase();
-    const c = (await compare({ channel })).day;
-    const d = c.current; const y = c.previous_full;
+    const live = !dayIso;
+    const bounds = await db.one(
+      `SELECT d AT TIME ZONE 'Asia/Kolkata' AS a, (d + interval '1 day') AT TIME ZONE 'Asia/Kolkata' AS b,
+              (d - interval '1 day') AT TIME ZONE 'Asia/Kolkata' AS p, to_char(d, 'YYYY-MM-DD') AS iso
+         FROM (SELECT coalesce($1::date::timestamp, date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata')) AS d) x`, [dayIso]);
+    const today = bounds.iso;
+    const end = live ? new Date() : bounds.b;
+    let d; let y;
+    if (live) { const c = (await compare({ channel })).day; d = c.current; y = c.previous_full; }
+    else { [d, y] = await Promise.all([metrics(bounds.a, bounds.b, channel), metrics(bounds.p, bounds.a, channel)]); }
+    const word = live ? 'today' : `on ${today}`;
     // WhatsApp-first (user, 2026-09-25): the chat's day, not the website's.
     const extra = await db.one(
-      `SELECT (SELECT count(*) FROM whatsapp_messages WHERE direction = 'in'
-                 AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS wa_in,
-              (SELECT count(DISTINCT mobile) FROM whatsapp_messages WHERE direction = 'in'
-                 AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS wa_people,
+      `SELECT (SELECT count(*) FROM whatsapp_messages WHERE direction = 'in' AND created_at >= $2 AND created_at < $3)::int AS wa_in,
+              (SELECT count(DISTINCT mobile) FROM whatsapp_messages WHERE direction = 'in' AND created_at >= $2 AND created_at < $3)::int AS wa_people,
               (SELECT count(*) FROM event_log WHERE kind = 'funnel' AND detail->>'step' = 'opt_out'
-                 AND created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS stops,
+                 AND created_at >= $2 AND created_at < $3)::int AS stops,
               (SELECT count(*) FROM event_log WHERE kind = 'watch_digest' AND detail->>'ist_date' = $1)::int AS alerts,
-              (SELECT count(*) FROM contact_messages WHERE created_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')::int AS contacts,
-              (SELECT count(*) FROM whatsapp_sessions WHERE last_inbound_at > now() - interval '15 minutes')::int AS online`, [today]);
+              (SELECT count(*) FROM contact_messages WHERE created_at >= $2 AND created_at < $3)::int AS contacts,
+              (SELECT count(*) FROM whatsapp_sessions WHERE last_inbound_at > now() - interval '15 minutes')::int AS online`,
+      [today, bounds.a, end]);
     const { rows: paid } = await db.query(
       `SELECT p.amount_paise, p.paid_at, u.mobile, coalesce(u.display_name, u.wa_profile_name) AS name,
               (SELECT reg_no FROM vehicle_reports r WHERE r.payment_id = p.id LIMIT 1) AS reg_no
          FROM payments p JOIN users u ON u.id = p.user_id
-        WHERE p.status = 'paid' AND p.paid_at > date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'
+        WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2
           AND p.amount_paise > 0 AND (p.raw->>'test_mode') IS NULL AND NOT coalesce(u.is_internal, false)
           ${channel === 'all' ? '' : `AND coalesce(nullif(p.raw->>'channel', ''), 'whatsapp') ${channel === 'web' ? '=' : '<>'} 'web'`}
-        ORDER BY p.paid_at`);
-    const vs = (a, b, money) => `${money ? T.rupees(a) : a}  (yesterday ${money ? T.rupees(b) : b})`;
+        ORDER BY p.paid_at`, [bounds.a, end]);
+    const vs = (a, b, money) => `${money ? T.rupees(a) : a}  (day before ${money ? T.rupees(b) : b})`;
     return {
-      subject: `📊 GaadiPe today · ${T.rupees(d.gross_paise)} · ${d.payments} payment${d.payments === 1 ? '' : 's'} · ${d.checks} checks`,
+      subject: `📊 GaadiPe ${live ? 'today' : today} · ${T.rupees(d.gross_paise)} · ${d.payments} payment${d.payments === 1 ? '' : 's'} · ${d.checks} checks`,
       ...T.layout({
         badge: { text: channel === 'whatsapp' ? 'Daily summary · WhatsApp' : channel === 'web' ? 'Daily summary · website' : 'Daily summary', tone: 'info' },
         title: `Your day at GaadiPe — ${today}`,
         lead: d.payments
-          ? `${d.payments} payment${d.payments === 1 ? '' : 's'} today, ${T.rupees(d.take_home_paise)} take-home after GST, fees and messaging.`
-          : 'No payments today yet. Here is how the day went.',
+          ? `${d.payments} payment${d.payments === 1 ? '' : 's'} ${word}, ${T.rupees(d.take_home_paise)} take-home after GST, fees and messaging.`
+          : `No payments ${word}. Here is how the day went.`,
         stats: [['Revenue', T.rupees(d.gross_paise)], ['Take-home', T.rupees(d.take_home_paise)],
                 ['Payments', String(d.payments)], ['Checks', String(d.checks)]],
         sections: [
-          { heading: 'Today against yesterday', rows: [
+          { heading: live ? 'Today against yesterday' : `${today} against the day before`, rows: [
             ['Revenue', vs(d.gross_paise, y.gross_paise, true)], ['Take-home', vs(d.take_home_paise, y.take_home_paise, true)],
             ['Payments', vs(d.payments, y.payments)], ['Vehicle checks', vs(d.checks, y.checks)],
             ['People checking', vs(d.active_users, y.active_users)], ['New customers', vs(d.new_users, y.new_users)],
             ['New vehicles', vs(d.new_vehicles, y.new_vehicles)],
-            ['Conversion', `${d.conversion}%  (yesterday ${y.conversion}%)`],
+            ['Conversion', `${d.conversion}%  (day before ${y.conversion}%)`],
             ['Abandoned payments', vs(d.abandoned, y.abandoned)],
           ] },
-          { heading: 'Also today', rows: [
+          { heading: live ? 'Also today' : `Also on ${today}`, rows: [
             ['Reports issued', String(d.reports)], ['Evening alerts sent', String(extra.alerts)],
             ['WhatsApp messages received', `${extra.wa_in} from ${extra.wa_people} people`],
             ['Replied STOP', String(extra.stops)], ['Contact messages', String(extra.contacts)],
-            ['Feedback', String(d.feedback)], ['Chatting right now', String(extra.online)],
+            ['Feedback', String(d.feedback)], ...(live ? [['Chatting right now', String(extra.online)]] : []),
             ['Messaging cost', T.rupees(d.messaging_paise)],
           ] },
-          paid.length ? { heading: 'Payments today', rows: paid.map((r) => [
+          paid.length ? { heading: live ? 'Payments today' : `Payments on ${today}`, rows: paid.map((r) => [
             `${T.ist(r.paid_at).split(', ')[1]}`, `${T.rupees(r.amount_paise)} · ${r.name || T.mobile(r.mobile)}${r.reg_no ? ` · ${r.reg_no}` : ''}`,
           ]) } : null,
         ],
         cta: { label: 'Open analytics', path: '/analytics' },
         // The time setting is "23:55" since 1 Oct (5e48a37); this line still read the old `hour`,
         // so the summary failed to build every night until 15 Oct.
-        footer: `Sent once a day at ${String(await settings.get('daily_summary_hour_ist', '23:55'))} IST. Switch it off under Settings → Emails in the admin panel.`,
+        footer: live
+          ? `Sent once a day at ${String(await settings.get('daily_summary_hour_ist', '23:55'))} IST. Switch it off under Settings → Emails in the admin panel.`
+          : `Sent again by hand for ${today} (scripts/resend-summary.js).`,
       }),
     };
-  })) ? 1 : 0;
+  }
 }
 
 /* ──────────────────────────────────────────────────────────────── loop ── */
@@ -1488,4 +1507,4 @@ function start(everySeconds = 30) {
 }
 
 module.exports = { start, runOnce, visits, signIns, webChecks, chatChecks, pushOn, payments, contacts, feedback, waHi, waAgreed, waChecks, waOptOut, vehicleChanges, emailConfirmations,
-                   leftAtPayment, security, dailySummary, weeklyMoney, whatsappSummary, weeklyDigest };
+                   leftAtPayment, security, dailySummary, buildDailySummary, weeklyMoney, whatsappSummary, weeklyDigest };
