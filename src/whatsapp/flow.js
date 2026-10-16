@@ -2597,7 +2597,7 @@ async function handle(session, message, mobile) {
 
         const { plan, paise, kind } = await billing.priceFor(user.id, vehicle.id);
         const row = await billing.createPending({
-          userId: user.id, planId: plan.id, amountPaise: paise, vehicleId: vehicle.id,
+          userId: user.id, planId: plan.id, amountPaise: paise, vehicleId: vehicle.id, channel: 'whatsapp',
         });
 
         // An ORDER, not a payment link. A link ends on Razorpay's own page and
@@ -2786,7 +2786,7 @@ async function handle(session, message, mobile) {
                               at: new Date().toISOString() })]);
 
           const pending = await billing.createPending({
-            userId: user.id, planId: plan.id, amountPaise: plan.price_paise, vehicleId: vehicle.id,
+            userId: user.id, planId: plan.id, amountPaise: plan.price_paise, vehicleId: vehicle.id, channel: 'whatsapp',
           });
 
           let order;

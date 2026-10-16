@@ -104,7 +104,7 @@ async function priceFor(userId, vehicleId) {
 }
 
 /** Record a payment we are about to ask for. Nothing is active yet. */
-async function createPending({ userId, planId, amountPaise, vehicleId }) {
+async function createPending({ userId, planId, amountPaise, vehicleId, channel = null }) {
   // Feature Flags: the last line of defence — callers check first and say so kindly.
   if (!(await require('../util/flags').on('payments'))) {
     throw Object.assign(new Error('Payments are switched off.'), { code: 'payments_paused' });
@@ -113,7 +113,11 @@ async function createPending({ userId, planId, amountPaise, vehicleId }) {
     `INSERT INTO payments (user_id, plan_id, amount_paise, status, gateway, raw)
           VALUES ($1, $2, $3, 'created', 'razorpay', $4)
        RETURNING *`,
-    [userId, planId, amountPaise, JSON.stringify({ vehicle_id: vehicleId })]);
+    /* WHERE THE CUSTOMER BOUGHT IT (user, 2026-10-16: "full reports bought & revenue graph not
+       working"). Saved at creation: the checkout page later adds paid_from.channel 'web' — the
+       browser it was PAID in — and every report counts a payment with no channel of its own as
+       that, so each WhatsApp purchase was counted as a website one (migration 191). */
+    [userId, planId, amountPaise, JSON.stringify({ vehicle_id: vehicleId, ...(channel ? { channel } : {}) })]);
   return rows[0];
 }
 
