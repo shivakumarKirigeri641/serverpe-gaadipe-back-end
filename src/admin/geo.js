@@ -53,15 +53,17 @@ function rtoCode(reg) {
 async function perKey(keyExpr, r, stateFilter) {
   const f = stateFilter ? `AND ${REG_STATE} = ANY($3::text[])` : '';
   const args = stateFilter ? [r.from, r.to, stateFilter] : [r.from, r.to];
+  // This panel's channel (2026-10-16, consented.chan): the main admin's WhatsApp lookups, reports and money.
+  const ch = require('./consented').chan();
   const [lookups, reports, money] = await Promise.all([
-    db.query(`SELECT ${keyExpr} AS k, count(*)::int AS n FROM events
-               WHERE name IN ('vehicle_search_success','vehicle_search_failed') AND reg_no IS NOT NULL
+    db.query(`SELECT ${keyExpr} AS k, count(*)::int AS n FROM events ev
+               WHERE name IN ('vehicle_search_success','vehicle_search_failed') AND reg_no IS NOT NULL AND ${ch.event('ev')}
                  AND occurred_at >= $1 AND occurred_at < $2 ${f} GROUP BY 1`, args),
-    db.query(`SELECT ${keyExpr} AS k, count(*)::int AS n FROM vehicle_reports
-               WHERE created_at >= $1 AND created_at < $2 ${f} GROUP BY 1`, args),
+    db.query(`SELECT ${keyExpr} AS k, count(*)::int AS n FROM vehicle_reports vr
+               WHERE created_at >= $1 AND created_at < $2 AND ${ch.report('vr')} ${f} GROUP BY 1`, args),
     db.query(`SELECT ${keyExpr.replace(/reg_no/g, 'v.reg_no')} AS k, count(*)::int AS n, sum(p.amount_paise)::int AS paise
                 FROM payments p JOIN vehicles v ON v.id = (p.raw->>'vehicle_id')::bigint
-               WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2
+               WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2 AND ${ch.pay('p')}
                  ${stateFilter ? `AND upper(substring(v.reg_no from 1 for 2)) = ANY($3::text[])` : ''} GROUP BY 1`, args),
   ]);
   const rows = {};

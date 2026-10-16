@@ -118,10 +118,10 @@ async function pulse({ sinceMessageId = null } = {}) {
          WHERE ws.last_inbound_at > now() - interval '15 minutes' AND ${require('./consented').agreedSql('ws.mobile')}) AS active_15m,
        (SELECT count(*) FROM whatsapp_sessions ws
          WHERE ws.last_inbound_at > now() - interval '24 hours' AND ${require('./consented').agreedSql('ws.mobile')}) AS active_24h,
-       (SELECT count(*) FROM payments
-         WHERE status = 'created' AND created_at > now() - interval '30 minutes') AS paying_now,
-       (SELECT count(*) FROM event_log
-         WHERE kind = 'vehicle_check' AND created_at > now() - interval '15 minutes') AS checks_15m`);
+       (SELECT count(*) FROM payments p
+         WHERE p.status = 'created' AND p.created_at > now() - interval '30 minutes' AND ${require('./consented').chan().pay('p')}) AS paying_now,
+       (SELECT count(*) FROM event_log e
+         WHERE e.kind = 'vehicle_check' AND e.created_at > now() - interval '15 minutes' AND ${require('./consented').chan().check('e')}) AS checks_15m`);
 
   return {
     messages: rows.reverse().map(r => ({ ...r, id: String(r.id) })),

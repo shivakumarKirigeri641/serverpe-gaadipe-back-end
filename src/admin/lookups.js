@@ -22,7 +22,10 @@ const command = require('./command');
 
 const LOOKUP = `e.name IN ('vehicle_search_success', 'vehicle_search_failed')`;
 // The owner's own lookups stay out (user, 2026-10-10); the list shows them when searched for.
-const NOT_ME = require('./notMe').evt('e');
+const NOT_ME_ONLY = require('./notMe').evt('e');
+/* Not the owner — and this panel's channel only (2026-10-16, consented.chan): the main admin's
+   WhatsApp searches. A getter, so the channel is read per request. */
+const NOT_ME = { toString: () => `${NOT_ME_ONLY} AND ${require('./consented').chan().event('e')}` };
 // "KA01AB1234" -> state KA, RTO KA01. Old-style and BH-series numbers are
 // left to their first two letters.
 const STATE = `upper(substring(e.reg_no from 1 for 2))`;

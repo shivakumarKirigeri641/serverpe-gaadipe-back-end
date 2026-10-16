@@ -41,6 +41,8 @@ const NM = require('./notMe');
 async function summary(q = {}) {
   const r = command.resolve(q);
   const [g, gFmt] = GRAINS[q.grain] || GRAINS.day;
+  // This panel's channel (2026-10-16, consented.chan): the main admin's WhatsApp payments only.
+  const CH = require('./consented').chan().pay('p');
   const [n, series, bySource, byMethod] = await Promise.all([
     db.one(
       `SELECT count(*) FILTER (WHERE p.created_at >= $1 AND p.created_at < $2)::int AS started,
@@ -53,22 +55,22 @@ async function summary(q = {}) {
               coalesce(sum(p.amount_paise) FILTER (WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2), 0)::int AS gross_paise,
               coalesce(sum(p.amount_paise) FILTER (WHERE p.status = 'refunded' AND p.refunded_at >= $1 AND p.refunded_at < $2), 0)::int AS refunded_paise,
               count(DISTINCT p.user_id) FILTER (WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2)::int AS payers
-         FROM payments p WHERE ${NM.pay('p')}`, [r.from, r.to]),
+         FROM payments p WHERE ${NM.pay('p')} AND ${CH}`, [r.from, r.to]),
     db.query(
       `SELECT to_char(date_trunc('${g}', p.paid_at AT TIME ZONE 'Asia/Kolkata'), '${gFmt}') AS label,
               count(*)::int AS payments, sum(p.amount_paise)::int AS gross_paise
-         FROM payments p WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2 AND ${NM.pay('p')}
+         FROM payments p WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2 AND ${NM.pay('p')} AND ${CH}
         GROUP BY 1 ORDER BY 1`, [r.from, r.to]),
     db.query(
       `SELECT ${SOURCE} AS source, count(*)::int AS payments, sum(p.amount_paise)::int AS gross_paise
          FROM payments p JOIN users u ON u.id = p.user_id
-        WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2 AND ${NM.pay('p')}
+        WHERE p.status = 'paid' AND p.paid_at >= $1 AND p.paid_at < $2 AND ${NM.pay('p')} AND ${CH}
         GROUP BY 1 ORDER BY 3 DESC`, [r.from, r.to]),
     db.query(
       `SELECT coalesce(e.metadata->>'method', 'not recorded') AS method, count(*)::int AS payments
          FROM events e LEFT JOIN payments p ON p.id = e.payment_id
         WHERE e.name = 'payment_success' AND e.occurred_at >= $1 AND e.occurred_at < $2
-          AND ${NM.user('e.user_id')} AND (p.id IS NULL OR ${NM.pay('p')})
+          AND ${NM.user('e.user_id')} AND (p.id IS NULL OR (${NM.pay('p')} AND ${CH}))
         GROUP BY 1 ORDER BY 2 DESC`, [r.from, r.to]),
   ]);
   // The same split as the Command Center's, messaging included, so one period
@@ -157,12 +159,8 @@ async function list(q = {}) {
       WHERE p.created_at >= $1 AND p.created_at < $2
         AND (${STATUS[q.status] || 'true'})
         AND ($3 <> '' OR ${NM.pay('p')})
-        -- The WhatsApp admin (X-View: whatsapp, 2026-10-09): never a website payment.
-        ${require('./consented').view.getStore()?.whatsappOnly
-          ? `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') NOT IN ('web', 'website')` : ''}
-        -- The web admin (X-View: web, 2026-10-10): website payments only.
-        ${require('./consented').view.getStore()?.webOnly
-          ? `AND coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') IN ('web', 'website')` : ''}
+        -- This panel's payments only: WhatsApp in the main admin, the website in the web admin (consented.chan).
+        AND ${require('./consented').chan().pay('p')}
         AND ($3 = '' OR u.mobile LIKE '%' || regexp_replace($3, '\\D', '', 'g') || '%'
              OR v.reg_no LIKE '%' || upper(regexp_replace($3, '[^A-Za-z0-9]', '', 'g')) || '%'
              OR p.order_id = $3 OR p.payment_id = $3)

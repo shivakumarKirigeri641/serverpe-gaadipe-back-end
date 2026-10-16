@@ -30,12 +30,15 @@ const FAMILY = (s) => ({ google_ads: 'Google Ads', meta_ads: 'Social', social: '
 
 /* Each customer's credited touch. */
 async function credits(model) {
+  // Only this panel's people (2026-10-16, consented.chan): everything below is credited through them,
+  // so the main admin's sources, payments and money are its WhatsApp customers'.
   const { rows } = await db.query(
     `SELECT u.id, u.mobile, u.signup_channel, ws.attribution,
             (SELECT v.first_touch FROM visitors v WHERE v.user_id = u.id OR v.mobile = u.mobile ORDER BY v.first_seen_at LIMIT 1) AS v_first,
             (SELECT v.last_touch FROM visitors v WHERE v.user_id = u.id OR v.mobile = u.mobile ORDER BY v.last_seen_at DESC LIMIT 1) AS v_last
        FROM users u
-       LEFT JOIN LATERAL (SELECT s.attribution FROM whatsapp_sessions s WHERE s.user_id = u.id OR s.mobile = u.mobile ORDER BY s.id DESC LIMIT 1) ws ON true`);
+       LEFT JOIN LATERAL (SELECT s.attribution FROM whatsapp_sessions s WHERE s.user_id = u.id OR s.mobile = u.mobile ORDER BY s.id DESC LIMIT 1) ws ON true
+      WHERE ${require('./consented').chan().user('u')}`);
   const m = new Map();
   for (const x of rows) {
     const a = x.attribution || {};
@@ -59,8 +62,8 @@ async function overview(q = {}) {
                WHERE e.occurred_at >= $1 AND e.occurred_at < $2
                  AND e.name IN ('whatsapp_chat_started', 'whatsapp_vehicle_received', 'vehicle_search_success', 'vehicle_search_failed')
                GROUP BY 1, 2, 3`, [r.from, r.to]),
-    db.query(`SELECT user_id, count(*)::int AS n FROM payments WHERE created_at >= $1 AND created_at < $2 AND amount_paise > 0
-                AND coalesce(gateway, '') <> 'free' AND NOT (raw ? 'free') GROUP BY 1`, [r.from, r.to]),
+    db.query(`SELECT p.user_id, count(*)::int AS n FROM payments p WHERE p.created_at >= $1 AND p.created_at < $2 AND p.amount_paise > 0
+                AND coalesce(p.gateway, '') <> 'free' AND NOT (p.raw ? 'free') AND ${require('./consented').chan().pay('p')} GROUP BY 1`, [r.from, r.to]),
     ledger.entries({ from: r.from, to: r.to }),
   ]);
   const key = (c) => (within ? (c.campaign || '(no campaign)') : c.source);
@@ -73,7 +76,10 @@ async function overview(q = {}) {
       gateway_paise: 0, whatsapp_cost_paise: 0, net_paise: 0 });
     return rows.get(k);
   };
+  // The main admin counts a website visitor only once they are one of its customers.
+  const waOnly = require('./consented').chan().wa;
   for (const v of visitors.rows) {
+    if (waOnly && !(v.user_id && credit.get(String(v.user_id)))) continue;
     const t = (model === 'last' ? v.last_touch : v.first_touch) || v.first_touch || {};
     const c = v.user_id && credit.get(String(v.user_id)) ? credit.get(String(v.user_id)) : { source: t.source || 'direct', campaign: t.campaign || null };
     const g = at(c); if (g) g.visitors += 1;

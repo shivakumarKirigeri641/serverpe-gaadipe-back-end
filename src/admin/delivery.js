@@ -10,6 +10,7 @@ const command = require('./command');
 
 async function status(q = {}) {
   const r = command.resolve({ range: q.range || '7d', from: q.from, to: q.to, compare: 'none' });
+  const ch = require('./consented').chan();   // this panel's reports and payments (2026-10-16)
   const [reports, missing] = await Promise.all([
     db.query(
       `SELECT r.id, r.report_number, r.reg_no, r.channel, r.created_at, r.payment_id, u.mobile,
@@ -18,12 +19,12 @@ async function status(q = {}) {
          LEFT JOIN LATERAL (SELECT e.status, e.occurred_at, e.metadata FROM events e
                              WHERE e.name = 'report_delivered' AND (e.payment_id = r.payment_id OR e.metadata->>'report_number' = r.report_number)
                              ORDER BY e.id DESC LIMIT 1) d ON true
-        WHERE r.created_at >= $1 AND r.created_at < $2 ORDER BY r.created_at DESC LIMIT 500`, [r.from, r.to]),
+        WHERE r.created_at >= $1 AND r.created_at < $2 AND ${ch.report('r')} ORDER BY r.created_at DESC LIMIT 500`, [r.from, r.to]),
     db.query(
       `SELECT p.id, p.paid_at, u.mobile, v.reg_no FROM payments p
          JOIN plans pl ON pl.id = p.plan_id LEFT JOIN users u ON u.id = p.user_id
          LEFT JOIN vehicles v ON p.raw ? 'vehicle_id' AND v.id::text = p.raw->>'vehicle_id'
-        WHERE p.status = 'paid' AND pl.kind = 'report' AND p.amount_paise > 0
+        WHERE p.status = 'paid' AND pl.kind = 'report' AND p.amount_paise > 0 AND ${ch.pay('p')}
           AND NOT EXISTS (SELECT 1 FROM vehicle_reports x WHERE x.payment_id = p.id)
         ORDER BY p.paid_at DESC LIMIT 100`),
   ]);

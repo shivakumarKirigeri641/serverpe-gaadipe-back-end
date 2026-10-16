@@ -40,22 +40,9 @@ const AGREED = (col) => require('./consented').agreedSql(col);
  * EVERY NUMBER IN THIS PANEL'S CHANNEL (user, 2026-10-16: "the Overview — is it WhatsApp-based?").
  * Checks, payments, money, reports and monitoring counted the website too. Now, as on the
  * Customers page: the main admin (X-View: whatsapp) counts WhatsApp, the web admin the website,
- * and with no view header everything. A payment's channel is where it was paid from.
+ * and with no view header everything — the one rule in consented.chan().
  */
-const C = () => {
-  const { whatsappOnlyNow, webOnlyNow } = require('./consented');
-  const wa = whatsappOnlyNow(); const web = webOnlyNow();
-  const PAY_CH = (p) => `coalesce(${p}.raw->>'channel', ${p}.raw->'paid_from'->>'channel', 'whatsapp')`;
-  return {
-    pay: (p) => (wa ? `${PAY_CH(p)} <> 'web'` : web ? `${PAY_CH(p)} = 'web'` : 'true'),
-    check: (e) => (wa ? `coalesce(${e}.detail->>'channel', 'whatsapp') = 'whatsapp'` : web ? `${e}.detail->>'channel' = 'web'` : 'true'),
-    report: (r) => (wa ? `coalesce(${r}.channel, 'whatsapp') <> 'web'` : web ? `${r}.channel = 'web'` : 'true'),
-    // Monitoring belongs to the channel its payment came from.
-    sub: (s) => (wa || web ? `EXISTS (SELECT 1 FROM payments sp WHERE sp.subscription_id = ${s}.id AND sp.status = 'paid'
-                   AND ${wa ? `${PAY_CH('sp')} <> 'web'` : `${PAY_CH('sp')} = 'web'`})` : 'true'),
-    wa, web,
-  };
-};
+const C = () => require('./consented').chan();
 
 /**
  * Everything waiting on a person.

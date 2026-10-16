@@ -76,8 +76,10 @@ async function metrics(from, to, ch = 'all') {
  * against yesterday morning — the fair comparison while the day is running)
  * and in full (the whole of yesterday).
  */
-async function compare({ channel = 'all' } = {}) {
-  const ch = ['whatsapp', 'web'].includes(channel) ? channel : 'all';
+async function compare({ channel = null } = {}) {
+  // Not asked: this panel's channel (2026-10-16) — the main admin compares WhatsApp with WhatsApp.
+  const v = require('./consented').chan();
+  const ch = ['whatsapp', 'web', 'all'].includes(channel) ? channel : v.wa ? 'whatsapp' : v.web ? 'web' : 'all';
   const b = await db.one(
     `WITH l AS (SELECT now() AT TIME ZONE ${TZ} AS t)
      SELECT now() AS now,
@@ -313,8 +315,8 @@ async function heatmap({ days = 30 } = {}) {
     `SELECT (extract(isodow FROM created_at AT TIME ZONE ${TZ})::int - 1) AS dow,
             extract(hour FROM created_at AT TIME ZONE ${TZ})::int         AS hour,
             count(*)::int AS checks
-       FROM event_log
-      WHERE kind = 'vehicle_check' AND created_at > now() - ($1 || ' days')::interval
+       FROM event_log e
+      WHERE kind = 'vehicle_check' AND ${require('./consented').chan().check('e')} AND created_at > now() - ($1 || ' days')::interval
       GROUP BY 1, 2`, [String(Math.min(365, Math.max(1, days)))]);
   const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
   for (const r of rows) grid[r.dow][r.hour] = r.checks;

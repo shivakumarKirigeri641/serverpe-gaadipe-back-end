@@ -21,13 +21,14 @@ const mask = (m) => (m ? `••••••${String(m).slice(-4)}` : null);
 async function list({ days = 1, day = null, min = 1, limit = 500 } = {}) {
   const d = Math.min(90, Math.max(1, Number(days) || 1));
   const one = /^\d{4}-\d{2}-\d{2}$/.test(String(day || '')) ? day : null;
+  const ch = require('./consented').chan();   // this panel's checks and payments (2026-10-16)
   const { rows } = await db.query(
     `WITH c AS (
        SELECT e.user_id, e.kind, e.detail->>'reg_no' AS reg_no,
               coalesce((e.detail->>'found')::boolean, true) AS found, e.created_at,
               (e.created_at AT TIME ZONE 'Asia/Kolkata')::date AS day
          FROM event_log e
-        WHERE e.kind IN ('vehicle_check', 'vehicle_check_repeat') AND e.user_id IS NOT NULL
+        WHERE e.kind IN ('vehicle_check', 'vehicle_check_repeat') AND e.user_id IS NOT NULL AND ${ch.check('e')}
           -- Not the owner's own checks (user, 2026-10-10).
           AND e.user_id NOT IN (SELECT id FROM users WHERE is_internal)
           AND ($1::date IS NOT NULL AND (e.created_at AT TIME ZONE 'Asia/Kolkata')::date = $1::date
@@ -47,7 +48,7 @@ async function list({ days = 1, day = null, min = 1, limit = 500 } = {}) {
      SELECT p.*, to_char(p.day, 'YYYY-MM-DD') AS day_s, u.mobile, coalesce(u.wa_profile_name, u.display_name) AS name,
             (SELECT jsonb_agg(jsonb_build_object('reg_no', v.reg_no, 'n', v.n, 'found', v.found) ORDER BY v.n DESC, v.last DESC)
                FROM per_vehicle v WHERE v.user_id = p.user_id AND v.day = p.day) AS list,
-            (SELECT count(*)::int FROM payments x WHERE x.user_id = p.user_id AND x.status = 'paid' AND x.amount_paise > 0) AS paid
+            (SELECT count(*)::int FROM payments x WHERE x.user_id = p.user_id AND x.status = 'paid' AND x.amount_paise > 0 AND ${ch.pay('x')}) AS paid
        FROM per_day p JOIN users u ON u.id = p.user_id
       WHERE p.checks >= $3
       ORDER BY p.day DESC, p.checks DESC, p.last_at DESC

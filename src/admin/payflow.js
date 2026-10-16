@@ -25,6 +25,8 @@ const { describeDevice } = require('../pay/report');
 // Not the owner's own checkouts, nor any TEST-mode one (user, 2026-10-10).
 const NM = require('./notMe');
 const PAID_ONLY = `p.amount_paise > 0 AND coalesce(p.gateway, '') <> 'free' AND NOT (p.raw ? 'free') AND ${NM.pay('p')}`;
+/* This panel's channel, read per request (2026-10-16, consented.chan): WhatsApp checkouts in the main admin. */
+const CHP = () => require('./consented').chan().pay('p');
 const ABANDON_MIN = 30;
 /* A checkout the customer replaced with one they paid (same vehicle, later) is not lost. */
 const SUPERSEDED = `EXISTS (SELECT 1 FROM payments p2 WHERE p2.user_id = p.user_id AND p2.status IN ('paid', 'refunded')
@@ -58,7 +60,8 @@ async function funnel(q = {}) {
   const [ev, pay, reasons, byHour, rows] = await Promise.all([
     db.one(`SELECT count(DISTINCT coalesce(e.payment_id::text, e.event_key)) FILTER (WHERE e.name = 'payment_page_viewed')::int AS page_viewed,
                    count(DISTINCT coalesce(e.payment_id::text, e.event_key)) FILTER (WHERE e.name = 'payment_started')::int AS started_events
-              FROM events e WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND ${NM.user('e.user_id')}`, a),
+              FROM events e LEFT JOIN payments p ON p.id = e.payment_id
+             WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND ${NM.user('e.user_id')} AND (p.id IS NULL OR ${CHP()})`, a),
     db.one(`SELECT count(*)::int AS started,
                    count(*) FILTER (WHERE p.status IN ('paid', 'refunded'))::int AS success,
                    count(*) FILTER (WHERE p.status = 'created' AND NOT ${SUPERSEDED} AND f.payment_row_id IS NOT NULL)::int AS failed,
@@ -70,16 +73,16 @@ async function funnel(q = {}) {
                    count(*) FILTER (WHERE f.payment_row_id IS NOT NULL)::int AS had_failure,
                    count(*) FILTER (WHERE f.payment_row_id IS NOT NULL AND p.status IN ('paid', 'refunded'))::int AS recovered_after_failure
               FROM payments p LEFT JOIN (${FAILURES}) f ON f.payment_row_id = p.id
-             WHERE ${PAID_ONLY} AND p.created_at >= $1 AND p.created_at < $2`, a),
+             WHERE ${PAID_ONLY} AND ${CHP()} AND p.created_at >= $1 AND p.created_at < $2`, a),
     db.query(`SELECT f.reason, f.code, count(*)::int AS n FROM (${FAILURES}) f JOIN payments p ON p.id = f.payment_row_id
-               WHERE p.created_at >= $1 AND p.created_at < $2 AND ${NM.pay('p')} GROUP BY 1, 2 ORDER BY 3 DESC`, a),
+               WHERE p.created_at >= $1 AND p.created_at < $2 AND ${NM.pay('p')} AND ${CHP()} GROUP BY 1, 2 ORDER BY 3 DESC`, a),
     db.query(`SELECT extract(hour FROM p.created_at AT TIME ZONE 'Asia/Kolkata')::int AS hour, count(*)::int AS started,
                      count(*) FILTER (WHERE p.status IN ('paid', 'refunded'))::int AS success
-                FROM payments p WHERE ${PAID_ONLY} AND p.created_at >= $1 AND p.created_at < $2 GROUP BY 1 ORDER BY 1`, a),
+                FROM payments p WHERE ${PAID_ONLY} AND ${CHP()} AND p.created_at >= $1 AND p.created_at < $2 GROUP BY 1 ORDER BY 1`, a),
     db.query(`SELECT p.id, p.status, p.raw->'paid_from'->>'userAgent' AS ua, coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel') AS channel,
                      (SELECT vi.first_touch->>'source' FROM visitors vi WHERE vi.user_id = p.user_id OR vi.mobile = u.mobile ORDER BY vi.first_seen_at LIMIT 1) AS source
                 FROM payments p LEFT JOIN users u ON u.id = p.user_id
-               WHERE ${PAID_ONLY} AND p.created_at >= $1 AND p.created_at < $2`, a),
+               WHERE ${PAID_ONLY} AND ${CHP()} AND p.created_at >= $1 AND p.created_at < $2`, a),
   ]);
   const rate = (x, y) => (y ? Math.round((x / y) * 1000) / 10 : null);
   const groups = {};
@@ -140,7 +143,7 @@ async function abandoned(q = {}) {
        LEFT JOIN (${FAILURES}) f ON f.payment_row_id = p.id
        LEFT JOIN LATERAL (SELECT vi.first_touch FROM visitors vi WHERE vi.user_id = p.user_id OR vi.mobile = u.mobile ORDER BY vi.first_seen_at LIMIT 1) ft ON true
        LEFT JOIN LATERAL (SELECT s.attribution FROM whatsapp_sessions s WHERE s.user_id = p.user_id ORDER BY s.id DESC LIMIT 1) ws ON true
-      WHERE ${PAID_ONLY} AND p.status = 'created'
+      WHERE ${PAID_ONLY} AND ${CHP()} AND p.status = 'created'
         AND p.created_at >= ${WINDOWS[win]} AND p.created_at < ${until}
         AND p.created_at < now() - interval '${win === '1h' ? 0 : ABANDON_MIN} minutes'
         -- Paid later by another checkout for the same vehicle is not abandoned.
@@ -170,7 +173,7 @@ async function refunds(q = {}) {
             p.paid_at, p.refunded_at, u.mobile, v.reg_no, p.raw->'refund'->>'status' AS refund_status
        FROM payments p LEFT JOIN users u ON u.id = p.user_id
        LEFT JOIN vehicles v ON p.raw ? 'vehicle_id' AND v.id::text = p.raw->>'vehicle_id'
-      WHERE (p.status = 'refunded' OR p.refunded_at IS NOT NULL) AND ${NM.pay('p')} AND coalesce(p.refunded_at, p.created_at) >= $1 AND coalesce(p.refunded_at, p.created_at) < $2
+      WHERE (p.status = 'refunded' OR p.refunded_at IS NOT NULL) AND ${NM.pay('p')} AND ${CHP()} AND coalesce(p.refunded_at, p.created_at) >= $1 AND coalesce(p.refunded_at, p.created_at) < $2
       ORDER BY p.refunded_at DESC NULLS LAST`, [r.from, r.to]);
   return {
     range: { label: r.label },

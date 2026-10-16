@@ -72,6 +72,8 @@ async function list(q = {}) {
     w.push(`(${digits.length >= 4 ? `x.mobile LIKE ${bind(`%${digits}`)} OR ` : ''}x.name ILIKE ${bind(`%${term}%`)}
              OR x.id IN (SELECT e.user_id FROM events e WHERE e.reg_no = ${bind(reg)}))`);
   }
+  // This panel's people only — and so its total (2026-10-16, consented.chan): agreed on WhatsApp in the main admin.
+  { const ch = require('./consented').chan(); if (ch.wa || ch.web) w.push(ch.user('x')); }
   if (q.paid === 'yes') w.push('x.paid > 0');
   if (q.paid === 'no') w.push('x.paid = 0');
   if (q.repeat === '1') w.push('x.paid >= 2');
@@ -105,6 +107,9 @@ async function list(q = {}) {
 
 async function retention(q = {}) {
   const r = command.resolve({ range: q.range || '30d', from: q.from, to: q.to, compare: 'none' });
+  // This panel's people and purchases (2026-10-16, consented.chan): WhatsApp in the main admin.
+  const ch = require('./consented').chan();
+  const CH = ch.pay('p');
   // Each customer's active IST days, and paid purchases.
   const { rows } = await db.query(
     `WITH act AS (
@@ -116,13 +121,13 @@ async function retention(q = {}) {
             (SELECT array_agg(DISTINCT d ORDER BY d) FROM act WHERE act.id = u.id) AS days,
             (SELECT count(*) FROM act WHERE act.id = u.id AND act.name IN ${LOOKUP}
                 AND act.d >= ($1::timestamptz AT TIME ZONE 'Asia/Kolkata')::date AND act.d < ($2::timestamptz AT TIME ZONE 'Asia/Kolkata')::date + 1)::int AS lookups_in,
-            (SELECT count(*) FROM payments p WHERE p.user_id = u.id AND p.status IN ('paid', 'refunded') AND p.amount_paise > 0)::int AS purchases,
-            (SELECT min(p.paid_at) FROM payments p WHERE p.user_id = u.id AND p.status IN ('paid', 'refunded') AND p.amount_paise > 0) AS first_paid,
-            (SELECT coalesce(sum(p.amount_paise), 0) FROM payments p WHERE p.user_id = u.id AND p.status = 'paid')::bigint AS revenue,
-            (SELECT count(*) FROM payments p WHERE p.user_id = u.id AND p.status IN ('paid', 'refunded') AND p.amount_paise > 0
+            (SELECT count(*) FROM payments p WHERE p.user_id = u.id AND p.status IN ('paid', 'refunded') AND p.amount_paise > 0 AND ${CH})::int AS purchases,
+            (SELECT min(p.paid_at) FROM payments p WHERE p.user_id = u.id AND p.status IN ('paid', 'refunded') AND p.amount_paise > 0 AND ${CH}) AS first_paid,
+            (SELECT coalesce(sum(p.amount_paise), 0) FROM payments p WHERE p.user_id = u.id AND p.status = 'paid' AND ${CH})::bigint AS revenue,
+            (SELECT count(*) FROM payments p WHERE p.user_id = u.id AND p.status IN ('paid', 'refunded') AND p.amount_paise > 0 AND ${CH}
                 AND p.paid_at >= $1 AND p.paid_at < $2)::int AS purchases_in,
-            (SELECT count(*) FROM vehicle_reports x WHERE x.user_id = u.id)::int AS reports
-       FROM users u`, [r.from, r.to]);
+            (SELECT count(*) FROM vehicle_reports x WHERE x.user_id = u.id AND ${ch.report('x')})::int AS reports
+       FROM users u WHERE ${ch.user('u')}`, [r.from, r.to]);
   const day = (d) => new Date(d).getTime();
   const fromD = new Date(new Date(r.from).getTime() + 330 * 60000).toISOString().slice(0, 10);
   const toD = new Date(new Date(r.to).getTime() + 330 * 60000 - 1).toISOString().slice(0, 10);

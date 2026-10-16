@@ -67,6 +67,8 @@ async function splitOf(grossPaise, { whatsapp = 0, sms = 0 } = {}) {
  * One round trip — a dashboard that makes twelve calls feels broken on a phone.
  */
 async function dashboard() {
+  // This panel's channel for every count (2026-10-16, consented.chan): WhatsApp in the main admin.
+  const ch = require('./consented').chan();
   const row = await db.one(
     `WITH bounds AS (
        SELECT date_trunc('day', now() ${IST}) AS today,
@@ -86,30 +88,31 @@ async function dashboard() {
        (SELECT count(*) ${SMS_BILLED} AND o.created_at ${IST} >= (SELECT today FROM bounds)) AS sms_today,
        (SELECT count(*) FROM vehicles)                                     AS vehicles_total,
        (SELECT count(*) FROM event_log e, bounds b
-         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND e.created_at ${IST} >= b.today) AS checks_today,
+         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND ${ch.check('e')} AND e.created_at ${IST} >= b.today) AS checks_today,
        (SELECT count(*) FROM event_log e, bounds b
-         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND e.created_at ${IST} >= b.yesterday
+         WHERE e.kind = 'vehicle_check' AND ${NM.event('e')} AND ${ch.check('e')} AND e.created_at ${IST} >= b.yesterday
            AND e.created_at ${IST} < b.today)                              AS checks_yesterday,
-       (SELECT count(*) FROM payments p WHERE p.status = 'paid' AND ${NM.pay('p')}) AS payments_total,
-       (SELECT coalesce(sum(p.amount_paise), 0) FROM payments p WHERE p.status = 'paid' AND ${NM.pay('p')}) AS gross_total_paise,
+       (SELECT count(*) FROM payments p WHERE p.status = 'paid' AND ${NM.pay('p')} AND ${ch.pay('p')}) AS payments_total,
+       (SELECT coalesce(sum(p.amount_paise), 0) FROM payments p WHERE p.status = 'paid' AND ${NM.pay('p')} AND ${ch.pay('p')}) AS gross_total_paise,
        (SELECT coalesce(sum(amount_paise), 0) FROM payments p, bounds b
-         WHERE p.status = 'paid' AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.today) AS gross_today_paise,
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND ${ch.pay('p')} AND p.paid_at ${IST} >= b.today) AS gross_today_paise,
        (SELECT count(*) FROM payments p, bounds b
-         WHERE p.status = 'paid' AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.today) AS payments_today,
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND ${ch.pay('p')} AND p.paid_at ${IST} >= b.today) AS payments_today,
        (SELECT count(*) FROM payments p, bounds b
-         WHERE p.status = 'paid' AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.yesterday
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND ${ch.pay('p')} AND p.paid_at ${IST} >= b.yesterday
            AND p.paid_at ${IST} < b.today)                                 AS payments_yesterday,
        (SELECT coalesce(sum(amount_paise), 0) FROM payments p, bounds b
-         WHERE p.status = 'paid' AND ${NM.pay('p')} AND p.paid_at ${IST} >= b.yesterday
+         WHERE p.status = 'paid' AND ${NM.pay('p')} AND ${ch.pay('p')} AND p.paid_at ${IST} >= b.yesterday
            AND p.paid_at ${IST} < b.today)                                 AS gross_yesterday_paise,
-       (SELECT count(*) FROM payments p WHERE p.status = 'created' AND ${NM.pay('p')}
+       (SELECT count(*) FROM payments p WHERE p.status = 'created' AND ${NM.pay('p')} AND ${ch.pay('p')}
           AND p.created_at > now() - interval '24 hours')                  AS payments_pending,
-       (SELECT count(*) FROM watches w WHERE w.is_active AND ${NM.user('w.user_id')}) AS watches_active,
+       (SELECT count(*) FROM watches w WHERE w.is_active AND ${NM.user('w.user_id')}
+          AND EXISTS (SELECT 1 FROM subscriptions ws WHERE ws.id = w.subscription_id AND ${ch.sub('ws')})) AS watches_active,
        (SELECT count(*) FROM subscriptions s
-         WHERE s.is_active AND s.ends_on >= CURRENT_DATE AND ${NM.user('s.user_id')}) AS subscriptions_active,
-       (SELECT count(*) FROM vehicle_reports r WHERE ${NM.user('r.user_id')}) AS reports_total,
+         WHERE s.is_active AND s.ends_on >= CURRENT_DATE AND ${NM.user('s.user_id')} AND ${ch.sub('s')}) AS subscriptions_active,
+       (SELECT count(*) FROM vehicle_reports r WHERE ${NM.user('r.user_id')} AND ${ch.report('r')}) AS reports_total,
        (SELECT count(*) FROM vehicle_reports r, bounds b
-         WHERE ${NM.user('r.user_id')} AND r.created_at ${IST} >= b.today) AS reports_today,
+         WHERE ${NM.user('r.user_id')} AND ${ch.report('r')} AND r.created_at ${IST} >= b.today) AS reports_today,
        (SELECT count(*) FROM whatsapp_messages m, bounds b
          WHERE m.created_at ${IST} >= b.today)                             AS messages_today,
        (SELECT count(*) FROM whatsapp_messages m, bounds b
@@ -160,6 +163,7 @@ async function dashboard() {
 async function series({ grain = 'day', days = 30 } = {}) {
   const g = GRAIN[grain] || 'day';
   const span = Math.min(730, Math.max(1, Number(days) || 30));
+  const ch = require('./consented').chan();   // this panel's channel (2026-10-16)
 
   const { rows } = await db.query(
     `WITH buckets AS (
@@ -173,22 +177,22 @@ async function series({ grain = 'day', days = 30 } = {}) {
          WHERE NOT u.is_internal AND ${require('./consented').agreedSql('u.mobile')}
            AND date_trunc('${g}', u.created_at ${IST}) = b.bucket)          AS new_users,
        (SELECT count(*) FROM event_log e
-         WHERE e.kind = 'vehicle_check'
+         WHERE e.kind = 'vehicle_check' AND ${ch.check('e')}
            AND date_trunc('${g}', e.created_at ${IST}) = b.bucket)          AS checks,
        (SELECT count(DISTINCT e.user_id) FROM event_log e
-         WHERE e.kind = 'vehicle_check'
+         WHERE e.kind = 'vehicle_check' AND ${ch.check('e')}
            AND date_trunc('${g}', e.created_at ${IST}) = b.bucket)          AS active_users,
        (SELECT count(*) FROM payments p
-         WHERE p.status = 'paid'
+         WHERE p.status = 'paid' AND ${ch.pay('p')}
            AND date_trunc('${g}', p.paid_at ${IST}) = b.bucket)             AS payments,
        (SELECT coalesce(sum(p.amount_paise), 0) FROM payments p
-         WHERE p.status = 'paid'
+         WHERE p.status = 'paid' AND ${ch.pay('p')}
            AND date_trunc('${g}', p.paid_at ${IST}) = b.bucket)             AS gross_paise,
        (SELECT coalesce(sum(p.amount_paise), 0) FROM payments p
-         WHERE p.status = 'refunded'
+         WHERE p.status = 'refunded' AND ${ch.pay('p')}
            AND date_trunc('${g}', p.refunded_at ${IST}) = b.bucket)         AS refunded_paise,
        (SELECT count(*) FROM vehicle_reports r
-         WHERE date_trunc('${g}', r.created_at ${IST}) = b.bucket)          AS reports,
+         WHERE ${ch.report('r')} AND date_trunc('${g}', r.created_at ${IST}) = b.bucket)          AS reports,
        (SELECT count(*) FROM api_calls a
          WHERE NOT a.cache_hit
            AND date_trunc('${g}', a.created_at ${IST}) = b.bucket)          AS ulip_calls,
@@ -328,7 +332,8 @@ async function funnel({ days = 30 } = {}) {
   const paid = await db.one(
     `SELECT count(DISTINCT u.mobile)::int AS people
        FROM payments p JOIN users u ON u.id = p.user_id
-      WHERE p.status = 'paid' AND p.paid_at > now() - ($1 || ' days')::interval`, [String(span)]);
+      WHERE p.status = 'paid' AND ${require('./consented').chan().pay('p')}
+        AND p.paid_at > now() - ($1 || ' days')::interval`, [String(span)]);
 
   const got = Object.fromEntries(rows.map(r => [r.step, r.people]));
   const ORDER = [

@@ -111,4 +111,32 @@ const agreedSql = (col, { whatsappOnly = whatsappOnlyNow(), webOnly = webOnlyNow
            ${channelSql('ac', whatsappOnly, webOnly)})
   AND ${stopSql(`right(${col}, 10)`, webOnly)})`;
 
-module.exports = { filter, allowedOf, agreedSql, view, webOnlyNow, whatsappOnlyNow };
+/*
+ * THE PANEL'S CHANNEL FOR ANY NUMBER (user, 2026-10-16: "check the entire WhatsApp admin panel's
+ * APIs — make sure all are WhatsApp and sync properly"). One rule for every count and chart, so
+ * no screen keeps its own copy: in the main admin (X-View: whatsapp) a WhatsApp row, in the web
+ * admin a website row, with no view everything. Each returns an SQL condition (never empty).
+ *   pay(p)     a payment — by the channel it was bought in (raw.channel; migration 191 set it for
+ *              every WhatsApp purchase; paid_from is only the browser it was paid in)
+ *   check(e)   a vehicle check in event_log (a WhatsApp check is saved without a channel)
+ *   report(r)  a vehicle report (its own channel column)
+ *   sub(s)     a subscription, by the channel of the payment that bought it
+ *   user(u)    a person: agreed in this channel (the Customers rule)
+ */
+function chan() {
+  const wa = whatsappOnlyNow(); const web = webOnlyNow();
+  const PAY = (p) => `coalesce(nullif(${p}.raw->>'channel', ''), 'whatsapp')`;
+  const payIs = (p) => (wa ? `${PAY(p)} NOT IN ('web', 'website')` : web ? `${PAY(p)} IN ('web', 'website')` : 'true');
+  return {
+    wa, web,
+    pay: payIs,
+    check: (e) => (wa ? `coalesce(${e}.detail->>'channel', 'whatsapp') = 'whatsapp'` : web ? `${e}.detail->>'channel' = 'web'` : 'true'),
+    report: (r) => (wa ? `coalesce(${r}.channel, 'whatsapp') <> 'web'` : web ? `${r}.channel = 'web'` : 'true'),
+    // A row of the `events` stream (its own channel column: whatsapp, web or system).
+    event: (e) => (wa ? `coalesce(${e}.channel, '') <> 'web'` : web ? `${e}.channel = 'web'` : 'true'),
+    sub: (s) => (wa || web ? `EXISTS (SELECT 1 FROM payments sp WHERE sp.subscription_id = ${s}.id AND sp.status = 'paid' AND ${payIs('sp')})` : 'true'),
+    user: (u) => (wa || web ? agreedSql(`${u}.mobile`) : 'true'),
+  };
+}
+
+module.exports = { filter, allowedOf, agreedSql, view, webOnlyNow, whatsappOnlyNow, chan };
