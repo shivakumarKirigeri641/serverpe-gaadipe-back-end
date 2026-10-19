@@ -37,6 +37,15 @@ const broadcasts = require('./broadcasts');
 
 const ten = (m) => String(m || '').replace(/\D/g, '').slice(-10);
 const ANNOUNCEMENT = /^gp_announcement/i;
+/*
+ * THE HARD LIMITS (user, 2026-10-19, after the ban: "make me safe in all cases"). The policy
+ * audit showed gp_announcement_hi_v1 sent 854 times to 260 people in 10 days, up to 10 times
+ * to one person, right before the first ban. Held here in the server, whatever the panel asks:
+ *   - one announcement per person in MIN_GAP_DAYS
+ *   - only to people who wrote to GaadiPe or checked a vehicle in the last ACTIVE_DAYS
+ */
+const MIN_GAP_DAYS = 30;
+const ACTIVE_DAYS = 30;
 
 /** Every number messaged first in the last `hours`, GaadiPe and QuizPe together: Map(m -> { at, apps }). */
 async function sentWithin(hours) {
@@ -139,9 +148,11 @@ async function suggest({ size = null, filter = null, gapDays: gapAsked = null } 
   const audience = filter ? broadcasts.filterWhere(filter) : 'true';
   const want = Math.max(0, Math.min(size == null ? r.suggest_now : Number(size) || 0, r.suggest_now));
   // Rest days: the setting, or what was chosen beside Auto-select (0-30).
+  // At least MIN_GAP_DAYS, whatever is asked (2026-10-19: one person got the announcement
+  // 10 times in 10 days; Meta disabled the account for SPAM, then SCAM).
   const asked = gapAsked === null || gapAsked === '' ? NaN : Number(gapAsked);
-  const gapDays = Number.isFinite(asked) ? Math.max(0, Math.min(30, Math.round(asked)))
-    : Math.max(0, await settings.num('broadcast_room_gap_days', 7));
+  const gapDays = Math.max(MIN_GAP_DAYS, Number.isFinite(asked) ? Math.min(90, Math.round(asked))
+    : await settings.num('broadcast_room_gap_days', MIN_GAP_DAYS));
   const recent = new Set([...(await sentWithin(24)).map.keys(), ...await queuedNumbers()]);
   const admins = await adminNumbers();
   // Everyone in the audience, with the facts that leave someone out — so the
@@ -152,6 +163,7 @@ async function suggest({ size = null, filter = null, gapDays: gapAsked = null } 
             coalesce(u.is_internal, false) AS internal,
             coalesce(p.last_message > now() - interval '24 hours', false) AS open_chat,
             coalesce(p.last_broadcast_at > now() - make_interval(days => $1::int), false) AS rested,
+            coalesce(greatest(p.last_checked, p.last_message) < now() - make_interval(days => ${ACTIVE_DAYS}), true) AS cold,
             (SELECT count(*) FROM whatsapp_broadcast_targets t
               WHERE t.mobile = p.mobile AND t.status = 'failed' AND t.created_at > now() - interval '30 days') >= 2 AS failing
        FROM (SELECT * FROM people WHERE ${audience}) p
@@ -163,8 +175,9 @@ async function suggest({ size = null, filter = null, gapDays: gapAsked = null } 
       : recent.has(p.m) ? 'recent'
         : p.open_chat ? 'open_chat'
           : p.rested ? 'rested'
-            : p.failing ? 'failed' : null);
-  const left_out = { blocked: 0, admin: 0, recent: 0, open_chat: 0, rested: 0, failed: 0 };
+            : p.cold ? 'cold'
+              : p.failing ? 'failed' : null);
+  const left_out = { blocked: 0, admin: 0, recent: 0, open_chat: 0, rested: 0, cold: 0, failed: 0 };
   const rows = [];
   for (const p of all) {
     const why = reasonOf(p);
@@ -193,14 +206,31 @@ async function send({ template_name, language = 'en', variables = [], mobiles = 
   if (!ANNOUNCEMENT.test(String(template_name || ''))) {
     return { ok: false, message: 'Today’s batch can only use the announcement template.' };
   }
-  const people = [...new Set((mobiles || []).map(ten).filter((m) => m.length === 10))];
-  if (!people.length) return { ok: false, message: 'No customers in the batch.' };
+  const asked = [...new Set((mobiles || []).map(ten).filter((m) => m.length === 10))];
+  if (!asked.length) return { ok: false, message: 'No customers in the batch.' };
+  // The hard limits, checked again here: a hand-picked list obeys them too.
+  const { rows: held } = await db.query(
+    `SELECT DISTINCT right(regexp_replace(mobile, '\\D', '', 'g'), 10) AS m FROM whatsapp_messages
+      WHERE direction = 'out' AND message_type = 'template' AND template_name ~* '^gp_announcement'
+        AND created_at > now() - make_interval(days => $1::int)
+     UNION
+     SELECT m FROM unnest($2::text[]) AS m
+      WHERE NOT EXISTS (SELECT 1 FROM whatsapp_messages w
+                         WHERE w.direction = 'in' AND right(regexp_replace(w.mobile, '\\D', '', 'g'), 10) = m
+                           AND w.created_at > now() - make_interval(days => $3::int))`,
+    [MIN_GAP_DAYS, asked, ACTIVE_DAYS]);
+  const out_ = new Set(held.map((x) => x.m));
+  const people = asked.filter((m) => !out_.has(m));
+  if (!people.length) {
+    return { ok: false, message: `None of these can get an announcement: each had one in the last ${MIN_GAP_DAYS} days or has not written to GaadiPe in ${ACTIVE_DAYS} days.` };
+  }
   const r = await room();
   if (people.length > r.suggest_now) {
     return { ok: false, message: `Only ${r.suggest_now} fit right now (${r.free_now} free, ${r.buffer} kept free${r.booked ? `, ${r.booked} booked by batch plans` : ''}). Refresh the suggestion.` };
   }
   const out = await broadcasts.queue({ template_name, language, variables, mobiles: people,
     note: `Broadcast room · today’s batch${note ? ` · ${note}` : ''}` }, adminId);
+  if (out.ok && people.length < asked.length) out.skipped = asked.length - people.length;
   if (out.ok) {
     await require('./auth').audit({ adminId, action: 'broadcast_room_sent',
       detail: { broadcast_id: out.id, template_name, people: people.length, room: r.suggest_now } }).catch(() => {});
