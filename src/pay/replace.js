@@ -80,8 +80,8 @@ async function lookupNew(userId, mobile, toReg) {
   await quota.record(userId, toReg, { repeat: q.repeat, found: data?.success === true });
   if (!data || data.success !== true || !(data.rc && (data.rc.maker || data.rc.model || data.rc.vehicle_class))) {
     return { ok: false, message: data?.error === 'vehicle_not_found'
-      ? `I could not find any Government record for *${toReg}*. Please check the number.`
-      : 'The Government vehicle records server is not answering right now. Please try again in a little while.' };
+      ? `I could not find any vehicle record for *${toReg}*. Please check the number.`
+      : 'Our vehicle records source is not answering right now. Please try again in a little while.' };
   }
   await require('../vehicle/store').record(userId, data).catch(() => {});
   const v = await db.one(`SELECT id, maker, model FROM vehicles WHERE reg_no = $1`, [toReg]);

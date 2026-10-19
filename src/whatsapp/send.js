@@ -169,6 +169,10 @@ async function post(payload, meta) {
     return { ok: false, error: 'pii_blocked' };
   }
 
+  // THE POLICY GUARD (2026-10-19, after the SCAM/ALCOHOL strikes): alcohol words replaced,
+  // other risky wording reported to the admin (whatsapp/policy.js). Never stops a message.
+  payload = require('./policy').guard(payload, { mobile, type, templateName });
+
   if (!wa.token || !wa.phoneNumberId) {
     console.warn('[wa] not configured — would have sent:', body);
     return { ok: false, error: 'not_configured' };

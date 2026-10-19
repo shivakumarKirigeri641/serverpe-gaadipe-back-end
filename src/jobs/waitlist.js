@@ -56,7 +56,7 @@ async function tick() {
         continue;
       }
       try {
-        await send.text(w.mobile, `✅ Good news — the Government vehicle records service is back. Here is *${w.reg_no}*, as promised:`);
+        await send.text(w.mobile, `✅ Good news — the vehicle records service is back. Here is *${w.reg_no}*, as promised:`);
         await flow.checkFromWaitlist(w.mobile, w.reg_no);
         await db.query(`UPDATE lookup_waitlist SET status = 'delivered', done_at = now() WHERE id = $1`, [w.id]);
         sent += 1;
