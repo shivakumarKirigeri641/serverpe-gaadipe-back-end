@@ -102,7 +102,8 @@ async function tellOnWhatsApp(r, c) {
   const name = String(r.name || 'there').split(' ')[0];
   return require('../whatsapp/monitorAlert').sendAlert(r.mobile, {
     name, vehicle: r.reg_no, vehicleId: r.vehicle_id, document: 'Challans', expiry: 'Not applicable',
-    status: `${line}. Report ${r.report_number} updated${link ? `: ${link}` : ''}`, settingKey: 'template_daily_status',
+    // No link inside a template variable either (2026-10-19, SCAM strikes): the report is in My reports.
+    status: `${line}. Report ${r.report_number} updated, see My reports`, settingKey: 'template_daily_status',
   });
 }
 
