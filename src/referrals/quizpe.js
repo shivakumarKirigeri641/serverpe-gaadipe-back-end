@@ -380,7 +380,7 @@ async function useCredit(user, regNo, { declaration, ctx }) {
     if (out.already) return { ok: true, already: true, report_id: String(out.report.id) };
     return { ok: false, error: out.error,
       message: out.error === 'not_checked' ? 'Please check the vehicle first, then use your free report.'
-        : 'The Government records service is busy. Your free report is safe — please try again in a minute.' };
+        : 'Our vehicle records source is busy. Your free report is safe — please try again in a minute.' };
   }
   await db.query(`UPDATE report_credits SET payment_id = $2 WHERE id = $1`, [credit.id, out.paymentId]);
   return { ok: true, report_id: String(out.report.id) };

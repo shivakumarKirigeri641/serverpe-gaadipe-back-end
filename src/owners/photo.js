@@ -462,7 +462,7 @@ async function deliverPending(mobile) {
       if (c.notice !== 'sent') {
         await send.buttons(mobile,
           `❌ *We could not verify ${c.reg_no}* from that photo.\n\n`
-          + `*Reason:* ${c.reject_reason || 'the photo could not be matched with the Government record'}.\n\n`
+          + `*Reason:* ${c.reject_reason || 'the photo could not be matched with the vehicle record'}.\n\n`
           + '🗑️ As promised, your photo has been *deleted*.\n\n'
           + 'You are welcome to try again — send a clear photo of the RC showing the *vehicle number*, *owner name* and *chassis number*.',
           [{ id: `ownv:${c.reg_no}`, title: 'Try again' }, { id: 'menu', title: 'More' }]);
@@ -475,7 +475,7 @@ async function deliverPending(mobile) {
 
     const justTold = c.notice !== 'sent';
     if (justTold) {
-      const lead = `🎉 *Congratulations — you are a verified owner!* ✅\n\n*${c.reg_no}* is confirmed as yours. It matched the Government record.\n\n`;
+      const lead = `🎉 *Congratulations — you are a verified owner!* ✅\n\n*${c.reg_no}* is confirmed as yours. It matched the vehicle record.\n\n`;
       const what = {
         report: `🎁 *Your full report is coming next — FREE.* It carries the *Owner verified* seal, with insurance, PUC, tax, fitness and every challan, and ${days} days of alerts.\n\n`,
         extend: `🎁 Your report is already running, so we have *extended it by ${days} days, free*. Here it is again — now with the *Owner verified* seal.\n\n`,
@@ -494,7 +494,7 @@ async function deliverPending(mobile) {
       } else {
         console.error('[owner-photo] reward for claim %s not given yet: %s', c.id, g.why);
         if (justTold) {
-          await send.text(mobile, `⏳ Your free report for *${c.reg_no}* will be sent here as soon as the Government records server answers — no need to ask again.`);
+          await send.text(mobile, `⏳ Your free report for *${c.reg_no}* will be sent here as soon as our records source answers — no need to ask again.`);
         }
       }
     }
