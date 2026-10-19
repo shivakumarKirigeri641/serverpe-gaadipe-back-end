@@ -78,7 +78,8 @@ async function sendInWindow(mobile, { name, vehicle, vehicleId, document, expiry
     `Expiry Date: *${filled(expiry)}*`,
     `Status: *${filled(status)}*`,
     ...(extra ? ['', extra] : []),
-    '', '_Always keep the documents updated to avoid fines._',
+    // No "fines" warning (2026-10-19, SCAM strikes): say what GaadiPe is, and what it never does.
+    '', '_A reminder you asked GaadiPe for. GaadiPe never collects payments for challans or documents._',
   ].join('\n');
   const tail = `${vehicleId || 0}|${kind}|${(docs.length ? docs : ['all']).join(',')}`;
   // Reply buttons hold 20 characters (a template's hold 25): "Thanks for remembering" is 22.
@@ -185,8 +186,7 @@ async function handleTap(mobile, intent) {
   // "Pause this alert" (or typed "pause alerts")
   if (!reg) {
     if (intent.kind !== 'button') return null;   // typed, with no alert behind it: not ours
-    await say(mobile, 'Which alert should be paused? Reply with the vehicle number and *pause*, '
-      + 'or open gaadipe.in to manage your alerts.', [B.reports, B.menu]);
+    await say(mobile, 'Which alert should be paused? Reply with the vehicle number and *pause*.', [B.reports, B.menu]);
     return { step: 'alert_pause_unknown' };
   }
   const days = await settings.num('alert_pause_days', 30);
@@ -207,7 +207,7 @@ async function handleTap(mobile, intent) {
       [{ id: `mon|py|${tail}`, title: 'Yes, pause' }, { id: `mon|pn|${tail}`, title: 'No, keep alerts' }]);
     if (asked.ok) return { step: 'alert_pause_asked' };
     // Could not ask (should not happen inside the window): nothing is paused.
-    await send.text(mobile, `Your alerts for *${reg}* are still on. To pause them, open gaadipe.in or reply *pause alerts*.`);
+    await send.text(mobile, `Your alerts for *${reg}* are still on. To pause them, reply *pause alerts*.`);
     return { step: 'alert_pause_failed' };
   }
 

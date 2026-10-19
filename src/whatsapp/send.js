@@ -288,6 +288,36 @@ async function buttons(mobile, body, list, { header, footer } = {}) {
   }, { mobile, type: 'interactive', body });
 }
 
+/*
+ * A LINK AS A BUTTON (user, 2026-10-19, after repeated SCAM strikes: "make me safe in all
+ * cases"). A bare link with a random code in a chat is what phishing looks like — the fake
+ * "e-challan" scam is exactly that. WhatsApp's own call-to-action button carries the link
+ * instead: the text says what it is and from whom, the button says what it opens. Inside the
+ * 24-hour window only, like every interactive message. If the button cannot go, the caller
+ * decides whether a plain message is acceptable — this never falls back to a bare link itself.
+ */
+async function ctaUrl(mobile, body, { text, url }, { header, footer } = {}) {
+  if (!text || text.length > 20) throw new Error(`button text must be 1–20 characters: ${text}`);
+  if (!/^https:\/\//.test(String(url || ''))) throw new Error('the button needs an https link');
+  if (!await windowOpen(mobile)) {
+    console.warn('[wa] window closed for %s — not sending a link button', mobile);
+    return { ok: false, error: 'window_closed' };
+  }
+  const interactive = {
+    type: 'cta_url',
+    body: { text: body },
+    action: { name: 'cta_url', parameters: { display_text: text, url } },
+  };
+  if (header) interactive.header = { type: 'text', text: header };
+  if (footer) interactive.footer = { text: footer };
+  return post({
+    messaging_product: 'whatsapp',
+    to: toWaId(mobile),
+    type: 'interactive',
+    interactive,
+  }, { mobile, type: 'interactive', body: `${body}\n[${text}]` });
+}
+
 /**
  * A list — WhatsApp's dropdown.
  *
@@ -594,5 +624,5 @@ async function optedOut(mobile) {
   return Boolean(row);
 }
 
-module.exports = { _unmasked: unmasked, text, buttons, list, document, template, windowOpen, toWaId, allowed, optedOut, mayStart,
+module.exports = { _unmasked: unmasked, text, buttons, ctaUrl, list, document, template, windowOpen, toWaId, allowed, optedOut, mayStart,
                    agreedTerms, optedInToOffers, categoryOf, consentGate, _varCount: varCount };

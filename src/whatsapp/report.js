@@ -283,19 +283,23 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
   // location is a place the vehicle was at a time, which is the tracking
   // vector we deliberately do not publish.
   const c = data.challans;
+  /* CALM, AND NEVER A PAYMENT DEMAND (user, 2026-10-19, SCAM strikes: the fake "e-challan"
+     scam says "challan pending — pay now"). A count and a total, and the plain statement that
+     GaadiPe never collects challan payments. */
   if (c && (c.pending_count || 0) > 0) {
-    lines.push('', '🚨 *CHALLANS*');
-    lines.push(`*${c.pending_count} pending* · ${rupees(c.pending_amount_paise)} to pay`);
+    lines.push('', '📋 *Challans*');
+    lines.push(`${c.pending_count} pending · ${rupees(c.pending_amount_paise)} in total`);
     const latest = (c.pending || [])[0];
     const when = parseDate(latest?.challan_date || latest?.date);
     if (when) lines.push(`Most recent · ${fmtDate(when)}`);
     if (c.disposed_count) lines.push(`_${c.disposed_count} already paid_`);
+    lines.push('_GaadiPe never collects challan payments — pay only on official traffic-police channels._');
   } else if (c) {
-    lines.push('', '✅ *CHALLANS* — none pending');
+    lines.push('', '✅ *Challans* — none pending');
   } else {
     // No answer is not "none" (user, 2026-09-27).
-    lines.push('', '⏳ *CHALLANS* — the Government e-Challan service did not answer just now, so challans could not be checked yet. '
-      + 'This does not mean there are none. If you have bought the full report, we keep checking and message you here with the challan details as soon as it answers.');
+    lines.push('', '⏳ *Challans* — challan details aren’t available just now. '
+      + 'This does not mean there are none. If you have bought the full report, we keep checking and tell you here as soon as they are.');
   }
 
   // FASTag: status and balance only. Never crossings.
@@ -321,10 +325,8 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
 
   lines.push('',
     '━━━━━━━━━━━━━━━',
-    `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · Government records_`,
-    detailed
-      ? '_🔒 Personal details are masked, as on the Government’s Parivahan portal._'
-      : '_🔒 Personal details are masked._');
+    `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · vehicle registration records · by GaadiPe_`,
+    '_🔒 Personal details are masked for privacy._');
 
   return lines.join('\n');
 }
@@ -386,7 +388,7 @@ function basic(data, { price = '₹19', soonDays = 30, detail = 'count' } = {}) 
   const n = attentionCount(data, { soonDays });
   const named = detail === 'labels' ? attentionLabels(data, { soonDays }) : [];
   lines.push('', !n
-    ? '🔍 Insurance, PUC, road tax, fitness, challans and loan checked in Government records.\n'
+    ? '🔍 Insurance, PUC, road tax, fitness, challans and loan checked.\n'
       + `The dates and details are in the full report for *${price}* 👇`
     : detail !== 'labels'
       ? `⚠️ *${n} thing${n === 1 ? '' : 's'} on this vehicle need${n === 1 ? 's' : ''} attention.*\n`
@@ -397,7 +399,7 @@ function basic(data, { price = '₹19', soonDays = 30, detail = 'count' } = {}) 
       : `⚠️ *${n} thing${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} attention.*\n`
         + `Get the full report for *${price}* to see what, and what to do about it.`);
 
-  lines.push('', `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · Government records_`);
+  lines.push('', `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · vehicle registration records · by GaadiPe_`);
   return lines.join('\n');
 }
 
@@ -488,9 +490,9 @@ async function publicText(data, { price = '₹19' } = {}) {
   row('Emission norms', id.norms);
   row('Seats', Number(id.seats) > 0 ? id.seats : null);
   row('Unladen weight', Number(id.unladen_weight) > 0 ? `${id.unladen_weight} kg` : null);
+  // The registering office only — no Government website or helpline link in a WhatsApp message (2026-10-19).
   if (rto) {
-    lines.push(`RTO: *${rto.code}*${[rto.office, rto.state].filter(Boolean).length ? ` · ${[rto.office, rto.state].filter(Boolean).join(', ')}` : ''}`);
-    lines.push(`🌐 ${rto.website}${rto.helpline ? ` · 📞 ${rto.helpline}` : ''}`);
+    lines.push(`Registered at: *${rto.code}*${[rto.office, rto.state].filter(Boolean).length ? ` · ${[rto.office, rto.state].filter(Boolean).join(', ')}` : ''}`);
   }
 
   if (v.documents.length) {
@@ -507,14 +509,14 @@ async function publicText(data, { price = '₹19' } = {}) {
     const n = v.found.challans_pending;
     const amt = v.found.challans_amount_paise;
     lines.push('', n
-      ? `🚨 Challans: *${n} pending*${amt ? ` · *₹${Math.round(amt / 100).toLocaleString('en-IN')}* in all` : ''}`
+      ? `📋 Challans: *${n} pending*${amt ? ` · ₹${Math.round(amt / 100).toLocaleString('en-IN')} in total` : ''}\n_GaadiPe never collects challan payments._`
       : '✅ Challans: *none pending*');
   }
 
   lines.push('', `🔒 *In the full report for ${price}:* loan / hypothecation, blacklist and NOC, each challan with `
     + 'offence and place, number of owners, insurer and policy, FASTag, and what to check before you buy — '
     + 'as a PDF, with 28 days of expiry and challan alerts.');
-  lines.push('', `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · Government records_`);
+  lines.push('', `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · vehicle registration records · by GaadiPe_`);
   return lines.join('\n');
 }
 

@@ -277,7 +277,7 @@ async function notifyReportPaid(result, user, veh, { ends, amount }) {
     // Paid and nothing delivered is the worst outcome here, so say so and leave
     // a way back rather than going quiet. "report" retries this same function.
     await send.buttons(user.mobile,
-      'The Government records service is slow right now, so your report is not ready yet. '
+      'Our records source is slow right now, so your report is not ready yet. '
       + 'Tap below in a few minutes and I will send it. Your payment is safe.',
       [{ id: 'download_report', title: 'Send my report' },
        { id: 'menu',            title: 'Menu' }]);
@@ -395,15 +395,18 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
 
   const until = fmt(new Date(doc.valid_until));
   const link = base ? `\n${base}/report/${doc.access_token}` : '';
+  // The PDF alone — no link beside it (2026-10-19, SCAM strikes); the link only as a button if it fails.
   const sent = doc.pdf_path
     ? await send.document(pay.mobile, doc.pdf_path, {
         filename: `${doc.report_number}.pdf`,
-        caption: `📋 ${doc.report_number} — ${pay.reg_no}\nDownload again until ${until}${link}`,
+        caption: `📋 GaadiPe report ${doc.report_number} — ${pay.reg_no}\nDownload again any time until ${until} from My reports.`,
       })
     : { ok: false };
   if (!sent.ok && link) {
-    await send.text(pay.mobile,
-      `📋 Your report ${doc.report_number} could not be attached. Download it here until ${until}:${link}`);
+    const btn = await send.ctaUrl(pay.mobile,
+      `📋 GaadiPe report ${doc.report_number} — ${pay.reg_no}\n\nThe PDF could not be attached here. Tap below to open it (until ${until}).`,
+      { text: 'Open my report', url: link.trim() }).catch(() => ({ ok: false }));
+    if (!btn.ok) await send.text(pay.mobile, `📋 Your GaadiPe report ${doc.report_number} could not be attached. Open it here until ${until}:${link}`);
   }
   // The email tip after a paid report (2026-10-15, whatsapp/flow.js emailNudge): last, a few
   // seconds after the report and its buttons, and only if they have no confirmed email.

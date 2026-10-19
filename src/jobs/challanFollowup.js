@@ -35,7 +35,7 @@ function challanLine(c) {
   if (!(c.pending_count > 0)) return `No pending challans ✅${c.disposed_count ? ` (${c.disposed_count} already paid)` : ''}`;
   const latest = (c.pending || [])[0];
   const when = latest?.challan_date ? new Date(latest.challan_date) : null;
-  return [`${c.pending_count} pending challan${c.pending_count === 1 ? '' : 's'}`, `${rupees(c.pending_amount_paise)} to pay`,
+  return [`${c.pending_count} pending challan${c.pending_count === 1 ? '' : 's'}`, `${rupees(c.pending_amount_paise)} in total`,
           when && !Number.isNaN(when.getTime()) ? `most recent ${fmt(when)}` : null].filter(Boolean).join(' · ');
 }
 
@@ -60,7 +60,7 @@ async function tellCustomer(r, c) {
       preheader: `${r.reg_no}: ${line}`,
       badge: { text: pending ? 'Challans pending' : 'No pending challans', tone: pending ? 'watch' : 'good' },
       title: `Challans added to your report for ${r.reg_no}`,
-      lead: `Hi ${String(r.name || 'there').split(' ')[0]}, the Government e-Challan service is answering again, so we checked the challans and added them to your report ${r.report_number} — same report, same download.`,
+      lead: `Hi ${String(r.name || 'there').split(' ')[0]}, challan details are now available, so we checked the challans and added them to your report ${r.report_number} — same report, same download.`,
       intro: [card.html], textBlocks: [card.text],
       cta: { label: 'Open your report', url: open },
       footer: 'You are receiving this because you bought a GaadiPe report for this vehicle.',
@@ -87,10 +87,13 @@ async function tellOnWhatsApp(r, c) {
   const line = challanLine(c);
   if (await send.optedOut(r.mobile)) return { ok: false, error: 'opted_out' };
   if (await send.windowOpen(r.mobile)) {
-    return send.text(r.mobile, `🔔 *Challan update for ${r.reg_no}*\n\n`
-      + 'The Government e-Challan service is answering again, so we checked your challans:\n'
+    // No link and no "Government" (2026-10-19, SCAM strikes): the report is in My reports.
+    void link;
+    return send.text(r.mobile, `🔔 *GaadiPe report update · ${r.reg_no}*\n\n`
+      + 'Challan details are now available, so we added them to your report:\n'
       + `${line.split(' · ').map((t) => `• ${t}`).join('\n')}\n\n`
-      + `Your report ${r.report_number} now includes them${link ? ` — download it again:\n${link}` : '.'}`);
+      + `Your GaadiPe report ${r.report_number} now includes them — tap *My reports* in the menu to download it again.\n\n`
+      + '_GaadiPe never collects challan payments._');
   }
   // Not even tried for someone GaadiPe may not start a conversation with (2026-10-15, send.mayStart).
   const may = await send.mayStart(r.mobile);

@@ -167,6 +167,22 @@ const NEXT = {
   more:    { id: BTN.MENU,          title: 'More' },
   support: { id: BTN.SUPPORT,       title: 'Support' },
 };
+/*
+ * A LINK, AS A BUTTON (user, 2026-10-19: SCAM strikes — "make me safe in all cases"). Payment,
+ * shared report and support links go as WhatsApp's own link button, never as a bare link with a
+ * random code in the text: that is what the fake "e-challan" phishing looks like. A plain link is
+ * the fallback only when the button cannot go, so nobody is ever left unable to pay.
+ */
+async function linkButton(mobile, body, url, buttonText, { footer = null, fallbackKeys = ['support', 'menu'] } = {}) {
+  const out = await send.ctaUrl(mobile, body, { text: buttonText, url }, footer ? { footer } : {})
+    .catch((e) => ({ ok: false, error: e.message }));
+  if (out?.ok) return out;
+  console.warn('[wa] link button to ••%s not sent (%s) — plain link instead', String(mobile).slice(-4), out?.error);
+  return reply(mobile, `${body}\n\n${url}`, fallbackKeys);
+}
+const payButtonText = (paise) => `Pay ₹${Math.round(Number(paise || 0) / 100)} securely`;
+const PAY_FOOTER = 'GaadiPe · secure checkout by Razorpay';
+
 async function reply(mobile, body, keys = ['check', 'menu']) {
   const list = keys.map((k) => (typeof k === 'string' ? NEXT[k] : k)).filter(Boolean).slice(0, 3);
   const out = String(body).length <= 1024
@@ -209,11 +225,13 @@ async function sendSupportLink(mobile) {
   const { url, hours } = await tickets.linkFor({ userId: user.id, mobile, regNo: reg });
 
   // Terms & privacy live here now (2026-10-13): their menu row went to "Current offers".
-  await send.text(mobile,
-    '💬 *Help & support*\n\n'
-    + 'Tell us what is wrong and we will get back to you here, with a ticket number.\n\n'
-    + `Open this to write to us (the link works for ${hours} hours):\n${url}\n\n`
-    + `📜 Terms: ${SITE}/terms\n🔒 Privacy: ${SITE}/privacy\n💸 Refunds: ${SITE}/refund`);
+  // The support link as a button, and the policies named once — not four bare links (2026-10-19, SCAM strikes).
+  await linkButton(mobile,
+    '💬 *GaadiPe help & support*\n\n'
+    + 'Tell us what is wrong and we will get back to you here, with a ticket number. '
+    + `The button works for ${hours} hours.\n\n`
+    + '_Our Terms, Privacy and Refund policies are on gaadipe.in._',
+  url, 'Write to support', { fallbackKeys: ['menu'] });
 
   await doors(mobile, 'Anything else?');
 }
@@ -557,9 +575,10 @@ async function replacePay(mobile) {
   if (!out.ok) { await reply(mobile, out.message, ['support', 'menu']); return; }
   await setState(mobile, 'awaiting_payment', `replace order ${out.row.order_id}`);
   await funnel(mobile, 'replace_link_sent', { reg_no: p.to.reg_no, from: p.from.reg_no, payment_row: out.row.id });
-  await reply(mobile, `🔁 *${p.from.reg_no} → ${p.to.reg_no}* · ${rupeesOf(out.row.amount_paise)}\n\n`
-    + `Pay securely here (UPI, card, netbanking):\n${baseUrl()}/pay/${out.row.checkout_token}\n\n`
-    + 'The vehicle is replaced the moment the payment goes through.', ['support', 'menu']);
+  await linkButton(mobile, `🔁 *Replace vehicle* · *${p.from.reg_no} → ${p.to.reg_no}* · ${rupeesOf(out.row.amount_paise)}\n\n`
+    + 'Tap below to pay on GaadiPe’s checkout (UPI, card, netbanking). '
+    + 'The vehicle is replaced the moment the payment goes through.',
+  `${baseUrl()}/pay/${out.row.checkout_token}`, payButtonText(out.row.amount_paise), { footer: PAY_FOOTER });
 }
 
 /** "Email for alerts": shows the confirmed address, or asks for one (then a 4-digit code, mail/emailCode.js). */
@@ -613,7 +632,7 @@ async function whatYouGet(mobile) {
  */
 const SO_FAR_ROWS = [
   ['customers', '👥', 'People served'], ['vehicles', '🚗', 'Vehicles checked'], ['checks', '🔍', 'Vehicle checks run'],
-  ['records_fetched', '🏛️', 'Government records fetched'], ['reports_bought', '📄', 'Full reports bought'],
+  ['records_fetched', '🗂️', 'Vehicle records checked'], ['reports_bought', '📄', 'Full reports bought'],
   ['watching', '🔔', 'Vehicles being watched now'], ['expired_found', '⚠️', 'Vehicles found with expired insurance or PUC'],
   ['challans_found', '🧾', 'Pending challans found'], ['states', '🗺️', 'States & UTs'],
 ];
@@ -663,7 +682,7 @@ async function termsAndPrivacy(mobile) {
     + `Terms of use: ${site}/terms\n`
     + `Privacy policy: ${site}/privacy\n`
     + `Refunds: ${site}/refund\n\n`
-    + 'Personal details from the Government record are masked in every report. '
+    + 'Personal details are masked in every report. '
     + 'You can stop messages or ask us to delete your data any time from the menu.',
   [{ id: BTN.SUPPORT, title: 'Help & support' }, 'menu']);
 }
@@ -686,7 +705,7 @@ const baseUrl = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
    themselves and the policy version are unchanged, so nobody is re-asked. */
 const INTRO =
   'Namaste! 🙏 *GaadiPe* shows any vehicle\'s insurance, PUC, tax, challan and loan status '
-  + 'from Government records, right here on WhatsApp.\n\n';
+  + 'from vehicle registration records, right here on WhatsApp.\n\n';
 
 /**
  * One row per step of the owner funnel, all under one kind, so the whole funnel
@@ -723,7 +742,7 @@ const STEP_WORDS = {
   offers_answer: (d) => [d.offers ? '🎁' : '🙅', d.offers ? 'Said yes to tips & offers' : 'Said no to tips & offers'],
   number: (d) => ['🔢', `Sent a vehicle number · ${d.reg_no}`],
   basic_shown: (d) => ['🔍', `Vehicle checked · ${d.reg_no} · found${d.bought ? ' · already has its full report' : ''}`],
-  lookup_failed: (d) => ['⚠️', `Vehicle check failed · ${d.reg_no} · ${d.reason === 'not_found' ? 'not in Government records' : 'records service error'}`],
+  lookup_failed: (d) => ['⚠️', `Vehicle check failed · ${d.reg_no} · ${d.reason === 'not_found' ? 'not found in the records' : 'records service error'}`],
   vehicle_private: (d) => ['🔒', `Vehicle check · ${d.reg_no} · its owner made it private`],
   buy_now_offered: (d) => ['💡', `Was offered the full report · ${d.reg_no}`],
   buy_tapped: (d) => ['🛒', `Tapped "Get full report" · ${d.reg_no}`],
@@ -1204,7 +1223,7 @@ async function sendReports(mobile) {
       if (r.ok) recovered++;
       else if (r.reason === 'lookup_failed') {
         await send.buttons(mobile,
-          'The Government records service is still slow, so your report is not ready yet. '
+          'Our records source is still slow, so your report is not ready yet. '
           + 'Please try again in a few minutes. Your payment is safe.',
           [{ id: BTN.DOWNLOAD_REPORT, title: 'Try again' },
            { id: BTN.MENU,            title: 'Menu' }]);
@@ -1391,7 +1410,7 @@ async function startPhotoClaim(mobile, regNo, message) {
   const days = await settings.num('owner_verify_extend_days', 28);
   await send.text(mobile,
     `🔐 *Verify ${regNo}*\n\n`
-    + '📸 Send a clear photo of your *RC* here in this chat — the card, the paper RC, or the *DigiLocker / mParivahan RC* (PDF is fine).\n\n'
+    + '📸 Send a clear photo of your *RC* here in this chat — the card, the paper RC, or your *digital RC* (PDF is fine).\n\n'
     + '*We only need to see:*\n'
     + '✔️ Vehicle number\n✔️ Owner name\n✔️ Chassis number\n'
     + '_You may cover your address, photo and date of birth._\n\n'
@@ -1452,7 +1471,7 @@ async function startOwnerClaim(mobile, regNo, message) {
     await send.text(mobile,
       `🔐 Verifying *${regNo}*\n\n`
       + '*Step 1 of 2:* type the full *chassis number* (Chassis No.) from your RC — usually 17 letters and numbers.\n\n'
-      + '_What you type is only compared with the Government record — it is never stored or shown._');
+      + '_What you type is only compared with the vehicle record — it is never stored or shown._');
     return;
   }
   await setState(mobile, 'owner_menu', `owner verification: ${r.reason}`);
@@ -1466,9 +1485,9 @@ async function startOwnerClaim(mobile, regNo, message) {
   }
   await doors(mobile, {
     off: 'Owner verification is not open yet. You can still check any vehicle.',
-    not_found: `I could not find a Government record for *${regNo}*. Please check the number.`,
-    busy: 'The Government vehicle records service is not responding right now. Please try again in a little while.',
-    not_checkable: `The Government record for *${regNo}* does not hold enough of the chassis and policy details to verify it here.\n\n`
+    not_found: `I could not find a record for *${regNo}*. Please check the number.`,
+    busy: 'Our records source is not responding right now. Please try again in a little while.',
+    not_checkable: `The record for *${regNo}* does not hold enough of the chassis and policy details to verify it here.\n\n`
       + 'Email a photo of your RC to support@gaadipe.in with the subject *Owner verification* and we will verify it by hand.',
     locked: `Too many tries for *${regNo}*. You can try again after *${istTime(r.lockedUntil)}*.`,
     vehicle_busy: `Verification for *${regNo}* is paused for today. Please try again tomorrow, or email a photo of your RC to support@gaadipe.in.`,
@@ -1537,7 +1556,7 @@ async function deliverReport(mobile, regNo, message) {
     await funnel(mobile, 'lookup_failed', { reg_no: regNo, reason: notFound ? 'not_found' : 'service_error' });
     await setState(mobile, 'owner_start', notFound ? 'vehicle not found' : 'lookup failed');
     if (notFound) {
-      await reply(mobile, `I could not find any Government record for *${regNo}*.\n\n`
+      await reply(mobile, `I could not find any record for *${regNo}*.\n\n`
         + 'Please check the number and send it again. Very new vehicles can take '
         + 'a few weeks to appear.', ['other', 'support', 'menu']);
       return;
@@ -1556,10 +1575,10 @@ async function deliverReport(mobile, regNo, message) {
     // records server is down. Kept on the waiting list; a short line covers the
     // mistyped number, which looks the same from here.
     const downText = listed
-      ? `⚠️ The Government vehicle records server is down right now, and the concerned authority is working on it. 🙏\n\n`
+      ? `⚠️ Our vehicle records source is slow right now — please try again in a little while. 🙏\n\n`
         + `I have saved *${regNo}* and will send its details *here, automatically*, as soon as it is back — no need to send it again.\n\n`
         + '_If the number was typed wrongly, just send the correct one._'
-      : `⚠️ The Government vehicle records server is down right now, and the concerned authority is working on it. 🙏\n\n`
+      : `⚠️ Our vehicle records source is slow right now — please try again in a little while. 🙏\n\n`
         + 'Please send the number again in a little while.';
     /*
      * CAN'T WAIT? BUY NOW (user, 2026-10-05). With the backup kept for paying
@@ -1716,7 +1735,7 @@ async function reportMenu(mobile, regNo, data, bought) {
     + `🔔 New challans watched ${plan.duration_days} days, and a warning before insurance, PUC, `
     + 'road tax, fitness or permit about to expire\n\n'
     // What the other way costs (user, 2026-09-30) — the same line as the website.
-    + `🚫 RTO queue · 🚫 Fuel · 🚫 Follow-ups — *just ${price}* ✨\n\n`
+    + `🚫 No queues · 🚫 No travel · 🚫 No follow-ups — *just ${price}* ✨\n\n`
     + '_* Price includes GST. Personal details are masked. Nothing renews automatically._',
     [{ id: BTN.BUY_REPORT,    title: `Full report ${price}*` },
      { id: BTN.FEEDBACK,      title: 'Feedback' },
@@ -1948,9 +1967,9 @@ async function sendValidReport(mobile, r, { next = true } = {}) {
   });
   // The moment the data came from the records, date and time (user, 2026-10-15).
   const stamp = (d) => d.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
-  const asOf = fresh.refreshed || fresh.recent ? `\n🔄 Fresh from Government records: ${stamp(fresh.at)}` : '';
-  const caption = `📋 ${r.report_number} — ${r.reg_no}${asOf}\nDownload again until ${ends}`
-    + (link ? `\n${link}` : '');
+  const asOf = fresh.refreshed || fresh.recent ? `\n🔄 Updated: ${stamp(fresh.at)}` : '';
+  // The PDF is the report: no link beside it (2026-10-19, SCAM strikes) — the link only if it cannot be attached.
+  const caption = `📋 GaadiPe report ${r.report_number} — ${r.reg_no}${asOf}\nDownload again any time until ${ends} from My reports.`;
 
   // Rebuilt first if missing or printed with an older layout (pay/rebuild.js).
   const file = r.id ? await require('../pay/rebuild').ensureFile('vehicle_reports', r.id).catch((e) => {
@@ -1961,7 +1980,8 @@ async function sendValidReport(mobile, r, { next = true } = {}) {
     ? await send.document(mobile, file, { filename: `${r.report_number}.pdf`, caption })
     : { ok: false };
   if (!sent.ok) {
-    await send.text(mobile, `${caption}\n\n_The file could not be attached${link ? ' — use the link above' : ''}._`);
+    if (link) await linkButton(mobile, `📋 GaadiPe report ${r.report_number} — ${r.reg_no}\n\nThe PDF could not be attached here. Tap below to open it.`, link, 'Open my report');
+    else await send.text(mobile, `${caption}\n\n_The file could not be attached — please try My reports again in a moment._`);
   }
   if (next) await afterReport(mobile, r.reg_no);
 }
@@ -2201,7 +2221,7 @@ async function handle(session, message, mobile) {
     await funnel(mobile, 'asked_owner_contact');
     await reply(mobile,
       '🙏 Sorry, we can\'t share a vehicle owner\'s *mobile number* or *address*. It is private and protected by law — '
-      + 'and the Government records don\'t give it to us either.\n\n'
+      + 'and our records don\'t include it either.\n\n'
       + 'If you need to reach the owner — about a parked vehicle or an accident — the *local traffic police* or the *RTO* can help.\n\n'
       + 'What GaadiPe *can* show: insurance, PUC, tax and fitness, challans, loan and the number of owners — send any vehicle number.',
       ['check', { id: BTN.WHAT_GET, title: 'What do I get?' }, 'menu']);
@@ -2644,13 +2664,12 @@ async function handle(session, message, mobile) {
         }
 
         await setState(mobile, 'awaiting_payment', `order ${order.id}`);
-        await reply(mobile,
-          `*${vehicle.reg_no}* — ₹${Math.round(paise / 100)} for ${plan.duration_days} days\n\n`
-          + `Review and pay here:\n${base}/pay/${token}\n\n`
-          + 'You will come straight back here, and I will confirm the moment the '
+        await linkButton(mobile,
+          `*${vehicle.reg_no}* — GaadiPe monitoring · ₹${Math.round(paise / 100)} for ${plan.duration_days} days\n\n`
+          + 'Tap below to review and pay on GaadiPe’s checkout. I will confirm here the moment the '
           + 'payment goes through.\n\n'
-          + '_One vehicle per payment for now. To add another, just send me its '
-          + 'number — I will send a separate link._', ['support', 'other']);
+          + '_One vehicle per payment. For another, just send its number._',
+        `${base}/pay/${token}`, payButtonText(paise), { footer: PAY_FOOTER, fallbackKeys: ['support', 'other'] });
         return;
       }
 
@@ -2830,10 +2849,11 @@ async function handle(session, message, mobile) {
         await setState(mobile, 'awaiting_payment', `order ${row.order_id}`);
         await funnel(mobile, 'link_sent', { reg_no: vehicle.reg_no, payment_row: row.id });
         // The link stays the message; Support and Other vehicle sit under it (2026-10-12).
-        await reply(mobile,
-          `*${vehicle.reg_no}* — full report · ₹${Math.round(row.amount_paise / 100)}\n\n`
-          + `Pay securely here (UPI, card, netbanking):\n${baseUrl()}/pay/${row.checkout_token}\n\n`
-          + 'The report arrives in this chat the moment the payment goes through.', ['support', 'other']);
+        await linkButton(mobile,
+          `*${vehicle.reg_no}* — GaadiPe full report · ₹${Math.round(row.amount_paise / 100)}\n\n`
+          + 'Tap below to pay on GaadiPe’s checkout (UPI, card, netbanking). '
+          + 'The report arrives in this chat the moment the payment goes through.',
+        `${baseUrl()}/pay/${row.checkout_token}`, payButtonText(row.amount_paise), { footer: PAY_FOOTER, fallbackKeys: ['support', 'other'] });
         return;
       }
 
@@ -3271,7 +3291,7 @@ async function handle(session, message, mobile) {
         await setState(mobile, 'owner_menu', 'owner verified');
         await funnel(mobile, 'owner_verified', { reg_no: reg });
         await send.buttons(mobile,
-          `✅ *${reg}* is now *Owner verified* — it matched the Government record.\n\n`
+          `✅ *${reg}* is now *Owner verified* — it matched the vehicle record.\n\n`
           + 'You will see the badge when you check it. If you like, you can *hide it from other people\'s checks* — '
           + 'they will be told the owner keeps it private, and you will still see it.',
           [{ id: BTN.OWNER_HIDE, title: 'Hide from others' }, { id: BTN.CHECK_ANOTHER, title: 'Check vehicle' }]);
@@ -3282,13 +3302,13 @@ async function handle(session, message, mobile) {
       await funnel(mobile, 'owner_verify_failed', { reg_no: reg, locked: r.reason === 'locked' });
       if (r.reason === 'locked') {
         await doors(mobile,
-          `❌ That did not match the Government record for *${reg}*, and that was the last try for now.\n\n`
+          `❌ That did not match the vehicle record for *${reg}*, and that was the last try for now.\n\n`
           + `You can try again after *${istTime(r.lockedUntil)}*. If the RC is yours and it still does not match, `
           + 'email a photo of the RC to support@gaadipe.in and we will check it by hand.');
         return;
       }
       await send.buttons(mobile,
-        `❌ That did not match the Government record for *${reg}*. ${r.attemptsLeft} tr${r.attemptsLeft === 1 ? 'y' : 'ies'} left.\n\n`
+        `❌ That did not match the vehicle record for *${reg}*. ${r.attemptsLeft} tr${r.attemptsLeft === 1 ? 'y' : 'ies'} left.\n\n`
         + 'Check the numbers on your RC and insurance paper — letters and numbers exactly as printed — and try again.',
         [{ id: `ownv:${reg}`, title: 'Try again' }, { id: BTN.MENU, title: 'More' }]);
       return;
