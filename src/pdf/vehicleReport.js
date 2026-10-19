@@ -46,9 +46,19 @@ const rupees = (paise) => '₹' + Math.round((paise || 0) / 100).toLocaleString(
  * English wording as well, so the other scripts are dropped, and the separators
  * left dangling behind them ("wheeler / -") are tidied away.
  */
+/*
+ * NO ALCOHOL WORDS IN A DOCUMENT SENT ON WHATSAPP (user, 2026-10-19: the WhatsApp account was
+ * disabled for a policy violation of type "ALCOHOL"). A drink-driving challan's offence reads
+ * "Driving by a drunken person / under the influence of alcohol" — the report sends that on
+ * WhatsApp as a PDF, and Meta's automatic review reads alcohol content into it. The same offence
+ * is named by its section instead: the facts stay, the words go.
+ */
+const DRINK_RE = /\bdrunk|alcohol|liquor|intoxicat|under the influence|influence of (drink|drug)|\bsharab\b|\bdaru\b|शराब|नशे/i;
+const neutral = (s) => (DRINK_RE.test(s) ? 'Section 185 MV Act offence' : s);
+
 const printable = (v) => {
   if (v === null || v === undefined) return v;
-  const s = String(v);
+  const s = neutral(String(v));
   // Indian scripts now have fonts (pdf/fonts.js, 2026-10-02). Text with an
   // English wording beside it still keeps only the English — the same offence
   // twice does not fit a table cell — but text ONLY in Tamil, Hindi and so on
@@ -461,7 +471,8 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
  * layout is re-printed from its own snapshot the next time it is downloaded
  * (pay/rebuild.js). 2 = personal details masked, as on Parivahan (2026-10-01).
  * 3 = Indian scripts drawn (Tamil, Hindi and the rest), not dropped (2026-10-02).
+ * 4 = drink-driving offences named by their section, no alcohol words (2026-10-19, Meta "ALCOHOL").
  */
-const LAYOUT = 3;
+const LAYOUT = 4;
 
 module.exports = { buildVehicleReport, LAYOUT };
