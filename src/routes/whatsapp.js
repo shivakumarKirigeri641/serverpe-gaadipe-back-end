@@ -106,10 +106,14 @@ async function accountNews(wabaId, field, value) {
   ].filter(Boolean);
   // Template approvals are routine; everything else is worth a ping.
   const routine = field === 'message_template_status_update' && value.event === 'APPROVED';
-  const bad = /FAILED|REJECT|DEFERRED|NEED_MORE_INFO|FLAGGED|DISABLED|RESTRICT|DOWNGRADE|RED|BANNED/i.test(JSON.stringify(value));
+  const bad = /FAILED|REJECT|DEFERRED|NEED_MORE_INFO|FLAGGED|DISABLED|RESTRICT|DOWNGRADE|RED|BANNED|VIOLATION/i.test(JSON.stringify(value));
+  // Every strike is its own alert (2026-10-19: the SCAM strikes of 17–18 Oct were
+  // swallowed as repeats of the 16 Oct one, so the ban was found days late).
+  const strike = /VIOLATION|DISABLED|BANNED|RESTRICT/i.test(JSON.stringify(value));
+  if (strike) bits.unshift('⛔ Account strike: stop broadcasts and ads, check Business Support Home now.');
   await require('../util/adminPing').ping({
-    key: `meta_news:${field}:${event || Date.now()}`,
-    severity: bad ? 'warning' : 'info', source: 'meta', alert: !routine,
+    key: `meta_news:${field}:${event || 'x'}:${strike || !event ? Date.now() : ''}`,
+    severity: strike ? 'critical' : bad ? 'warning' : 'info', source: 'meta', alert: !routine,
     title: `📣 Meta: ${ACCOUNT_FIELDS[field]}`,
     text: bits.length ? bits.join('\n') : JSON.stringify(value).slice(0, 400),
   }).catch(() => {});
