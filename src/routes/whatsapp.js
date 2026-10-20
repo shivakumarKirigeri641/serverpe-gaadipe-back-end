@@ -83,6 +83,10 @@ const ACCOUNT_FIELDS = {
   message_template_quality_update: 'Template quality',
   account_review_update: 'Account review',
   account_alerts: 'Account alert',
+  // Added with the new number (2026-10-20, "all possible subscriptions to take care of"):
+  business_status_update: 'Business status',          // the portfolio itself restricted / reinstated
+  template_category_update: 'Template category change', // Meta moving a Utility template to Marketing
+  security: 'Security change',                          // two-step PIN changed or reset on the number
 };
 
 /** Record one account-level webhook and tell the admin in plain words. */
