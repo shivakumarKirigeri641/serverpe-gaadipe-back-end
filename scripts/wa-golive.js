@@ -38,6 +38,10 @@ async function status() {
   console.log('\nWHATSAPP — NEW NUMBER');
   console.log('  number in .env            ', config.whatsapp.ownNumber || '❌ missing', `(id ${config.whatsapp.phoneNumberId || '—'})`);
   console.log('  WHATSAPP_ENABLED (.env)   ', config.whatsapp.enabled ? 'on' : 'off');
+  // Without it the bot only records messages and never answers (config.whatsapp.replyEnabled).
+  console.log('  WHATSAPP_REPLY_ENABLED    ', config.whatsapp.replyEnabled ? 'on' : '❌ off — add WHATSAPP_REPLY_ENABLED=1 to .env and restart');
+  const flow = await get('flag_whatsapp_flow');
+  console.log('  WhatsApp flow (flag)      ', flow === null || /^(1|true|yes|on)$/i.test(flow) ? 'on' : '❌ off — "test" switches it on');
   console.log('  safety lock (.env)        ', lock.length ? `🔒 only ${lock.join(', ')}` : '🔓 EVERYONE');
   console.log('  whatsapp_sending_enabled  ', String(await get('whatsapp_sending_enabled')));
   console.log('  whatsapp_number_since     ', (await get('whatsapp_number_since')) || '(not set — old chats would count)');
@@ -72,6 +76,10 @@ async function on({ everyone }) {
     const v = await get(k);
     if (v && OLD.test(v)) { await set(k, ''); console.log(`✅ ${k} emptied (was the old account's ${v})`); }
   }
+  // The admin's "WhatsApp flow" feature flag: off, every message gets "temporarily unavailable".
+  const flow = await get('flag_whatsapp_flow');
+  if (flow !== null && !/^(1|true|yes|on)$/i.test(flow)) { await set('flag_whatsapp_flow', 'true'); console.log('✅ WhatsApp flow feature flag switched on'); }
+  if (!config.whatsapp.replyEnabled) console.log('⚠️  WHATSAPP_REPLY_ENABLED is off in .env — the bot will record but not answer. Add WHATSAPP_REPLY_ENABLED=1 and restart.');
   await set('whatsapp_sending_enabled', 'true');
   console.log(`✅ WhatsApp sending ON${everyone ? ' for everyone' : ` — only ${lock.join(', ')} (safety lock)`}. The server picks it up within a minute.`);
   await status();
