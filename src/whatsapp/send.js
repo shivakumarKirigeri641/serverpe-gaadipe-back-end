@@ -36,7 +36,38 @@ async function windowOpen(mobile) {
   const row = await db.one(
     `SELECT last_inbound_at FROM whatsapp_sessions WHERE mobile = $1`, [mobile]);
   if (!row?.last_inbound_at) return false;
+  // A message to the OLD number never opens the new number's window (numberSince below).
+  const since = await numberSince();
+  if (since && new Date(row.last_inbound_at) < since) return false;
   return Date.now() - new Date(row.last_inbound_at).getTime() < 24 * 60 * 60 * 1000;
+}
+
+/*
+ * THE NEW NUMBER'S START (user, 2026-10-20: a new business portfolio and a new WhatsApp number;
+ * "old customers get WhatsApp from the new number only after they've written to it").
+ * whatsapp_number_since — an ISO time, set when the new number goes live. Every chat, 24-hour
+ * window and agreement before it belongs to the old, banned number: to the new number those
+ * people are strangers, and a template from it to a stranger is what gets a number reported.
+ * So, with it set:
+ *   windowOpen  only messages received after it count
+ *   mayStart    only people who have written to the new number may get a template or alert
+ * Empty (the default): no change.
+ */
+async function numberSince() {
+  const raw = String(await settings.get('whatsapp_number_since', '') || '').trim();
+  if (!raw) return null;
+  const at = new Date(raw);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+async function wroteToNewNumber(mobile) {
+  const since = await numberSince();
+  if (!since) return true;
+  const row = await db.one(
+    `SELECT 1 AS yes FROM whatsapp_messages
+      WHERE direction = 'in' AND right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $1 AND created_at >= $2 LIMIT 1`,
+    [String(mobile).replace(/\D/g, '').slice(-10), since]).catch(() => null);
+  return Boolean(row);
 }
 
 /**
@@ -585,6 +616,8 @@ async function live() {
 async function mayStart(mobile) {
   // Before anything else: no WhatsApp at all while it is off — nothing is even prepared.
   if (!(await live())) return { ok: false, why: 'whatsapp_off' };
+  // A stranger to the new number gets nothing from it until they write first (numberSince).
+  if (!(await wroteToNewNumber(mobile))) return { ok: false, why: 'not_on_new_number' };
   if (await optedOut(mobile).catch(() => true)) return { ok: false, why: 'opted_out' };
   if (!(await agreedTerms(mobile))) return { ok: false, why: 'not_agreed' };
   if (await templatesPausedUntil()) return { ok: false, why: 'templates_paused' };
@@ -641,5 +674,5 @@ async function optedOut(mobile) {
   return Boolean(row);
 }
 
-module.exports = { _unmasked: unmasked, text, buttons, ctaUrl, list, document, template, windowOpen, toWaId, allowed, optedOut, mayStart, live,
+module.exports = { _unmasked: unmasked, text, buttons, ctaUrl, list, document, template, windowOpen, toWaId, allowed, optedOut, mayStart, live, numberSince,
                    agreedTerms, optedInToOffers, categoryOf, consentGate, _varCount: varCount };
