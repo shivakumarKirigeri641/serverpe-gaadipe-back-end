@@ -56,7 +56,9 @@ const config = {
    */
   cache: {
     enabled: bool(process.env.CACHE_ENABLED, true),
-    rcMinutes: int(process.env.CACHE_MINUTES_RC, 60 * 24 * 7),
+    // A day, not a week (user, 2026-10-20): a private vehicle's RC is a paid lookup, but a week-old copy
+    // showed renewed PUC / insurance as old. Paid reports and owners refresh anyway (vehicle/rcConfirm).
+    rcMinutes: int(process.env.CACHE_MINUTES_RC, 60 * 24),
     challanMinutes: int(process.env.CACHE_MINUTES_CHALLAN, 60 * 12),
     fastagMinutes: int(process.env.CACHE_MINUTES_FASTAG, 60 * 24 * 7),
     // A vehicle ULIP says does not exist. Cached so a mistyped plate costs one

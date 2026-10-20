@@ -224,6 +224,8 @@ async function notifyPaid(result) {
   //    bought, not wait a day for the first check to run.
   if (veh) {
     try {
+      // Fresh for what was just paid for (vehicle/rcConfirm.ownerRefresh; once a day per vehicle).
+      await require('../vehicle/rcConfirm').ownerRefresh({ regNo: veh.reg_no, userId: user.id, why: 'paid · first message' });
       const data = await gateway.full(veh.reg_no);
       if (data?.success) {
         await send.text(user.mobile, await report.buildFor(data, { detailed: true, mobile: user.mobile }));
@@ -348,6 +350,10 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
 
     let data;
     try {
+      /* A PAID REPORT IS FRESH (user, 2026-10-20): not the cached copy of an earlier check (the RC
+         cache is a day) — one fresh lookup first (ULIP, then IDSPay; once a day per vehicle, so the
+         message and the PDF of one purchase pay once), stored, then read below. */
+      await require('../vehicle/rcConfirm').ownerRefresh({ regNo: pay.reg_no, userId: pay.user_id, why: 'paid report' });
       // The whole challan list, not the ten-row preview the chat uses: the PDF
       // lists every pending challan, and the report is what was paid for.
       data = await gateway.full(pay.reg_no, { challans: 'all' });
