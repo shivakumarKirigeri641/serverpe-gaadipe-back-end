@@ -516,6 +516,16 @@ async function payments() {
       const { splitOf } = require('../admin/stats');
       const split = await splitOf(p.amount_paise);
       const channel = p.raw?.channel === 'web' || decl?.detail?.channel === 'web' ? 'Website' : 'WhatsApp';
+      /* WHAT WAS BOUGHT (user, 2026-10-20: "trigger me mail when user ... replace, renew, payment"):
+         Replace vehicle by its plan; Renewal when this customer had already paid for this vehicle
+         (the rule pay/billing.reportPriceFor prices by); else a new full report. */
+      const prior = p.plan_kind === 'replace' || !p.raw?.vehicle_id ? null : await db.one(
+        `SELECT 1 FROM payments x LEFT JOIN plans xp ON xp.id = x.plan_id
+          WHERE x.user_id = $1 AND x.status = 'paid' AND x.id < $2 AND x.amount_paise > 0
+            AND x.raw->>'vehicle_id' = $3 AND coalesce(xp.kind, '') <> 'replace' LIMIT 1`,
+        [p.user_id, p.id, String(p.raw.vehicle_id)]);
+      const what = p.plan_kind === 'replace' ? '🔁 Replace vehicle'
+        : prior ? '🔄 Renewal' : '📄 New full report';
 
       const attachments = [];
       if (inv?.pdf_path && fs.existsSync(inv.pdf_path)) {
@@ -524,10 +534,10 @@ async function payments() {
       const who = p.shown_name || T.mobile(p.mobile);
       return {
         // Vehicle number and mobile in the subject (user, 2026-10-08).
-        subject: `✅ Payment received · ${T.rupees(p.amount_paise)} · ${veh?.reg_no || p.plan_name || 'GaadiPe'} · ${T.mobile(p.mobile)}${p.shown_name ? ` · ${p.shown_name}` : ''}`,
+        subject: `✅ ${what.replace(/^\S+\s/, '')} · ${T.rupees(p.amount_paise)} · ${channel} · ${veh?.reg_no || p.plan_name || 'GaadiPe'} · ${T.mobile(p.mobile)}${p.shown_name ? ` · ${p.shown_name}` : ''}`,
         attachments,
         ...T.layout({
-          badge: { text: 'Payment successful', tone: 'good' },
+          badge: { text: `Payment successful · ${what}`, tone: 'good' },
           title: `${T.rupees(p.amount_paise)} received${veh?.reg_no ? ` for ${veh.reg_no}` : ''} · ${T.mobile(p.mobile)}${p.shown_name ? ` (${p.shown_name})` : ''}`,
           lead: `${p.plan_name || 'Full vehicle report'}${veh?.reg_no ? ` for ${veh.reg_no}` : ''}, paid ${T.ist(p.paid_at)} on the ${channel.toLowerCase()}.`
             + (attachments.length ? ' The tax invoice is attached.' : ''),
@@ -535,7 +545,7 @@ async function payments() {
                   ['GST', T.rupees(split.gst_paise)], ['Customer total', T.rupees(p.lifetime_paise)]],
           sections: [
             { heading: 'Payment', rows: [
-              ['Plan', p.plan_name], ['Amount paid', T.rupees(p.amount_paise)], ['Paid at', T.ist(p.paid_at)],
+              ['Type', what], ['Plan', p.plan_name], ['Amount paid', T.rupees(p.amount_paise)], ['Paid at', T.ist(p.paid_at)],
               ['Channel', channel], ['Gateway', p.gateway || 'Razorpay'],
               ['Razorpay payment id', p.payment_id], ['Razorpay order id', p.order_id], ['GaadiPe payment no.', String(p.id)],
             ] },
@@ -886,6 +896,8 @@ async function vehicleChanges() {
             ['Monitoring ends', sub?.ends_on || null],
             ['Fee paid', pay ? `${T.rupees(pay.amount_paise)}${pay.raw?.test_mode ? ' (TEST mode)' : ''}` : null],
             ['Customer', e.name || 'Not given'], ['Mobile', T.mobile(e.mobile)],
+            // Where it was bought (2026-10-20), as the removal email says.
+            ['From', pay ? (pay.raw?.channel === 'web' ? 'Website' : 'WhatsApp') : null],
           ] }],
           cta: { label: 'Open customers', path: '/customers' },
         }),

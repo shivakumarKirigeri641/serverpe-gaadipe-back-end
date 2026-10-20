@@ -135,7 +135,7 @@ async function order(userId, mobile, prep, { channel = 'whatsapp', test = false 
       ORDER BY id DESC LIMIT 1`, [userId, prep.plan.id, prep.to.vehicle_id, prep.from.reg_no, test]);
   if (!row) {
     const pending = await require('./billing').createPending({
-      userId, planId: prep.plan.id, amountPaise: prep.price_paise, vehicleId: prep.to.vehicle_id,
+      userId, planId: prep.plan.id, amountPaise: prep.price_paise, vehicleId: prep.to.vehicle_id, channel,
     });
     let o;
     try {
