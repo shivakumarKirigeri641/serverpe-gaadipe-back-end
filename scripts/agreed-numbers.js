@@ -64,11 +64,15 @@ const firstName = (s) => {
   // Batches: paying customers first, then the most recently active; never someone already on the new number.
   let rows = everyone;
   if (batch) {
-    const waiting = everyone.filter((r) => !r.on_new)
+    // A FIXED order over everyone, so batch 2 tomorrow never repeats batch 1's people (only the
+    // ones already on the new number drop out of their own slice). Paying first, then the most
+    // recently active, ties by number.
+    const ordered = [...everyone]
       .sort((x, y) => (Number(y.paid) - Number(x.paid)) || (new Date(y.last_in || 0) - new Date(x.last_in || 0)) || x.m.localeCompare(y.m));
-    rows = waiting.slice((batch - 1) * size, batch * size);
-    console.log(`Batch ${batch} of ${Math.ceil(waiting.length / size)} (${size} each): ${rows.length} numbers, `
-      + `${rows.filter((r) => r.paid).length} paying. ${everyone.length - waiting.length} already said Hi to the new number and are left out.`);
+    const slice = ordered.slice((batch - 1) * size, batch * size);
+    rows = slice.filter((r) => !r.on_new);
+    console.log(`Batch ${batch} of ${Math.ceil(ordered.length / size)} (${size} each): ${rows.length} numbers to SMS, `
+      + `${rows.filter((r) => r.paid).length} paying; ${slice.length - rows.length} of this batch already said Hi to the new number.`);
   }
   const list = rows.map((r) => r.m);
   console.log(`${list.length} numbers (${all ? 'WhatsApp + website' : 'WhatsApp'} agreements; STOP, internal and closed accounts left out)\n`);
