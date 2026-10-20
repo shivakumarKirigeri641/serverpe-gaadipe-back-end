@@ -92,6 +92,11 @@ router.get('/pricing', safe(async (_req, res) => {
     price_paise: plan?.price_paise ?? null,
     // The renewal price, as set in admin (2026-10-14) — the site's "₹11 to renew" reads it.
     renewal_paise: plan?.renewal_paise ?? null,
+    // Replace vehicle (2026-10-20: "update marketing site that we give renewal & replace"):
+    // its price and how many days after buying it stays open (pay/replace.js; 0 = any time).
+    replace_paise: await db.one(`SELECT price_paise FROM plans WHERE code = 'REPLACE9' AND is_active LIMIT 1`)
+      .then((r) => (r ? Number(r.price_paise) : null)).catch(() => null),
+    replace_window_days: await settings.num('replace_window_days', 7),
     duration_days: plan?.duration_days ?? 28,
     report_valid_days: validDays,
     free_checks_per_day: await settings.num('free_checks_per_day', 6),
