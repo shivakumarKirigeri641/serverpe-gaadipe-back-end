@@ -1866,9 +1866,13 @@ async function emailNudge(mobile, at = 'check') {
     if (asked.n >= 2) return false;
     if (asked.n === 1 && new Date(asked.last) > new Date(Date.now() - 30 * 864e5)) return false;
     const out = await send.buttons(mobile,
+      // Email carries the FULL challan details — offence, place and amount — which WhatsApp messages
+      // leave out (user, 2026-10-20: "ask user to confirm mail as mail will contain full details").
       (at === 'report'
-        ? '📧 *One more thing* — add your email so your alerts for this vehicle also reach you by email, '
-        : '📧 *Tip* — add your email so your vehicle alerts also reach you by email, ')
+        ? '📧 *One more thing* — add and confirm your email. Your *full challan details* (offence, place and amount) '
+          + 'and your alerts for this vehicle are sent there, '
+        : '📧 *Tip* — add and confirm your email. *Full challan details* (offence, place and amount) and your '
+          + 'vehicle alerts are sent there, ')
       + 'even if WhatsApp is ever unavailable. It takes a minute: we send a 4-digit code to confirm it.',
       [{ id: BTN.EMAIL, title: 'Add email' }, { id: EMAIL_LATER, title: 'Not now' }]).catch(() => ({ ok: false }));
     if (!out?.ok) return false;

@@ -107,6 +107,7 @@ async function purchases(limit) {
     // e.id is NAMED: u.* carries an id of its own that would replace it.
     `SELECT e.id AS email_id, e.attempts, e.payment_id AS pay_id, p.amount_paise, p.paid_at,
             v.reg_no, r.report_number, r.access_token, r.valid_until, r.pdf_path,
+            r.snapshot->'challans' AS report_challans,
             s.ends_on, u.*
        FROM customer_emails e
        JOIN payments p ON p.id = e.payment_id
@@ -150,6 +151,8 @@ async function purchases(limit) {
       invoiceTotalPaise: invoice?.total_paise,
       confirmed: !!r.email_verified_at,
       attachments,
+      // Every pending challan in full, as recorded (user, 2026-10-20: "email alert with full details").
+      challans: r.report_challans || null,
     });
     await db.query(`UPDATE customer_emails SET subject = $2, vehicles = $3 WHERE id = $1`,
       [r.email_id, mail.subject, JSON.stringify(r.reg_no ? [r.reg_no] : [])]);

@@ -396,6 +396,9 @@ const one = (p) => ({
   // Drink-driving offences named "Section 185 MV Act offence", as in the PDF and on WhatsApp
   // (user, 2026-10-20: "some vehicles' penalties have 'alcohol' wording"; util/safeWords).
   offence: require('../util/safeWords').offence(p.offence || (p.offences || []).map(o => o.name).join('; ') || '') || null,
+  // ... and the offence exactly as the record gives it, for EMAIL only (user, 2026-10-20: "email
+  // alert with full details"; mail/customer.fullSections). Never shown on the site or WhatsApp.
+  offence_full: p.offence || (p.offences || []).map(o => o.name).join('; ') || null,
   place: p.place || null,
   amount_paise: p.amount_paise ?? null,
   status: p.sent_to_court || p.sent_to_virtual_court ? 'In court' : (p.status || 'Pending'),

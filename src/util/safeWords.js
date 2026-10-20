@@ -62,13 +62,18 @@ const RULES = [
 
 const URL = /(https?:\/\/\S+)/i;
 
-/** The text with every rule applied, outside links. */
-function clean(text) {
+/**
+ * The text with every rule applied, outside links. { alcohol: false } leaves offence wording as
+ * it is — for EMAIL, which carries the full challan details (user, 2026-10-20: "you can send email
+ * alert with full details, but in WhatsApp make sure you don't use any violation contents").
+ */
+function clean(text, { alcohol = true } = {}) {
   if (typeof text !== 'string' || !text) return text;
   return text.split(URL).map((part, i) => {
     if (i % 2 === 1) return part;              // a URL: untouched
     let out = part;
     for (const r of RULES) {
+      if (!alcohol && r.kind === 'alcohol') continue;
       out = out.replace(r.re, (...a) => {
         const m = a[0]; const at = a[a.length - 2]; const whole = a[a.length - 1];
         let to = typeof r.to === 'function' ? r.to(...a) : r.to;

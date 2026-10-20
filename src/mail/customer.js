@@ -154,11 +154,13 @@ async function deliver(to, mail, token) {
   } : {};
   // The safety net (user, 2026-10-20: "'Government', 'Alcohol', scam such wording must never be
   // present"): subject, text and the HTML's visible text are cleaned (util/safeWords) — links and
-  // attributes never touched. The wording is also fixed at its source; this catches the rest.
+  // attributes never touched. EXCEPT offence wording: email carries the full challan details
+  // (user, 2026-10-20: "you can send email alert with full details"), so { alcohol: false }.
   const words = require('../util/safeWords');
-  const cleanHtml = (h) => (typeof h === 'string' ? h.replace(/>([^<]+)</g, (_m, t) => `>${words.clean(t)}<`) : h);
+  const tidy = (t) => words.clean(t, { alcohol: false });
+  const cleanHtml = (h) => (typeof h === 'string' ? h.replace(/>([^<]+)</g, (_m, t) => `>${tidy(t)}<`) : h);
   return mailer.send({
-    to, subject: words.clean(mail.subject), html: cleanHtml(mail.html), text: words.clean(mail.text), headers,
+    to, subject: tidy(mail.subject), html: cleanHtml(mail.html), text: tidy(mail.text), headers,
     // A purchase email carries the report and the invoice; the rest carry nothing.
     attachments: mail.attachments || [],
     // ... and answers to a mailbox a person reads, since the sender does not.
@@ -191,8 +193,8 @@ const pill = (text, state) =>
   `<span style="color:${COLOURS[state] || '#0b1f1c'};font-weight:700;">${esc(text)}</span>`;
 
 const dataNote = () => `<div style="font-size:12px;line-height:1.55;color:#41514e;background:#f6faf9;border:1px solid #e3ecea;border-radius:8px;padding:10px 12px;">
-  <b>Official Government data.</b> Vehicle and challan details come directly from the Government of India's
-  Parivahan records (VAHAN and e-Challan) and are shown exactly as received. If anything differs from your
+  <b>Live vehicle records.</b> Vehicle and challan details come from the national vehicle registration and
+  e-challan records and are shown exactly as received. GaadiPe is a private service. If anything differs from your
   documents, please verify it with your local RTO — the RTO's record prevails.</div>`;
 
 const vehicleTitle = (v) => [v.identity?.maker, v.identity?.model].filter(Boolean).join(' ') || 'Vehicle';
@@ -209,7 +211,8 @@ function fullSections(v, extra = {}) {
   const c = v.challans || {};
   const pending = (c.pending || []).slice(0, 8).map((p) => [
     `${istDay(p.date)}${p.place ? ` · ${p.place}` : ''}`,
-    `${p.offence || 'Challan'} — ${p.amount_paise != null ? rupees(p.amount_paise) : 'amount not given'} (${p.status})`]);
+    // The offence in full, as recorded — email is where the full challan details go (2026-10-20).
+    `${p.offence_full || p.offence || 'Challan'} — ${p.amount_paise != null ? rupees(p.amount_paise) : 'amount not given'} (${p.status})`]);
   const o = v.ownership || {};
   const tags = (v.fastag?.tags || []).map((t) => [`FASTag ${t.tag_id || ''}`.trim(),
     { html: pill(t.status || (t.active ? 'Active' : 'Inactive'), t.active ? 'valid' : 'expired'),
@@ -440,7 +443,7 @@ function purchaseMail(user, p = {}) {
         <b>Attached to this email:</b> ${attached.join(' and ')}. They are yours to keep.
         ${p.validUntil ? `You can also download the report again from the button below until <b>${esc(istDay(p.validUntil))}</b>.` : ''}</div>`
     : `<div style="font-size:13px;line-height:1.6;color:#41514e;background:#fff6e6;border-left:4px solid #e08700;border-radius:8px;padding:12px 14px;">
-        The Government records service is slow at the moment, so your report is still being prepared.
+        Our vehicle records source is slow at the moment, so your report is still being prepared.
         Open GaadiPe from the button below in a few minutes and it will be there. Your payment is safe.</div>`;
 
   const included = `<div style="font-size:13px;line-height:1.7;color:#0b1f1c;background:#f6faf9;border:1px solid #e3ecea;border-radius:10px;padding:14px 16px;">
@@ -452,17 +455,40 @@ function purchaseMail(user, p = {}) {
     • A dated PDF you can keep${p.alertsUntil ? `, new challans watched until <b>${esc(istDay(p.alertsUntil))}</b>` : ''}<br>
     • A warning before insurance, PUC, road tax or fitness expires — however far off that is</div>`;
 
+  /* THE CHALLANS IN FULL (user, 2026-10-20: "you can send email alert with full details, but in
+     WhatsApp don't use any violation contents"): each pending challan with its offence exactly as
+     the record gives it — the PDF and WhatsApp name drink-driving "Section 185 MV Act offence";
+     this email does not. From the report's stored record (vehicle_reports.snapshot). */
+  const c = p.challans || null;
+  const pend = Array.isArray(c?.pending) ? c.pending : [];
+  const offenceOf = (x) => x.offence || (x.offences || []).map((o) => o.name || o).filter(Boolean).join('; ') || 'Challan';
+  const challanBlock = !c ? '' : pend.length
+    ? `<div style="font-size:13px;line-height:1.6;color:#0b1f1c;background:#fff;border:1px solid #e3ecea;border-radius:10px;padding:12px 14px;">
+        <b>Pending challans in full</b> — ${pend.length} · ${esc(money(c.pending_amount_paise))} in total
+        <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;margin-top:8px;border-collapse:collapse;">
+        ${pend.slice(0, 20).map((x) => `<tr>
+          <td style="padding:6px 0;border-top:1px solid #eef3f2;vertical-align:top;width:34%;color:#41514e;">${esc(istDay(x.challan_date || x.date))}${x.place ? `<br>${esc(x.place)}` : ''}</td>
+          <td style="padding:6px 0 6px 10px;border-top:1px solid #eef3f2;vertical-align:top;">${esc(offenceOf(x))}<br>
+            <b>${x.amount_paise != null ? esc(money(x.amount_paise)) : 'Amount not given'}</b>${x.challan_no ? ` · <span style="color:#6b8380;">${esc(x.challan_no)}</span>` : ''}</td></tr>`).join('')}
+        </table>
+        ${pend.length > 20 ? `<div style="margin-top:6px;color:#6b8380;">…and ${pend.length - 20} more in your GaadiPe account.</div>` : ''}
+        <div style="margin-top:8px;color:#6b8380;">GaadiPe never collects challan payments — pay only on official traffic-police channels.</div></div>`
+    : `<div style="font-size:13px;color:#067647;"><b>No pending challans</b> on this vehicle's record.</div>`;
+  const challanText = !c ? '' : pend.length
+    ? `\n\nPending challans in full (${pend.length}):\n${pend.slice(0, 20).map((x) => `- ${istDay(x.challan_date || x.date)}${x.place ? `, ${x.place}` : ''}: ${offenceOf(x)} — ${x.amount_paise != null ? money(x.amount_paise) : 'amount not given'}`).join('\n')}`
+    : '\n\nNo pending challans on this vehicle\'s record.';
+
   const confirm = p.confirmed || !user.email_token ? '' :
     `<div style="font-size:13px;line-height:1.6;color:#41514e;">
       <b>One more thing.</b> This address is not confirmed yet.
       <a href="${esc(`${API()}/email/confirm/${user.email_token}`)}" style="color:#0f766e;font-weight:700;">Confirm it in one click</a>
-      so the daily updates for ${esc(reg)} reach you here.</div>`;
+      so the full challan details and the updates for ${esc(reg)} keep reaching you here.</div>`;
 
   const help = `<div style="font-size:13px;line-height:1.6;color:#41514e;">
     If anything is missing or looks wrong, write to <a href="mailto:${esc(SUPPORT)}" style="color:#0f766e;font-weight:700;">${esc(SUPPORT)}</a>
     and a person will answer.
-    GaadiPe shows Government records (VAHAN, e-Challan, NETC FASTag) exactly as received; where they differ from your
-    documents, your RTO's record prevails.</div>`;
+    GaadiPe is a private service and shows vehicle registration, e-challan and FASTag records exactly as received;
+    where they differ from your documents, your RTO's record prevails.</div>`;
 
   const out = T.layout({
     tagline: 'Your purchase',
@@ -472,12 +498,12 @@ function purchaseMail(user, p = {}) {
     lead: `Hi ${name}, we have received your payment of ${money(p.amountPaise)}. Your full report for `
       + `${reg}${what ? ` (${what})` : ''} is ready.`,
     stats,
-    blocks: [files, included, confirm, help].filter(Boolean),
+    blocks: [files, challanBlock, included, confirm, help].filter(Boolean),
     cta: { label: 'Open my report', url: link },
     footer: 'You are receiving this because this address was given when you bought a report on gaadipe.in. It is a purchase confirmation, not a marketing email.',
     footerHtml: '',
   });
-  out.text += `\nOpen your report: ${link}\nQuestions: ${SUPPORT}`;
+  out.text += `${challanText}\nOpen your report: ${link}\nQuestions: ${SUPPORT}`;
   // Replies go to a mailbox a person reads, not to the noreply sender.
   return { subject: `Thank you — your report for ${reg} is ready`, ...out,
            attachments: p.attachments || [], replyTo: SUPPORT };
