@@ -1625,7 +1625,7 @@ async function deliverReport(mobile, regNo, message) {
   const freeDetail = String(await settings.get('whatsapp_free_view_detail', 'count')).toLowerCase();
   const price = plan ? `₹${Math.round(plan.price_paise / 100)}` : undefined;
   await send.text(mobile, badge + (watched ? `${watched}\n\n` : '') + (bought
-    ? await report.buildFor(data, { detailed: true })
+    ? await report.buildFor(data, { detailed: true, mobile })
     : freeDetail === 'public' ? await report.publicText(data, price ? { price } : {})
     : report.basic(data, {
       ...(plan ? { price: `₹${Math.round(plan.price_paise / 100)}` } : {}),

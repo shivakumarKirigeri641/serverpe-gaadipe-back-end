@@ -93,6 +93,8 @@ async function tellOnWhatsApp(r, c) {
       + 'Challan details are now available, so we added them to your report:\n'
       + `${line.split(' · ').map((t) => `• ${t}`).join('\n')}\n\n`
       + `Your GaadiPe report ${r.report_number} now includes them — tap *My reports* in the menu to download it again.\n\n`
+      // Where the full details are (2026-10-20): the same line as the report's (whatsapp/report.js).
+      + `${(await require('../whatsapp/report').challanEmailLine(r.mobile).catch(() => null)) || ''}\n\n`
       + '_GaadiPe never collects challan payments._');
   }
   // Not even tried for someone GaadiPe may not start a conversation with (2026-10-15, send.mayStart).

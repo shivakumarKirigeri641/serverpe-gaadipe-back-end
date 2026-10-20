@@ -226,7 +226,7 @@ async function notifyPaid(result) {
     try {
       const data = await gateway.full(veh.reg_no);
       if (data?.success) {
-        await send.text(user.mobile, await report.buildFor(data, { detailed: true }));
+        await send.text(user.mobile, await report.buildFor(data, { detailed: true, mobile: user.mobile }));
 
         const reports = require('../pay/report');
         const paidFrom = result.payment.raw?.paid_from || {};
@@ -367,7 +367,7 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
       else console.warn('[pay] report for payment %d: e-Challan still not answering — issued without challans', pay.id);
     }
 
-    if (withText) await send.text(pay.mobile, await report.buildFor(data, { detailed: true }));
+    if (withText) await send.text(pay.mobile, await report.buildFor(data, { detailed: true, mobile: pay.mobile }));
 
     const paidFrom = pay.raw?.paid_from || {};
     const consent = await require('../pay/consent').forPayment({

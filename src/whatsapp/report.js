@@ -203,7 +203,8 @@ function identity(rc) {
  *   paying for, so it has to be a difference they can see.
  */
 function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
-                       detailed = false } = {}) {
+                       detailed = false, emailLine = null } = {}) {
+  const opts = { emailLine };
   const rc = data.rc || {};
   const lines = [];
 
@@ -293,6 +294,9 @@ function build(data, { soonDays = 60, owner = 'masked', docNumbers = 'masked',
     const when = parseDate(latest?.challan_date || latest?.date);
     if (when) lines.push(`Most recent · ${fmtDate(when)}`);
     if (c.disposed_count) lines.push(`_${c.disposed_count} already paid_`);
+    // Where the full details are (user, 2026-10-20): WhatsApp carries a summary, the email each
+    // challan in full (mail/customer.purchaseMail). Set by buildFor from the customer's email.
+    if (opts.emailLine) lines.push(opts.emailLine);
     lines.push('_GaadiPe never collects challan payments — pay only on official traffic-police channels._');
   } else if (c) {
     lines.push('', '✅ *Challans* — none pending');
@@ -442,11 +446,29 @@ function safeRc(rc) {
   return out;
 }
 
+/*
+ * WHERE THE FULL CHALLAN DETAILS ARE (user, 2026-10-20: "mention that more details of the challan
+ * will be shared in mail"). Said as a plain fact — a summary here, everything by email — never as
+ * "because of Meta". With a confirmed email: where it went. Without: how to add one (the menu's
+ * "Email for alerts", BTN.EMAIL in flow.js).
+ */
+async function challanEmailLine(mobile) {
+  const db = require('../db');
+  const u = await db.one(`SELECT email, email_verified_at FROM users WHERE mobile = $1`, [mobile]);
+  if (u?.email && u.email_verified_at) {
+    const [name, domain] = String(u.email).split('@');
+    const masked = `${name.slice(0, 2)}${'•'.repeat(Math.max(1, name.length - 2))}@${domain || ''}`;
+    return `📧 The full challan details — offence, place and amount — are sent to your email (${masked}).`;
+  }
+  return '📧 For the full challan details — offence, place and amount — add and confirm your email: tap *Email for alerts* in the menu.';
+}
+
 /** build(), with the display modes read from settings. */
 async function buildFor(data, opts = {}) {
   const settings = require('../util/settings');
   return build(data, {
     ...opts,
+    emailLine: opts.mobile ? await challanEmailLine(opts.mobile).catch(() => null) : null,
     // The owner's name masked, as on Parivahan (user, 2026-10-01, migration 095 —
     // which reverses 089's 'hidden').
     owner: await settings.get('owner_name_display', 'masked'),
@@ -520,5 +542,5 @@ async function publicText(data, { price = '₹19' } = {}) {
   return lines.join('\n');
 }
 
-module.exports = { build, buildFor, basic, publicText, attentionCount, attentionLabels, attentionSummary, safeRc, documentsOf, human,
+module.exports = { build, buildFor, challanEmailLine, basic, publicText, attentionCount, attentionLabels, attentionSummary, safeRc, documentsOf, human,
                    maskName, maskNumber, maskFirst, titleCase, NEVER_SHOW };
