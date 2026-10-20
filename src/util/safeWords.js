@@ -26,7 +26,8 @@ const RULES = [
   R(/\b(?:drunk(?:en)?|drink)[\s-]*(?:and[\s-]*)?driv\w*/gi, 'Section 185 MV Act offence'),
   R(/\bdriv\w*\s+(?:while\s+)?(?:drunk(?:en)?|intoxicated|under the influence(?: of (?:drink|liquor|alcohol|drugs?))?)/gi, 'Section 185 MV Act offence'),
   R(/\b(?:under the influence(?: of (?:drink|liquor|alcohol|drugs?))?|influence of (?:drink|liquor|alcohol|drugs?))\b/gi, 'Section 185 MV Act offence'),
-  R(/\b(?:drunk(?:en)?|alcohol(?:ic)?|liquor|intoxicat\w*)\b|\b(?:sharab|daru)\b|शराब|नशे/gi, 'Section 185 offence'),
+  R(/(?:शराब|नशे)\s*(?:में|पीकर)?\s*(?:गाड़ी\s*(?:चलाना|चलाने)?)?/g, 'धारा 185 का अपराध '),
+  R(/\b(?:drunk(?:en)?|alcohol(?:ic)?|liquor|intoxicat\w*)(?:\s+offen[cs]es?)?\b|\b(?:sharab|daru)\b/gi, 'Section 185 offence'),
 
   as('government'),
   // Government look-alike — phrases first.

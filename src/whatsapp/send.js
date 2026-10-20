@@ -478,6 +478,24 @@ async function document(mobile, filePath, { filename, caption } = {}) {
 async function template(mobile, name, params = [], { language = 'en', buttons = [] } = {}) {
   const clean = params.map(p => String(p ?? '').replace(/\s*\n\s*/g, ' · ').trim());
 
+  /* THE TEMPLATE'S OWN WORDING (user, 2026-10-20: "make sure no offence words go in alerts or
+     WhatsApp replies"). The cleaner at post() sees only the values GaadiPe fills in; the approved
+     text lives at Meta. gp_monitoringalert_en_v1 said "keep the documents updated to avoid fines"
+     and was rejected as SCAM. So a template whose saved wording (wa_templates) holds any of the
+     words (util/safeWords) is never sent — the admin is told once a day to replace it. */
+  const saved = await db.one(
+    `SELECT concat_ws(' ', header_text, body_text, footer_text) AS words FROM wa_templates
+      WHERE template_name = $1 ORDER BY (language = $2) DESC LIMIT 1`, [name, language]).catch(() => null);
+  if (saved?.words && require('../util/safeWords').risky(saved.words)) {
+    console.warn('[wa] template %s NOT sent: its wording holds a flagged word', name);
+    require('../util/adminPing').ping({
+      key: `template_words:${name}:${new Date().toISOString().slice(0, 10)}`, severity: 'warning', source: 'whatsapp',
+      title: `⚠️ Template ${name} not sent — flagged wording`,
+      text: `The approved wording of ${name} contains a word Meta flags (Government / VAHAN / alcohol / "avoid fines" / "pay your challan"). It was not sent. Create a clean replacement template in WhatsApp Manager and switch the setting to it.`,
+    }).catch(() => {});
+    return { ok: false, error: 'template_wording_flagged' };
+  }
+
   // STOP (user, 2026-09-25). The Terms say that after STOP we stop messaging
   // them, other than to reply. A template is how GaadiPe starts a message —
   // broadcast, reminder, alert — so it is refused here, at the one door every
