@@ -22,6 +22,7 @@ const as = (k) => { kind = k; return null; };
 
 const RULES = [
   // Alcohol — whole offence phrases first, then single words.
+  R(/\bdriv\w*\s+by\s+an?\s+(?:drunk(?:en)?|intoxicated)\s+person(?:\s*[\/,]\s*(?:or\s+)?under the influence(?: of (?:drink|liquor|alcohol|drugs?))?)?/gi, 'Section 185 MV Act offence'),
   R(/\b(?:drunk(?:en)?|drink)[\s-]*(?:and[\s-]*)?driv\w*/gi, 'Section 185 MV Act offence'),
   R(/\bdriv\w*\s+(?:while\s+)?(?:drunk(?:en)?|intoxicated|under the influence(?: of (?:drink|liquor|alcohol|drugs?))?)/gi, 'Section 185 MV Act offence'),
   R(/\b(?:under the influence(?: of (?:drink|liquor|alcohol|drugs?))?|influence of (?:drink|liquor|alcohol|drugs?))\b/gi, 'Section 185 MV Act offence'),
@@ -84,10 +85,23 @@ function clean(text) {
   }).join('');
 }
 
+/*
+ * A CHALLAN'S OFFENCE NAME (user, 2026-10-20: "some vehicles' penalties have 'alcohol' wording").
+ * Offence texts are long official phrases — "Driving by a drunken person / under the influence of
+ * alcohol" — so word-by-word cleaning leaves them garbled. As the PDF does (pdf/vehicleReport
+ * neutral()): each offence ("; "-separated) that mentions drink at all becomes, whole,
+ * "Section 185 MV Act offence"; any other is cleaned as usual.
+ */
+const DRINK = /(?<![A-Za-z])(?:drunk(?:en)?|drink|alcohol\w*|liquor|intoxicat\w*|under the influence|sharab|daru)(?![A-Za-z])|शराब|नशे/i;
+function offence(text) {
+  if (typeof text !== 'string' || !text) return text;
+  return text.split(/\s*;\s*/).map((o) => (DRINK.test(o) ? 'Section 185 MV Act offence' : clean(o))).join('; ');
+}
+
 /** Does the text still hold any of the words (after cleaning, it never should)? */
 function risky(text) {
   const s = String(text || '').split(URL).filter((_, i) => i % 2 === 0).join(' ');
   return RULES.some((r) => { const hit = r.re.test(s); r.re.lastIndex = 0; return hit; });
 }
 
-module.exports = { clean, risky, RULES };
+module.exports = { clean, offence, risky, RULES };

@@ -395,7 +395,7 @@ const one = (p) => ({
   date: p.challan_date || null,
   // Drink-driving offences named "Section 185 MV Act offence", as in the PDF and on WhatsApp
   // (user, 2026-10-20: "some vehicles' penalties have 'alcohol' wording"; util/safeWords).
-  offence: require('../util/safeWords').clean(p.offence || (p.offences || []).map(o => o.name).join('; ') || '') || null,
+  offence: require('../util/safeWords').offence(p.offence || (p.offences || []).map(o => o.name).join('; ') || '') || null,
   place: p.place || null,
   amount_paise: p.amount_paise ?? null,
   status: p.sent_to_court || p.sent_to_virtual_court ? 'In court' : (p.status || 'Pending'),
