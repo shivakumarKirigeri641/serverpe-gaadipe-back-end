@@ -54,6 +54,8 @@ const filled = (v, fallback = 'Not applicable') => String(v ?? '').trim() || fal
 async function sendAlert(mobile, { name, vehicle, vehicleId, document, expiry, status,
                                    kind = 'chg', docs = ['all'], settingKey = 'wa_template_monitoring' }) {
   const tpl = await settings.get(settingKey, NAME);
+  // No template set yet (the new number, until Meta approves one — scripts/wa-golive.js): not tried.
+  if (!String(tpl || '').trim()) return { ok: false, error: 'no_template_yet' };
   const tail = `${vehicleId || 0}|${kind}|${(docs.length ? docs : ['all']).join(',')}`;
   const out = await send.template(mobile, tpl,
     [filled(name, 'there'), filled(vehicle), filled(document), filled(expiry), filled(status).slice(0, 900)],
