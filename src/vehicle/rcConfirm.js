@@ -33,17 +33,17 @@ function needsConfirm(rc, days = 30) {
   });
 }
 
-async function recentlyConfirmed(vehicleId) {
-  const days = Math.max(1, await settings.num('rc_confirm_days', 3));
+async function recentlyConfirmed(vehicleId, hours = null) {
+  const h = hours ?? Math.max(1, await settings.num('rc_confirm_days', 3)) * 24;
   const row = await db.one(
     `SELECT 1 AS yes FROM event_log WHERE kind = 'rc_confirm' AND (detail->>'vehicle_id')::bigint = $1
-        AND created_at > now() - make_interval(days => $2::int) LIMIT 1`, [vehicleId, days]).catch(() => null);
+        AND created_at > now() - make_interval(hours => $2::int) LIMIT 1`, [vehicleId, Math.max(1, Math.round(h))]).catch(() => null);
   return Boolean(row);
 }
 
-async function refresh({ regNo, vehicleId, userId = null, why = '' }) {
+async function refresh({ regNo, vehicleId, userId = null, why = '', hours = null }) {
   if (!regNo || !vehicleId) return null;
-  if (await recentlyConfirmed(vehicleId)) return null;
+  if (await recentlyConfirmed(vehicleId, hours)) return null;
   // Claimed first: two jobs (expiry, monitoring) asking in the same minute pay once.
   await db.query(`INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'rc_confirm', $2)`,
     [userId, JSON.stringify({ vehicle_id: String(vehicleId), reg_no: regNo, why })]);
@@ -59,4 +59,24 @@ async function refresh({ regNo, vehicleId, userId = null, why = '' }) {
   return data;
 }
 
-module.exports = { refresh, needsConfirm, recentlyConfirmed };
+/*
+ * A PAYING CUSTOMER LOOKS AT THEIR OWN VEHICLE (user, 2026-10-20: "on full report and the next time the
+ * user checks any vehicle or My reports, call IDSPay to get updated details — to get customers I need
+ * the updated ones; I treat this as an investment until a cheaper provider"). A vehicle they hold a
+ * valid report for, checked again or its report opened: one fresh lookup first (ULIP, then the paid
+ * source), at most once per vehicle per rc_owner_refresh_hours (24), stored — so what they see next,
+ * from the cache or the snapshot, is today's record. Never throws; the caller carries on regardless.
+ */
+async function ownerRefresh({ regNo, userId = null, why = 'owner' }) {
+  try {
+    const v = await db.one(`SELECT id FROM vehicles WHERE reg_no = $1`, [regNo]);
+    if (!v) return null;
+    const hours = Math.max(1, await settings.num('rc_owner_refresh_hours', 24));
+    return await refresh({ regNo, vehicleId: v.id, userId, why, hours });
+  } catch (e) {
+    console.error('[rc-confirm] owner refresh %s: %s', regNo, e.message);
+    return null;
+  }
+}
+
+module.exports = { refresh, ownerRefresh, needsConfirm, recentlyConfirmed };

@@ -1531,7 +1531,9 @@ async function deliverReport(mobile, regNo, message) {
   // The paid RC backup only for a vehicle they have paid for (rc_backup_paid_only):
   // a free check asks ULIP alone (vehicle/rcBackup.js freeOpts).
   const rcBackup = require('../vehicle/rcBackup');
-  const ownsReport = await rcBackup.paidOnly() ? await reports.validFor(user.id, regNo).catch(() => null) : null;
+  const ownsReport = await reports.validFor(user.id, regNo).catch(() => null);
+  // Their own vehicle: today's record, not the one saved at purchase (vehicle/rcConfirm.ownerRefresh).
+  if (ownsReport) await require('../vehicle/rcConfirm').ownerRefresh({ regNo, userId: user.id, why: 'owner check · WhatsApp' });
   let data;
   try {
     data = await gateway.full(regNo, ownsReport ? {} : await rcBackup.freeOpts());
@@ -1946,6 +1948,9 @@ async function refreshReport(r) {
   if (!row || !row.valid_until || new Date(row.valid_until) <= new Date()) return { refreshed: false };
   const at = Date.parse(row.snapshot?.fetched_at || '');
   if (at && Date.now() - at < 60 * 60 * 1000) return { refreshed: false, recent: true, at: new Date(at) };
+  // The RC fresh first — ULIP has none for a private vehicle — via the paid source, once a day per
+  // vehicle (vehicle/rcConfirm.ownerRefresh, 2026-10-20); the saved RC below is then today's.
+  await require('../vehicle/rcConfirm').ownerRefresh({ regNo: row.reg_no, userId: row.user_id, why: 'My reports download' });
   const data = await gateway.full(row.reg_no, { challans: 'all', refresh: 1, backup: 0, rc_saved: 1 }).catch(() => null);
   if (!data?.success || !data.rc) return { refreshed: false };
   const old = row.snapshot || {};
