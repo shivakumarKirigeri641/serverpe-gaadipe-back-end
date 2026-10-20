@@ -372,7 +372,7 @@ function alertMail(person, byVehicle) {
     preheader: regs.map((r) => `${r}: ${byVehicle.get(r).map((i) => i.text).join(', ')}`).join(' · ').slice(0, 140),
     badge: { text: count === 1 ? 'Something changed' : `${count} things changed`, tone: bad ? 'wrong' : 'watch' },
     title: regs.length === 1 ? `An update on ${regs[0]}` : `Updates on ${regs.length} of your vehicles`,
-    lead: `Hi ${name}, GaadiPe checked your vehicle${regs.length === 1 ? '' : 's'} against the Government records (VAHAN) today. Here is what changed.`,
+    lead: `Hi ${name}, GaadiPe checked your vehicle${regs.length === 1 ? '' : 's'} against the vehicle records today. Here is what changed.`,
     intro: cards.map((c) => c.html),
     textBlocks: cards.map((c) => c.text),
     blocks: [`<div style="font-size:12.5px;line-height:1.6;color:#41514e;">Already renewed? The RTO record can take a few days to show the new date — GaadiPe keeps checking and will tell you when it does.</div>`],

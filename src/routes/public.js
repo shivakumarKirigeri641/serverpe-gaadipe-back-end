@@ -157,8 +157,8 @@ async function checkNotice(settings) {
     if (w?.state !== 'down') return null;
   }
   return {
-    en: String(await settings.get('check_notice_en', '') || '') || 'Heads up: the Government services we depend on (VAHAN / e-Challan) are down at times right now, so vehicle details may fail to fetch. If a check fails, please try again after a while.',
-    hi: String(await settings.get('check_notice_hi', '') || '') || 'ध्यान दें: हम जिन सरकारी सेवाओं (VAHAN / e-Challan) पर निर्भर हैं, वे अभी कभी-कभी बंद रहती हैं, इसलिए गाड़ी की जानकारी लाने में दिक्कत हो सकती है। अगर जाँच न हो पाए, तो कुछ देर बाद फिर कोशिश करें।',
+    en: String(await settings.get('check_notice_en', '') || '') || 'Heads up: the vehicle records source we depend on is down at times right now, so vehicle details may fail to fetch. If a check fails, please try again after a while.',
+    hi: String(await settings.get('check_notice_hi', '') || '') || 'ध्यान दें: हम जिस वाहन रिकॉर्ड स्रोत पर निर्भर हैं, वह अभी कभी-कभी बंद रहता है, इसलिए गाड़ी की जानकारी लाने में दिक्कत हो सकती है। अगर जाँच न हो पाए, तो कुछ देर बाद फिर कोशिश करें।',
   };
 }
 

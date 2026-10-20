@@ -120,7 +120,7 @@ async function build(fleet, list, { date = new Date() } = {}) {
 
   const foot = 7 + list.length;
   ws.mergeCells(foot, 1, foot, lastCol);
-  ws.getCell(foot, 1).value = 'Source: Government records (VAHAN, e-Challan) via ULIP, as they stood at the last check. '
+  ws.getCell(foot, 1).value = 'Source: vehicle registration and e-challan records via ULIP, as they stood at the last check. '
     + 'If anything differs from your documents, the RTO record prevails. Reply to the email to add, remove or replace a vehicle.';
   ws.getCell(foot, 1).font = { size: 9, italic: true, color: { argb: C.body } };
   ws.getCell(foot, 1).alignment = { wrapText: true, vertical: 'top' };

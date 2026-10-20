@@ -123,7 +123,7 @@ function daily(fleet, list, changes, xlsx, date = new Date()) {
       sections: [
         actionRows.length ? { heading: `Action needed${actions.length > 15 ? ` (15 of ${actions.length} — all in the Excel)` : ''}`, rows: actionRows } : null,
         changes.length ? { heading: 'Changed since yesterday', rows: changes.slice(0, 20).map((c) => { const [reg, ...rest] = c.split(': '); return [reg, rest.join(': ')]; }) } : null,
-        unchecked.length ? { heading: 'Not checked yet', rows: [['Vehicles', `${unchecked.join(', ')} — the Government service did not answer; we try again`]] } : null,
+        unchecked.length ? { heading: 'Not checked yet', rows: [['Vehicles', `${unchecked.join(', ')} — the records source did not answer; we try again`]] } : null,
         { heading: 'Your plan', rows: [['Monitoring until', fleet.ends_at ? fmt(new Date(fleet.ends_at)) : null], ['Changes', 'Reply to this email to add, remove or replace a vehicle']] },
       ].filter(Boolean),
     }),

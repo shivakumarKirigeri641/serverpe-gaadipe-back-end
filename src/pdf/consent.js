@@ -91,8 +91,8 @@ function consentBlock(doc, y, consent, { compact = false } = {}) {
 
   doc.fillColor(T.BRAND.muted).font(doc._F.regular).fontSize(7.2)
      .text(
-       'This document was supplied on that declaration. It is a reproduction of Government records '
-       + '(VAHAN, e-Challan, NETC FASTag) for the stated purpose only; it is not a Government-issued '
+       'This document was supplied on that declaration. It is a reproduction of vehicle registration, '
+       + 'e-challan and NETC FASTag records for the stated purpose only; it is not an official '
        + 'record. Personal details — the owner’s name, chassis and engine numbers and document numbers — '
        + 'are masked. The requester is solely responsible for any use of this content. The report is a '
        + 'digital supply delivered on payment, and the purchase is final and non-refundable under the '

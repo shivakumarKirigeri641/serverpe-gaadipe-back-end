@@ -318,7 +318,7 @@ async function fetchRc(regNo, opts = {}) {
   // stop here rather than paying for a second lookup to be told the same thing.
   if (first.outcome === OUTCOME.NOT_FOUND) {
     return { ok: false, notFound: true, data: null, source: first.source,
-             code: first.code, error: first.message || 'Vehicle not found in VAHAN', calls };
+             code: first.code, error: first.message || 'Vehicle not found in the vehicle records', calls };
   }
 
   /* ULIP'S OWN DAILY LIMIT (2026-10-07): "Daily API limit exceeded for your
@@ -327,7 +327,7 @@ async function fetchRc(regNo, opts = {}) {
      asked a second time: eChallan.app, then IDSPay, straight away. */
   if (/daily api limit|limit exceeded/i.test(String(first.message || ''))) {
     return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null, code: 'ULIP_DAILY_LIMIT',
-             error: 'VAHAN is not responding. Please try again in a few minutes.', calls });
+             error: 'The vehicle records source is not responding. Please try again in a few minutes.', calls });
   }
 
   // A login failure is not worth a fallback: both datasets sit behind the same
@@ -348,12 +348,12 @@ async function fetchRc(regNo, opts = {}) {
   }
   if (second.outcome === OUTCOME.NOT_FOUND) {
     return { ok: false, notFound: true, data: null, source: second.source,
-             code: second.code, error: second.message || 'Vehicle not found in VAHAN', calls };
+             code: second.code, error: second.message || 'Vehicle not found in the vehicle records', calls };
   }
 
   return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null,
            code: second.code || first.code,
-           error: 'VAHAN is not responding. Please try again in a few minutes.', calls });
+           error: 'The vehicle records source is not responding. Please try again in a few minutes.', calls });
 }
 
 /*

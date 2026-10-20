@@ -43,7 +43,7 @@ const badPlate = (res, regNo, message) =>
 
 const notFound = (res, regNo, message) =>
   res.status(404).json({ success: false, error: 'vehicle_not_found', vehicle_number: regNo,
-    message: message || 'No Government record found for this registration number.' });
+    message: message || 'No vehicle record found for this registration number.' });
 
 /**
  * One dataset, cache-first.

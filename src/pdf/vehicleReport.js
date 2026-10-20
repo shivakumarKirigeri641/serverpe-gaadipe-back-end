@@ -141,7 +141,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       doc.rect(T.M, y, W, 22).fill('#fff6e6');
       doc.fillColor('#8f5600').font(doc._F.bold).fontSize(9)
          .text('SAMPLE — an illustration of the GaadiPe report. Not a real vehicle, '
-               + 'and not a Government record.', T.M + 10, y + 6.5, { width: W - 20 });
+               + 'and not an official record.', T.M + 10, y + 6.5, { width: W - 20 });
       y += 32;
     }
 
@@ -285,7 +285,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
     ], y, { cols: 2 });
     if (noAnswer) {
       doc.fillColor(T.BRAND.muted).font(doc._F.regular).fontSize(7.6)
-         .text('The Government e-Challan service did not respond when this report was made, so challans could not be checked yet — '
+         .text('The e-challan records source did not respond when this report was made, so challans could not be checked yet — '
            + 'this does not mean there are none. GaadiPe keeps checking every 30 minutes over the next 24 hours. As soon as the '
            + 'service answers, this report is updated with the full challan details (same report number, same download link) '
            + 'and we let you know by email and notification. You do not need to do anything.', T.M, y + 4, { width: W });
@@ -430,8 +430,8 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
        .text(
          'Declaration: the requester confirmed that this vehicle and its owner are known to them, '
          + 'and that these details were requested for a lawful and legitimate purpose, taking full '
-         + 'responsibility for their use. Personal details are masked, as on the Government’s '
-         + 'Parivahan portal: the owner’s name, the chassis and engine numbers, and document numbers.',
+         + 'responsibility for their use. Personal details are masked: '
+         + 'the owner’s name, the chassis and engine numbers, and document numbers.',
          T.M, y + 4, { width: W, align: 'justify' });
 
     /* WHOSE COPY THIS IS (user, 2026-09-18): the buyer on every page, and a
@@ -455,10 +455,11 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
         page: i + 1, total: range.count, docNumber: report.report_number,
         generatedAt, business,
         disclaimer:
-          'All particulars are reproduced as received from Government of India sources through the '
-          + 'Unified Logistics Interface Platform (VAHAN, e-Challan, NETC FASTag). These replicas are '
-          + 'synchronised periodically and may lag behind the live record at the RTO. GaadiPe does not '
-          + 'create, alter or verify this data, and this document is not a Government-issued record. '
+          // No "Government", "VAHAN" or "Parivahan" (user, 2026-10-20: "must never be present").
+          'All particulars are reproduced as received from the national vehicle registration, e-challan '
+          + 'and NETC FASTag records through the Unified Logistics Interface Platform (ULIP). These replicas are '
+          + 'synchronised periodically and may lag behind the live record at the RTO. GaadiPe is a private '
+          + 'service: it does not create, alter or verify this data, and this document is not an official record. '
           + 'Where anything differs from your papers, the RTO record prevails.',
       });
     }

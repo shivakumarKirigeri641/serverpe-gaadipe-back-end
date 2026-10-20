@@ -293,7 +293,7 @@ function verdict(data) {
   }
   const owners = Number(rc.owner_serial || 0);
   if (owners >= 3) out.push({ tone: 'watch', text: `This vehicle has had ${owners} owners. Check the service record and the condition carefully.` });
-  if (!out.length) out.push({ tone: 'good', text: 'No loan, no blacklist, no pending challans and every document valid on the Government record.' });
+  if (!out.length) out.push({ tone: 'good', text: 'No loan, no blacklist, no pending challans and every document valid on the vehicle record.' });
   return out;
 }
 

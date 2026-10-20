@@ -258,7 +258,7 @@ function mailFor(user, regNo, due) {
 
   // The vehicle as a card (2026-10-07): the plate, each document with its pill and the days left.
   const card = T.vehicleCard({
-    reg: regNo, sub: "From today's Government record (VAHAN)",
+    reg: regNo, sub: "From today's vehicle record",
     items: due.map((d) => ({ label: d.doc.label, text: d.days < 0 ? `Expired on ${istDay(d.date)}` : `Valid till ${istDay(d.date)}`, tone: d.days < 0 ? 'bad' : 'warn', days: d.days })),
   });
 
@@ -276,7 +276,7 @@ function mailFor(user, regNo, due) {
       border-left:4px solid ${gone ? '#b42318' : '#e08700'};border-radius:8px;padding:12px 14px;">
       ${T.esc(adviceLine(due))}</div>`,
       `<div style="font-size:13px;line-height:1.6;color:#41514e;">
-        Checked against the Government record (VAHAN) today. If you have already renewed and it still shows the old
+        Checked against the vehicle record today. If you have already renewed and it still shows the old
         date, the RTO record can take a few days to catch up.</div>`],
     cta: { label: 'Open in GaadiPe', url: `${site}/chat?reg=${encodeURIComponent(regNo)}` },
     footer: 'You are receiving this because you bought a GaadiPe report for this vehicle, which includes monitoring.',

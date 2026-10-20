@@ -131,7 +131,7 @@ async function anonCheck(req) {
   if (used.ip >= perIp) return refuse('daily_limit_ip', 429, { error: 'sign_in_needed', message: SIGN_IN });
   if (used.failed_hour >= 3) {
     return refuse('retry_limit', 429, { error: 'records_busy',
-      message: 'The Government vehicle records server is slow right now. Please try again in a little while — or sign in to check this vehicle.' });
+      message: 'Our vehicle records source is slow right now. Please try again in a little while — or sign in to check this vehicle.' });
   }
   if (used.hour >= perHour) {
     return refuse('hourly_site_cap', 429, { error: 'sign_in_needed',
@@ -191,8 +191,8 @@ async function anonCheck(req) {
     return { status: data?.error === 'vehicle_not_found' || data?.error === 'not_found' ? 404 : 503, body: {
       error: data?.error || 'unavailable',
       message: data?.error === 'vehicle_not_found' || data?.error === 'not_found'
-        ? `No Government record was found for ${parsed.regNo}. Please check the number — very new vehicles can take a few weeks to appear.`
-        : 'The Government vehicle records server is slow right now. Please try again in a little while.',
+        ? `No vehicle record was found for ${parsed.regNo}. Please check the number — very new vehicles can take a few weeks to appear.`
+        : 'Our vehicle records source is slow right now. Please try again in a little while.',
     } };
   }
   const plan = await require('../pay/billing').reportPlan();

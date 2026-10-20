@@ -229,7 +229,7 @@ const REJECT_REASONS = {
   unclear: 'The photo was not clear enough to read',
   not_rc: 'The photo was not of an RC (registration certificate)',
   other_vehicle: 'The RC is for a different vehicle number',
-  name: 'The owner name does not match the Government record',
+  name: 'The owner name does not match the vehicle record',
   hidden: 'The vehicle number, owner name or chassis number was covered',
   other: null,
 };

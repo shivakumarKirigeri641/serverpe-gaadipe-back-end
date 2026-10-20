@@ -152,8 +152,13 @@ async function deliver(to, mail, token) {
     'List-Unsubscribe': `<${API()}/email/unsubscribe/${token}>`,
     'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
   } : {};
+  // The safety net (user, 2026-10-20: "'Government', 'Alcohol', scam such wording must never be
+  // present"): subject, text and the HTML's visible text are cleaned (util/safeWords) — links and
+  // attributes never touched. The wording is also fixed at its source; this catches the rest.
+  const words = require('../util/safeWords');
+  const cleanHtml = (h) => (typeof h === 'string' ? h.replace(/>([^<]+)</g, (_m, t) => `>${words.clean(t)}<`) : h);
   return mailer.send({
-    to, subject: mail.subject, html: mail.html, text: mail.text, headers,
+    to, subject: words.clean(mail.subject), html: cleanHtml(mail.html), text: words.clean(mail.text), headers,
     // A purchase email carries the report and the invoice; the rest carry nothing.
     attachments: mail.attachments || [],
     // ... and answers to a mailbox a person reads, since the sender does not.
@@ -210,7 +215,7 @@ function fullSections(v, extra = {}) {
     { html: pill(t.status || (t.active ? 'Active' : 'Inactive'), t.active ? 'valid' : 'expired'),
       text: t.status || (t.active ? 'Active' : 'Inactive') }]);
   return [
-    { heading: `${head} — documents`, rows: docs.length ? docs : [['Documents', 'No dates on the Government record']] },
+    { heading: `${head} — documents`, rows: docs.length ? docs : [['Documents', 'No dates on the vehicle record']] },
     { heading: `${head} — challans`, rows: [
       ['Pending challans', c.pending_count ? { html: pill(`${c.pending_count} pending · ${rupees(c.pending_amount_paise)}`, 'expired'), text: `${c.pending_count} pending · ${rupees(c.pending_amount_paise)}` } : { html: pill('None pending', 'valid'), text: 'None pending' }],
       ...pending,
@@ -225,7 +230,7 @@ function fullSections(v, extra = {}) {
       ['Registered at', v.identity?.registered_at || null],
       ...tags,
       ['Alerts until', extra.alertsUntil ? istDay(extra.alertsUntil) : null],
-      ['Last Government check', v.checked_at ? istDay(v.checked_at) : null],
+      ['Last records check', v.checked_at ? istDay(v.checked_at) : null],
     ] },
   ];
 }
@@ -321,7 +326,7 @@ function dailyMail(user, { paid, changes = [], others = [] }) {
   // The data note sits after the vehicles, before the button.
   out.html = out.html.replace('<tr><td style="padding:24px 28px 8px 28px;" align="left">',
     `<tr><td style="padding:18px 28px 0 28px;">${dataNote()}</td></tr><tr><td style="padding:24px 28px 8px 28px;" align="left">`);
-  out.text += '\n\nOfficial Government data from Parivahan (VAHAN and e-Challan). If anything differs from your documents, verify with your local RTO.'
+  out.text += '\n\nVehicle registration and e-challan records, shown as received. GaadiPe is a private service. If anything differs from your documents, verify with your local RTO.'
     + `\nUnsubscribe: ${API()}/email/unsubscribe/${user.email_token}`;
   const subject = changes.length
     ? `${changes[0].reg_no}: ${changes[0].text}${changes.length > 1 ? ` +${changes.length - 1} more` : ''} — GaadiPe`
@@ -341,7 +346,7 @@ function digestMail(user, records, { detail = 'count' } = {}) {
     badge: attention ? { text: 'Needs attention', tone: 'watch' } : { text: 'Your vehicles', tone: 'info' },
     title: attention ? `${attention} vehicle${attention === 1 ? '' : 's'} you checked need${attention === 1 ? 's' : ''} attention`
       : 'The vehicles you checked on GaadiPe',
-    lead: `Hi ${name}, here is where the vehicles you checked stand, from the last Government record GaadiPe fetched.`,
+    lead: `Hi ${name}, here is where the vehicles you checked stand, from the last vehicle record GaadiPe fetched.`,
     sections: views.map(basicSection),
     blocks: [`<div style="font-size:13px;line-height:1.6;color:#0b1f1c;background:#e7f3f2;border-radius:8px;padding:12px 14px;">
       <b>Want the dates, amounts and daily alerts?</b> The full report shows every expiry date, each challan with its amount,
