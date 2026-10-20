@@ -284,25 +284,38 @@ async function setSetting(key, value) {
   await settings.refresh?.();
 }
 
+/** Returns { balance (paise), from: 'IDSPay' | 'estimated' } or null when the balance is not tracked. */
 async function noteBalance(json) {
   const raw = String(await settings.get('rc_backup_balance_paise', '') ?? '').trim();
   const reported = balanceIn(json);
-  if (raw === '' && reported === null) return;               // not tracked
+  if (raw === '' && reported === null) return null;          // not tracked
   const cost = Math.round((await settings.num('rc_backup_cost_paise', 300)) * 1.18);
   const balance = reported !== null ? Math.round(reported * 100) : Math.max(0, Number(raw) - cost);
   await setSetting('rc_backup_balance_paise', balance);
   const low = await settings.num('rc_backup_low_balance_paise', 5000);
-  if (balance <= low && !(await paidOnly())) {
-    await setSetting('rc_backup_paid_only', 'true');
-    console.warn('[rc-backup] balance ₹%s at or below ₹%s — backup kept for paying customers again', (balance / 100).toFixed(2), (low / 100).toFixed(0));
-    require('../util/adminPing').ping({
-      key: 'rc_backup_low_balance', severity: 'warning', source: 'vehicle_api',
-      title: '💰 IDSPay balance low — free checks stopped using it',
-      text: `The IDSPay balance is about ₹${(balance / 100).toFixed(2)} (₹${(low / 100).toFixed(0)} or less), so the paid backup is `
-        + 'now used ONLY for paying customers again. Free checks wait for ULIP. Recharge IDSPay, enter the new balance in '
-        + 'Prices & settings → RC backup, and switch rc_backup_paid_only off if you want free checks to use it again.',
+  if (balance <= low) {
+    // Free checks stop using it, so what is left serves paying customers.
+    const switched = !(await paidOnly());
+    if (switched) await setSetting('rc_backup_paid_only', 'true');
+    console.warn('[rc-backup] balance ₹%s at or below ₹%s — %s', (balance / 100).toFixed(2), (low / 100).toFixed(0),
+      switched ? 'backup kept for paying customers again' : 'still low');
+    /* MAILED EVERY DAY IT STAYS LOW (user, 2026-10-20: "mail me if it goes below ₹50"): once per IST day
+       while it is low — not only the moment it first crossed — whatever rc_backup_paid_only already was. */
+    const day = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+    // adminPing emails every call it gets, so the day is claimed first: one email a day, not one per lookup.
+    const first = await db.one(
+      `INSERT INTO event_log (kind, detail) SELECT 'rc_backup_low_mail', $1::jsonb
+        WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE kind = 'rc_backup_low_mail' AND detail->>'day' = $2) RETURNING id`,
+      [JSON.stringify({ day, balance_paise: balance }), day]).catch(() => null);
+    if (first) require('../util/adminPing').ping({
+      key: `rc_backup_low_balance:${day}`, severity: 'warning', source: 'vehicle_api',
+      title: `💰 IDSPay balance low — ₹${(balance / 100).toFixed(2)} left`,
+      text: `The IDSPay balance is about ₹${(balance / 100).toFixed(2)} (₹${(low / 100).toFixed(0)} or less). `
+        + 'Free checks have stopped using IDSPay so the rest serves paying customers. Recharge IDSPay, enter the new balance '
+        + '(in paise) in Settings → rc_backup_balance_paise, and set rc_backup_paid_only to false to let free checks use it again.',
     }).catch(() => {});
   }
+  return { balance, from: reported !== null ? 'IDSPay' : 'estimated' };
 }
 
 async function lookup(regNo) {
@@ -319,7 +332,10 @@ async function lookup(regNo) {
   try {
     const { http, json } = await request(regNo);
     out = read(http, json, regNo, { storeFull: await settings.bool('rc_backup_store_full', true) });
-    await noteBalance(json).catch((e) => console.error('[rc-backup] balance:', e.message));
+    const bal = await noteBalance(json).catch((e) => { console.error('[rc-backup] balance:', e.message); return null; });
+    // Every call in the server log with what is left (user, 2026-10-20: "show the remaining IDSPay balance in the log").
+    console.log('[rc-backup] %s: %s · call %d/%d today · balance %s', regNo, out.outcome, t.used + 1, t.limit,
+      bal ? `₹${(bal.balance / 100).toFixed(2)} (${bal.from})` : 'not tracked — enter it in Settings → rc_backup_balance_paise');
   } catch (e) {
     out = { outcome: 'RETRY', code: e.name === 'TimeoutError' ? 'TIMEOUT' : 'NETWORK', message: e.message + (e.cause ? ` (${e.cause.code || e.cause.message})` : '') };
   }
