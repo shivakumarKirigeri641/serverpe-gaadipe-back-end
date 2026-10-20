@@ -1,7 +1,7 @@
 /**
  * src/routes/whatsapp.js
  * ---------------------------------------------------------------------------
- * Meta's webhook for +91 97396 22631.
+ * Meta's webhook for +91 73531 22415 (since 2026-10-20; +91 97396 22631 before, banned).
  *
  *   GET  /serverpe/platform/gaadipe/v1/public/users/whatsapp/webhook
  *        subscribe handshake (Meta calls this once)
