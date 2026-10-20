@@ -104,7 +104,29 @@ const api = (path, init = {}) =>
   console.log('\n4. WEBHOOK');
   const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
   console.log('   callback URL      ' + base + '/serverpe/platform/gaadipe/v1/public/users/whatsapp/webhook');
-  console.log('   subscribe to      messages, message_template_status_update');
+  console.log('   subscribe to      messages, account_update, account_review_update, account_alerts,');
+  console.log('                     phone_number_quality_update, phone_number_name_update,');
+  console.log('                     message_template_status_update, message_template_quality_update, business_capability_update');
+
+  /* THE WABA → APP SUBSCRIPTION (2026-10-20, the new number): saving the callback URL in the app
+     is not enough — the WABA must list the app in subscribed_apps, or no message reaches the
+     server ("Your app is not subscribed to the message webhook"). --subscribe makes that one
+     call (idempotent: already subscribed answers success). Read-only without it. */
+  if (process.argv.includes('--subscribe')) {
+    console.log('\n   subscribing the app to this WABA…');
+    const out = await api(`${w.businessId}/subscribed_apps`, { method: 'POST' });
+    console.log('  ', out.error ? `❌ ${out.error.code}: ${out.error.message}` : `✅ ${JSON.stringify(out)}`);
+  }
+  const subs = await api(`${w.businessId}/subscribed_apps`);
+  const apps = (subs.data || []).map((a) => a.whatsapp_business_api_data || a);
+  const ours = apps.some((a) => String(a.id) === String(w.appId));
+  console.log('\n   apps subscribed   ' + (subs.error ? `❌ ${subs.error.code}: ${subs.error.message}`
+    : apps.length ? apps.map((a) => `${a.name || ''} (${a.id})`).join(', ') : 'none'));
+  console.log('   this app (' + (w.appId || '?') + ')  ' + (ours ? '✅ subscribed — messages will reach the server'
+    : '❌ NOT subscribed — run again with --subscribe'));
+  const health = await api(`${w.phoneNumberId}?fields=health_status`);
+  const notes = (health.health_status?.entities || []).flatMap((e) => (e.additional_info || []).map((x) => `${e.entity_type}: ${x}`));
+  if (notes.length) { console.log('\n   Meta notes:'); for (const n of notes) console.log('   • ' + n); }
   console.log();
   process.exit(0);
 })().catch((e) => { console.error('\nFAILED:', e.message, '\n'); process.exit(1); });
