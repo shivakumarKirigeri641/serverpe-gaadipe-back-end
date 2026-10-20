@@ -117,8 +117,16 @@ const GROUPS = [
   ]],
   // The paid RC backup when ULIP's VAHAN fails (user, 2026-10-02; switch: Feature flags → RC backup).
   ['RC backup provider', [
-    ['rc_backup_cost_paise', 'Cost per call (paise)', '300 = ₹3. Used in the money reports.'],
-    ['rc_backup_daily_limit', 'Most calls per day', 'Past it, ULIP’s failure stands until midnight. 200 calls = ₹600.'],
+    // After a recharge (user, 2026-10-20: "an option to update what I recharged to IDSPay").
+    ['rc_backup_balance_paise', 'IDSPay balance now (paise) — update after every recharge', 'Type the balance IDSPay shows, in paise: ₹1,500 = 150000. Each call takes its cost off; IDSPay’s own figure replaces it when it sends one. Blank = not tracked. Shown in the server log on every call.'],
+    ['rc_backup_low_balance_paise', 'Warn when the balance falls to (paise)', '5000 = ₹50. At or below it: an email once a day, and free checks stop using IDSPay so the rest serves paying customers.'],
+    ['rc_backup_paid_only', 'IDSPay only for paid reports (true / false)', 'false = free checks use IDSPay too (ULIP has no RC for private vehicles). Set back to false after recharging if the low balance turned it on.'],
+    ['rc_backup_cost_paise', 'Cost per call before GST (paise)', '250 = ₹2.50, which is ₹2.95 with GST. Used in the money reports and the balance.'],
+    ['rc_backup_daily_limit', 'Most calls per day', 'Past it, ULIP’s failure stands until midnight. 300 calls ≈ ₹885.'],
+    ['free_check_backup_per_day', 'Website checks before sign-in: IDSPay calls per day', 'The first free checks on gaadipe.in, before sign-in. 100 by default; past it they stop at eChallan.app.'],
+    ['rc_owner_refresh_hours', 'Paying customer’s own vehicle: refresh at most every (hours)', 'Re-checked or its report opened: a fresh RC at most this often. 24 by default.'],
+    ['rc_confirm_days', 'Before an expiry alert: refresh at most every (days)', 'So a renewed PUC or insurance is seen before warning. 3 by default.'],
+    ['ulip_vahan_second_format', 'Also try ULIP VAHAN/01 when VAHAN/04 has no data (true / false)', 'false = one ULIP call, then eChallan.app and IDSPay.'],
   ]],
   // The free second source (2026-10-05); may start charging ₹1 a call (2026-10-08).
   ['eChallan.app (second RC source)', [
