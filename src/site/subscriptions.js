@@ -85,7 +85,9 @@ async function forUser(userId) {
       paused_until: active && r.paused_until ? r.paused_until : null,
       // Replace vehicle (2026-10-13; pay/replace.js): offered while it may be done.
       replace: active && paid ? await require('../pay/replace').eligible(userId, r.reg_no)
-        .then((e) => (e.ok ? { ok: true, price_paise: e.price_paise, until: e.until } : { ok: false, reason: e.reason }))
+        .then((e) => (e.ok ? { ok: true, price_paise: e.price_paise, until: e.until }
+          // With the reason in words, so the site says WHY (2026-10-20: "one paid is running, then it's not allowing").
+          : { ok: false, reason: e.reason, message: e.message }))
         .catch(() => null) : null,
     });
   }
