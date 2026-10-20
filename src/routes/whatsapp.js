@@ -238,6 +238,9 @@ async function handle(body) {
           // One person's bad message must not stop the rest of the batch.
           await flow.handle(rec.session, m, rec.mobile)
             .catch(e => console.error('[wa] flow failed for %s: %s', rec.mobile, e.message));
+          // Anything they were told "busy" about earlier, answered now that they wrote again
+          // (jobs/waitlist.onReturn, 2026-10-20) — after their own message, never instead of it.
+          await require('../jobs/waitlist').onReturn(rec.mobile).catch(() => 0);
         }
       }
     }
