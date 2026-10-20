@@ -178,10 +178,19 @@ async function owed(row, list) {
  * holding the new policy is the fastest way to be unsubscribed from. Returns
  * the date as the Government has it today, or null if the lookup failed.
  */
-async function confirmAll(regNo) {
+async function confirmAll(regNo, row = null) {
   const out = {};
   let data;
-  try { data = await gateway.rc(regNo, { backup: 0 }); } catch (e) { return out; }
+  try { data = await gateway.rc(regNo, { backup: 0 }); } catch (e) { data = null; }
+  /* ULIP HAS NO RC FOR A PRIVATE VEHICLE (VAHAN on ULIP answers yellow-plate vehicles only, 2026-10-20):
+     a fresh lookup through the paid source, at most once per vehicle per rc_confirm_days, and stored —
+     so a document renewed since the report is seen, written back, and not warned about. */
+  // A cached answer may be the very date the customer has since renewed: confirmed fresh too.
+  if ((!data?.success || data.rc_saved || data.cached) && row?.vehicle_id) {
+    const fresh = await require('../vehicle/rcConfirm')
+      .refresh({ regNo, vehicleId: row.vehicle_id, userId: row.user_id, why: 'expiry warning' }).catch(() => null);
+    if (fresh?.success) data = { success: true, rc: fresh.rc };
+  }
   if (!data?.success) return out;
   const rc = data.rc || data;
   for (const doc of DOCUMENTS) {
@@ -322,7 +331,7 @@ async function runOnce({ limit = 20 } = {}) {
      * service gets muted.
      */
     looked += 1;
-    const fresh = await confirmAll(row.reg_no);
+    const fresh = await confirmAll(row.reg_no, row);
     const due = [];
     for (const need of owedHere) {
       const current = fresh[need.doc.key];

@@ -156,6 +156,15 @@ async function checkOne(w) {
   } catch (e) {
     data = null;
   }
+  /* THE SAVED RC STOOD IN, AND IT SHOWS SOMETHING EXPIRED OR EXPIRING (2026-10-20: "user already renewed
+     PUCC but still sees the old one"). ULIP's VAHAN answers commercial vehicles only, so for a private one
+     the saved RC is all we had. Before an update repeats an old date: one fresh lookup (paid source,
+     at most once per vehicle per rc_confirm_days), stored — vehicle/rcConfirm.js. */
+  if (data?.success && data.rc_saved && require('../vehicle/rcConfirm').needsConfirm(data.rc)) {
+    const fresh = await require('../vehicle/rcConfirm')
+      .refresh({ regNo: w.reg_no, vehicleId: w.vehicle_id, userId: w.user_id, why: 'monitoring update' }).catch(() => null);
+    if (fresh?.success) data = fresh;
+  }
 
   if (!data || data.success !== true) {
     // Back off rather than hammering a vehicle the upstream keeps refusing.
