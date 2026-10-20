@@ -32,8 +32,11 @@ const day = (d) => (d ? String(d).slice(0, 10) : '—');
   if (!ch?.success) {
     console.log(`  ❌ ${ch?.error || ''} ${ch?.message || 'no answer'}`);
   } else {
+    // The route's summary (ulip/echallan.js summarise): total_pending, total_pending_amount_paise, total_disposed.
     const s = ch.summary || {};
-    console.log(`  pending ${s.pending_count ?? '—'} (${money(s.pending_amount_paise)}) · disposed ${s.disposed_count ?? '—'} · total listed ${ch.total}`);
+    console.log(`  pending ${s.total_pending ?? 0} (${money(s.total_pending_amount_paise ?? 0)}) · disposed ${s.total_disposed ?? 0} · total listed ${ch.total}`
+      + `${s.in_court ? ` · in court ${s.in_court}` : ''}`);
+    if (!ch.total) console.log('  ✅ No challans on record for this vehicle (pending or disposed).');
     console.log(`  ${ch.cached ? `cached, ${ch.age_minutes} min old` : 'fresh'} · ULIP calls made: ${ch.ulip_calls_made ?? 0}`);
     for (const c of ch.challans || []) {
       const offence = c.offence || (c.offences || []).map((o) => o.name || o).join('; ') || '—';
