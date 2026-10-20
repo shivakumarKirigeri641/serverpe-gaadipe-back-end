@@ -337,6 +337,15 @@ async function fetchRc(regNo, opts = {}) {
              error: 'Cannot authenticate with ULIP. Check credentials and that this host is whitelisted.', calls });
   }
 
+  /* ONE ULIP CALL — VAHAN/04 ONLY (user, 2026-10-20: "ULIP is asked twice -> call once only, that's
+     VAHAN/04"). ULIP's VAHAN answers yellow-plate (commercial) vehicles only; for a private one both
+     formats come back empty, so the second only added a second or two before eChallan.app and IDSPay.
+     Straight to them now. ulip_vahan_second_format = true brings the VAHAN/01 retry back. */
+  if (!(await require('../util/settings').bool('ulip_vahan_second_format', false))) {
+    return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null, code: first.code,
+             error: 'The vehicle records source is not responding. Please try again in a few minutes.', calls });
+  }
+
   // Anything else — mapping error, timeout, 5xx — is worth a second try on the
   // other format, which fails independently.
   const second = primaryIsXml ? await tryV4(regNo) : await tryV1(regNo);
