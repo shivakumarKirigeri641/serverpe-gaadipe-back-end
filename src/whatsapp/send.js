@@ -571,7 +571,20 @@ async function qualityRating() {
  * template is never even attempted for someone who did not agree, said STOP, or while templates
  * are paused. template() still checks the same at the door, as the last guard.
  */
+/**
+ * IS WHATSAPP IN USE AT ALL? (user, 2026-10-20: "from now onwards, no more WhatsApp interaction &
+ * logics — if anything is running for WhatsApp, remove or stop it"). The one switch,
+ * whatsapp_sending_enabled (off since migration 192). Jobs that only exist for WhatsApp —
+ * broadcasts, the waiting list, Meta's status — skip their pass while it is off; mixed jobs
+ * (monitoring, renewal, expiry) leave WhatsApp out through mayStart and still mail and notify.
+ */
+async function live() {
+  return settings.bool('whatsapp_sending_enabled', false);
+}
+
 async function mayStart(mobile) {
+  // Before anything else: no WhatsApp at all while it is off — nothing is even prepared.
+  if (!(await live())) return { ok: false, why: 'whatsapp_off' };
   if (await optedOut(mobile).catch(() => true)) return { ok: false, why: 'opted_out' };
   if (!(await agreedTerms(mobile))) return { ok: false, why: 'not_agreed' };
   if (await templatesPausedUntil()) return { ok: false, why: 'templates_paused' };
@@ -628,5 +641,5 @@ async function optedOut(mobile) {
   return Boolean(row);
 }
 
-module.exports = { _unmasked: unmasked, text, buttons, ctaUrl, list, document, template, windowOpen, toWaId, allowed, optedOut, mayStart,
+module.exports = { _unmasked: unmasked, text, buttons, ctaUrl, list, document, template, windowOpen, toWaId, allowed, optedOut, mayStart, live,
                    agreedTerms, optedInToOffers, categoryOf, consentGate, _varCount: varCount };

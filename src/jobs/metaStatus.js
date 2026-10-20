@@ -119,6 +119,8 @@ async function current() {
 let running = false;
 async function tick() {
   if (running) return;
+  // No calls to Meta while WhatsApp is off (2026-10-20, send.live): there is no account to read.
+  if (!(await require('../whatsapp/send').live().catch(() => false))) return;
   running = true;
   try { await refresh(); } catch (e) { console.error('[meta] status:', e.message); } finally { running = false; }
 }

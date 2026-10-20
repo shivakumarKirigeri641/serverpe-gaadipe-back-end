@@ -22,6 +22,8 @@ let running = false;
 
 async function tick() {
   if (running) return { skipped: 'running' };
+  // The waiting list answers on WhatsApp only: no pass while WhatsApp is off (2026-10-20, send.live).
+  if (!(await require('../whatsapp/send').live().catch(() => false))) return { skipped: 'whatsapp_off' };
   running = true;
   try {
     // Past the 24-hour window: can no longer be answered freely.

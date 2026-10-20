@@ -1268,6 +1268,8 @@ async function weeklyMoney({ force = false } = {}) {
  * it coming; otherwise it is skipped (the email summary still arrives).
  */
 async function whatsappSummary() {
+  // Sent on WhatsApp: not while WhatsApp is off (2026-10-20, send.live); the email summary still goes.
+  if (!(await require('../whatsapp/send').live().catch(() => false))) return 0;
   const numbers = String(await settings.get('admin_whatsapp_numbers', ''))
     .split(/[,\s;]+/).map((x) => x.replace(/\D/g, '').slice(-10)).filter((x) => x.length === 10);
   if (!numbers.length) return 0;

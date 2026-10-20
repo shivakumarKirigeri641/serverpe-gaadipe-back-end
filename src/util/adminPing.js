@@ -33,7 +33,9 @@ async function ping({ key, title, text, severity = 'warning', source = 'system',
   }
   try {
     const send = require('../whatsapp/send');
-    for (const m of await adminNumbers()) {
+    // Email only while WhatsApp is off (2026-10-20, send.live).
+    const numbers = (await send.live().catch(() => false)) ? await adminNumbers() : [];
+    for (const m of numbers) {
       if (await send.windowOpen(m).catch(() => false)) await send.text(m, `*${title}*\n\n${text}`).catch(() => {});
     }
   } catch { /* WhatsApp unavailable */ }

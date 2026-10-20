@@ -102,6 +102,8 @@ function start(everySeconds = 60) {
   let running = false;
   const tick = async () => {
     if (running) return;
+    // WhatsApp-only: no pass at all while WhatsApp is off (2026-10-20, send.live).
+    if (!(await require('../whatsapp/send').live().catch(() => false))) return;
     running = true;
     try { await runOnce(); } catch (e) { console.error('[broadcast] pass failed:', e.message); }
     finally { running = false; }
