@@ -23,6 +23,23 @@ const ist = (t) => new Date(t).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata
   console.log(`1. Meta account notices (last 21 days): ${news.rows.length}`);
   for (const r of news.rows) console.log(`   ${ist(r.created_at)}  ${r.detail.field}: ${JSON.stringify(r.detail.value).slice(0, 220)}`);
 
+  /* RESTRICTIONS AND WHEN THEY END (user, 2026-10-20: Meta said "check your webhooks for the
+     restriction_info field, which lists all restrictions and when they expire"). Every notice
+     ever saved, not only 21 days: each restriction_type with its expiration, in India's time. */
+  const restr = await db.query(
+    `SELECT created_at, detail FROM event_log
+      WHERE kind = 'meta_account_news' AND detail::text ILIKE '%restriction%' ORDER BY id`);
+  console.log(`\n1b. Restrictions Meta announced (all time): ${restr.rows.length}`);
+  for (const r of restr.rows) {
+    const v = r.detail.value || {};
+    const list = Array.isArray(v.restriction_info) ? v.restriction_info : v.restriction_info ? [v.restriction_info] : [];
+    if (!list.length) { console.log(`   ${ist(r.created_at)}  ${v.event || r.detail.field}: ${JSON.stringify(v).slice(0, 220)}`); continue; }
+    for (const x of list) {
+      const ends = x.expiration ? (Number(x.expiration) > 1e12 ? new Date(Number(x.expiration)) : new Date(Number(x.expiration) * 1000)) : null;
+      console.log(`   ${ist(r.created_at)}  ${v.event || ''} · ${x.restriction_type || 'restriction'} · ends: ${ends && !Number.isNaN(ends.getTime()) ? ist(ends) : 'no end date given'}`);
+    }
+  }
+
   const reps = await db.query(
     `SELECT r.report_number, r.reg_no, r.created_at, r.channel, u.mobile,
             substring(r.snapshot::text from '(?i)[^"]{0,60}${WORDS}[^"]{0,60}') AS hit
