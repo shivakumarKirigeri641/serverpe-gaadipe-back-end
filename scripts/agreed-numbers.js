@@ -12,6 +12,7 @@
  *                                               (2026-10-20: "Dear {#var#}" in gp_service_moved_v1;
  *                                               first name, or "Customer" when none is known)
  *
+ *   node scripts/agreed-numbers.js --all --paid --csv paid.csv   only customers who paid at least once
  *   node scripts/agreed-numbers.js --all --batch 1 --csv b1.csv
  *                                               IN BATCHES (2026-10-20: "if I SMS all 312, all will
  *                                               message at once" — the new number's first days):
@@ -33,6 +34,8 @@ const file = args.includes('--file') ? args[args.indexOf('--file') + 1] : null;
 const csv = args.includes('--csv') ? args[args.indexOf('--csv') + 1] : null;
 const batch = args.includes('--batch') ? Math.max(1, Number(args[args.indexOf('--batch') + 1]) || 1) : null;
 const size = args.includes('--size') ? Math.max(1, Number(args[args.indexOf('--size') + 1]) || 50) : 50;
+// Only customers who paid at least once (user, 2026-10-20: "give me paid customers, around 37").
+const paidOnly = args.includes('--paid');
 // A first name fit for "Dear {#var#}": letters only, at most 20, else "Customer".
 const firstName = (s) => {
   const w = String(s || '').trim().split(/\s+/)[0].replace(/[^A-Za-zऀ-ॿ.]/g, '');
@@ -62,12 +65,16 @@ const firstName = (s) => {
         AND NOT EXISTS (SELECT 1 FROM users u WHERE right(u.mobile, 10) = a.m AND (u.is_internal OR u.deactivated_at IS NOT NULL))
       ORDER BY a.m`, since ? [since] : []);
   // Batches: paying customers first, then the most recently active; never someone already on the new number.
-  let rows = everyone;
+  let rows = paidOnly ? everyone.filter((r) => r.paid) : everyone;
+  if (paidOnly) {
+    console.log(`Paying customers: ${rows.length}`
+      + `${since ? ` (${rows.filter((r) => r.on_new).length} already said Hi to the new number)` : ''}.`);
+  }
   if (batch) {
     // A FIXED order over everyone, so batch 2 tomorrow never repeats batch 1's people (only the
     // ones already on the new number drop out of their own slice). Paying first, then the most
     // recently active, ties by number.
-    const ordered = [...everyone]
+    const ordered = [...(paidOnly ? rows : everyone)]
       .sort((x, y) => (Number(y.paid) - Number(x.paid)) || (new Date(y.last_in || 0) - new Date(x.last_in || 0)) || x.m.localeCompare(y.m));
     const slice = ordered.slice((batch - 1) * size, batch * size);
     rows = slice.filter((r) => !r.on_new);
