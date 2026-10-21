@@ -255,7 +255,21 @@ async function sendTemplateRaw(kind, mobile, values = [], meta = {}) {
           AND deactivated_at IS NULL LIMIT 1`, [m, Boolean(meta.test)]).catch(() => null);
     if (!ok) return { ok: false, skipped: true, error: 'not opted in to offers' };
   }
-  const cut = values.map((v) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 30));
+  /* THE ALERT TEMPLATES TAKE {#alphanumeric#} VALUES (user, 2026-10-21: gp_expiry_alert_v1,
+     gp_challan_alert_v1, gp_vehicle_status_v1, gp_monitor_end_v1 raised as Service Inferred). A comma,
+     semicolon or "+" there can get the SMS rejected, so for these kinds a value keeps only letters,
+     digits, spaces, "." and "-", lists joined by "and". Broadcasts (links, own wording) are left alone. */
+  const ALERT = ['expiry', 'challan', 'status', 'monitor_end'];
+  const plain = (v) => (ALERT.includes(kind)
+    ? v.replace(/\s*[,;&]\s*/g, ' and ').replace(/\s*\+\s*(\d+)/g, ' and $1 more').replace(/[^A-Za-z0-9 .\-]/g, '').replace(/\s+/g, ' ').trim()
+    : v);
+  // At most 30 characters, cut at a whole word ("challans pending", not "challans pendi").
+  const fit = (v) => {
+    if (v.length <= 30) return v;
+    const at = v.slice(0, 31).lastIndexOf(' ');
+    return (at > 0 ? v.slice(0, at) : v.slice(0, 30)).replace(/\s+and$/, '').trim();
+  };
+  const cut = values.map((v) => fit(plain(String(v ?? '').replace(/\s+/g, ' ').trim())));
   if (!configured()) {
     console.warn('[sms] no SMS_PROVIDER set — would have sent %s to ••••%s', kind, m.slice(-4));
     return { ok: true, simulated: true };
