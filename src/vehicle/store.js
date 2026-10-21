@@ -310,7 +310,11 @@ function guardRc(rc, regNo) {
  * counting it made a vehicle "checked 12 times today" by someone who never
  * opened the site, and showed in "vehicles checked" as a person.
  */
-async function record(userId, data, { link = true } = {}) {
+/*
+ * `calls: false` — the snapshot is saved but the calls are not recorded again (2026-10-21): a lookup
+ * vehicle/rcConfirm already stored shows up once in api_calls and the event log, not twice.
+ */
+async function record(userId, data, { link = true, calls = true } = {}) {
   data = { ...data, rc: guardRc(data.rc, data.vehicle_number) };
   const vehicle = await upsertVehicle(data.vehicle_number, data.rc || {});
   await saveSnapshot(vehicle.id, 'rc', data.rc || {},
@@ -324,7 +328,7 @@ async function record(userId, data, { link = true } = {}) {
   }
   if (userId && link) await linkUserVehicle(userId, vehicle.id);
   // Cost last: it must never be the reason a lookup appears to have failed.
-  await recordCalls(userId, vehicle.id, data)
+  if (calls) await recordCalls(userId, vehicle.id, data)
     .catch(e => console.error('[store] api_calls:', e.message));
   return vehicle;
 }

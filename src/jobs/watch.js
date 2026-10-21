@@ -160,10 +160,12 @@ async function checkOne(w) {
      PUCC but still sees the old one"). ULIP's VAHAN answers commercial vehicles only, so for a private one
      the saved RC is all we had. Before an update repeats an old date: one fresh lookup (paid source,
      at most once per vehicle per rc_confirm_days), stored — vehicle/rcConfirm.js. */
+  // Recorded by rcConfirm already: stored again below for the diff, but its calls (IDSPay's ₹3) not counted twice.
+  let recorded = false;
   if (data?.success && data.rc_saved && require('../vehicle/rcConfirm').needsConfirm(data.rc)) {
     const fresh = await require('../vehicle/rcConfirm')
       .refresh({ regNo: w.reg_no, vehicleId: w.vehicle_id, userId: w.user_id, why: 'monitoring update' }).catch(() => null);
-    if (fresh?.success) data = fresh;
+    if (fresh?.success) { data = fresh; recorded = true; }
   }
 
   if (!data || data.success !== true) {
@@ -183,7 +185,7 @@ async function checkOne(w) {
 
   // Store AFTER diffing — the comparison needs the old snapshot.
   // GaadiPe's own re-check: saved and costed to the customer, but not counted as their check.
-  await store.record(w.user_id, data, { link: false }).catch(e => console.error('[watch] store:', e.message));
+  await store.record(w.user_id, data, { link: false, calls: !recorded }).catch(e => console.error('[watch] store:', e.message));
 
   // Each dataset is rescheduled on its own clock. Challans are the only thing
   // that genuinely changes week to week; an RC's expiry dates do not move
