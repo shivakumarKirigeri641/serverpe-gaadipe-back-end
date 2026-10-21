@@ -117,6 +117,8 @@ router.use(safe(async (req, res, next) => {
     const inner = res.json.bind(res);
     res.json = (body) => {
       consented.filter(body, { whatsappOnly, webOnly })
+        // Then the owner's own rows out (2026-10-21, consented.hideMe).
+        .then((out) => consented.hideMe(out))
         .then((out) => inner(out))
         .catch((e) => { console.error('[admin] consent filter:', e.message); inner(body); });
       return res;

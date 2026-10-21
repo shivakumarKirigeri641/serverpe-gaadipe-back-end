@@ -239,8 +239,10 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
   const WEB_PAID = all ? 'true' : wa ? `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') <> 'web'`
     : `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
   const WEB_CHECK = all ? 'true' : wa ? `coalesce(detail->>'channel', 'whatsapp') = 'whatsapp'` : `detail->>'channel' = 'web'`;
-  const JOINED = all ? 'true' : wa ? `coalesce(signup_channel, 'whatsapp') <> 'web'` : `signup_channel = 'web'`;
-  const ACTIVE = all ? `channel IN ('web', 'whatsapp')` : wa ? `channel = 'whatsapp'` : `channel = 'web'`;
+  // Never the owner's own account (2026-10-21, "do not include my details").
+  const JOINED = `NOT coalesce(is_internal, false) AND ${all ? 'true' : wa ? `coalesce(signup_channel, 'whatsapp') <> 'web'` : `signup_channel = 'web'`}`;
+  const ACTIVE = `${all ? `channel IN ('web', 'whatsapp')` : wa ? `channel = 'whatsapp'` : `channel = 'web'`}
+    AND ${require('./notMe').user('user_id')} AND (mobile IS NULL OR right(mobile, 10) NOT IN (SELECT right(mobile, 10) FROM users WHERE is_internal))`;
   const today = await db.one(
     `WITH b AS (SELECT date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' AS d)
      SELECT (SELECT count(*) FROM users, b WHERE created_at >= b.d AND ${JOINED})::int AS joined,

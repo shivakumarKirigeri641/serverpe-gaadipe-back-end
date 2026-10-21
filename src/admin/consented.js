@@ -102,6 +102,59 @@ async function filter(body, { whatsappOnly = whatsappOnlyNow(), webOnly = webOnl
 }
 
 /*
+ * NEVER MY OWN ROWS (user, 2026-10-21: "for any visits, sign-ins or more, do not include my details").
+ * After the agreed-only filter, every list row that is the owner's own — by mobile, by account
+ * (user_id), by browser (visitor_id) or by device (device_id) — is taken out, in every admin answer.
+ * "Mine" is admin/notMe.js's rule: users.is_internal (internal_mobiles / "This is me"), the admins'
+ * own numbers, and any browser or device an internal person has signed in on. admin_hide_me = false
+ * shows them again.
+ */
+const ME_KEYS = { mobile: KEYS, user: ['user_id', 'customer_id'], visitor: ['visitor_id'], device: ['device_id'] };
+function collectMe(node, out, depth = 0) {
+  if (!plain(node) || depth > 8) return;
+  if (Array.isArray(node)) { for (const x of node) collectMe(x, out, depth + 1); return; }
+  for (const [k, v] of Object.entries(node)) {
+    if (v == null) continue;
+    if (ME_KEYS.mobile.includes(k)) { const m = ten(v); if (m) out.mobile.add(m); }
+    else if (ME_KEYS.user.includes(k) && /^\d+$/.test(String(v))) out.user.add(String(v));
+    else if (ME_KEYS.visitor.includes(k) && typeof v !== 'object') out.visitor.add(String(v));
+    else if (ME_KEYS.device.includes(k) && typeof v !== 'object') out.device.add(String(v));
+    else if (plain(v)) collectMe(v, out, depth + 1);
+  }
+}
+async function hideMe(body) {
+  if (!(await require('../util/settings').bool('admin_hide_me', true))) return body;
+  const found = { mobile: new Set(), user: new Set(), visitor: new Set(), device: new Set() };
+  collectMe(body, found);
+  if (!found.mobile.size && !found.user.size && !found.visitor.size && !found.device.size) return body;
+  const { rows: [me] } = await db.query(
+    `SELECT
+       ARRAY(SELECT m FROM unnest($1::text[]) m WHERE EXISTS (SELECT 1 FROM users u WHERE u.is_internal AND right(u.mobile, 10) = m)
+                OR EXISTS (SELECT 1 FROM admin_users a WHERE right(regexp_replace(coalesce(a.mobile, ''), '\\D', '', 'g'), 10) = m)) AS mobile,
+       ARRAY(SELECT x FROM unnest($2::text[]) x WHERE EXISTS (SELECT 1 FROM users u WHERE u.is_internal AND u.id::text = x)) AS user,
+       ARRAY(SELECT x FROM unnest($3::text[]) x WHERE EXISTS (SELECT 1 FROM visitors iv JOIN users iu ON (iu.id = iv.user_id OR iu.mobile = iv.mobile)
+                                                              WHERE iu.is_internal AND iv.visitor_id::text = x)) AS visitor,
+       ARRAY(SELECT x FROM unnest($4::text[]) x WHERE EXISTS (SELECT 1 FROM site_sign_ins s JOIN users u ON u.id = s.user_id
+                                                              WHERE u.is_internal AND s.device_id::text = x)) AS device`,
+    [[...found.mobile], [...found.user], [...found.visitor], [...found.device]]);
+  const mine = { mobile: new Set(me.mobile), user: new Set(me.user), visitor: new Set(me.visitor), device: new Set(me.device) };
+  if (!mine.mobile.size && !mine.user.size && !mine.visitor.size && !mine.device.size) return body;
+  const isMine = (x) => Object.entries(x).some(([k, v]) => v != null && (
+    (ME_KEYS.mobile.includes(k) && mine.mobile.has(ten(v)))
+    || (ME_KEYS.user.includes(k) && mine.user.has(String(v)))
+    || (ME_KEYS.visitor.includes(k) && mine.visitor.has(String(v)))
+    || (ME_KEYS.device.includes(k) && mine.device.has(String(v)))));
+  const drop = (node, depth = 0) => {
+    if (!plain(node) || depth > 8) return node;
+    if (Array.isArray(node)) return node.filter((x) => !(plain(x) && !Array.isArray(x) && isMine(x))).map((x) => drop(x, depth + 1));
+    const out = {};
+    for (const [k, v] of Object.entries(node)) out[k] = plain(v) ? drop(v, depth + 1) : v;
+    return out;
+  };
+  return drop(body);
+}
+
+/*
  * The same rule as an SQL condition over a mobile column, for the lists and
  * counts that must not even count them (Customers, Live conversations).
  */
@@ -147,4 +200,4 @@ function chan() {
  */
 const allChannelsNow = () => view.getStore()?.allChannels === true;
 
-module.exports = { filter, allowedOf, agreedSql, view, webOnlyNow, whatsappOnlyNow, allChannelsNow, chan };
+module.exports = { filter, hideMe, allowedOf, agreedSql, view, webOnlyNow, whatsappOnlyNow, allChannelsNow, chan };

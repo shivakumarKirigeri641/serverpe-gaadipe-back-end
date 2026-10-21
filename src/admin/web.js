@@ -243,7 +243,7 @@ async function customers({ range, q = '', channel = 'all', reach = 'all', active
          FROM users u
          LEFT JOIN web w ON w.user_id = u.id
          LEFT JOIN wa ON wa.m10 = right(regexp_replace(u.mobile, '\\D', '', 'g'), 10)
-        WHERE (w.user_id IS NOT NULL OR wa.m10 IS NOT NULL) AND u.deactivated_at IS NULL)
+        WHERE (w.user_id IS NOT NULL OR wa.m10 IS NOT NULL) AND u.deactivated_at IS NULL AND NOT coalesce(u.is_internal, false))
      SELECT b.id AS user_id, b.mobile, coalesce(b.display_name, b.wa_profile_name) AS name, b.email, b.email_ok,
             CASE WHEN b.web_first IS NOT NULL AND b.wa_first IS NOT NULL THEN 'both'
                  WHEN b.web_first IS NOT NULL THEN 'web' ELSE 'whatsapp' END AS channel,
@@ -287,7 +287,7 @@ async function customers({ range, q = '', channel = 'all', reach = 'all', active
                        (u.email IS NOT NULL AND u.email_verified_at IS NOT NULL AND u.email_unsubscribed_at IS NULL) AS email_ok
                   FROM users u LEFT JOIN web ON web.user_id = u.id
                   LEFT JOIN wa ON wa.m10 = right(regexp_replace(u.mobile, '\\D', '', 'g'), 10)
-                 WHERE (web.user_id IS NOT NULL OR wa.m10 IS NOT NULL) AND u.deactivated_at IS NULL)
+                 WHERE (web.user_id IS NOT NULL OR wa.m10 IS NOT NULL) AND u.deactivated_at IS NULL AND NOT coalesce(u.is_internal, false))
      SELECT count(*) AS total, count(*) FILTER (WHERE on_web AND NOT on_wa) AS web_only,
             count(*) FILTER (WHERE on_wa AND NOT on_web) AS whatsapp_only, count(*) FILTER (WHERE on_web AND on_wa) AS both,
             count(*) FILTER (WHERE push) AS push, count(*) FILTER (WHERE email_ok) AS email,
