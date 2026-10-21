@@ -620,6 +620,7 @@ async function whatYouGet(mobile) {
     + '🚛 *Fleets (5+ vehicles)* — one Excel report of every vehicle, by email, every evening.\n\n'
     // Said upfront (2026-10-15): people rated 1★ expecting the owner's phone number.
     + '🔒 *Never shared:* an owner\'s mobile number or address — they are private by law, and we don\'t receive them.\n\n'
+    + NOT_A_DOCUMENT_SHORT + '\n\n'
     + `Sample report: ${require('../mail/customer').SITE()}/sample-report.pdf`,
   ['check', { id: BTN.FLEET, title: 'Fleet (5+ vehicles)' }, 'menu']);
 }
@@ -704,8 +705,17 @@ const baseUrl = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
    recorded agreement — only fewer words before the button. The documents
    themselves and the policy version are unchanged, so nobody is re-asked. */
 const INTRO =
-  'Namaste! 🙏 *GaadiPe* shows any vehicle\'s insurance, PUC, tax, challan and loan status '
+  'Namaste! 🙏 *GaadiPe* shows your vehicle\'s insurance, PUC, tax, challan and loan status '
   + 'from vehicle registration records, right here on WhatsApp.\n\n';
+
+/* WHAT GAADIPE IS NOT (user, 2026-10-21: "mention that GaadiPe does not provide any RC card or any
+   certificate — only alerts, reports and notifications"). Said in What you get, the welcome and the
+   order summary, so nobody pays expecting a document. */
+const NOT_A_DOCUMENT = 'ℹ️ *Please note:* GaadiPe does *not* issue an RC card, PUC, insurance or any certificate. '
+  + 'It gives you *reports, alerts and reminders* about your vehicle. For the documents themselves, please contact your RTO, '
+  + 'insurer or PUC centre.';
+// What you get is near WhatsApp's 1024-character limit for a message with buttons: the short form there.
+const NOT_A_DOCUMENT_SHORT = 'ℹ️ GaadiPe gives reports and alerts only — no RC card, PUC or certificate.';
 
 /**
  * One row per step of the owner funnel, all under one kind, so the whole funnel
@@ -811,8 +821,9 @@ async function funnel(mobile, step, detail = {}) {
 
 const WELCOME =
   'Namaste! 🙏 This is *GaadiPe* — vehicle information and document alerts on WhatsApp.\n\n'
-  + 'Check any vehicle\'s RC, insurance, PUC, fitness, permit, challans and FASTag — '
+  + 'Check your vehicle\'s RC, insurance, PUC, fitness, permit, challans and FASTag — '
   + 'and get reminded *before* something expires or a new challan appears.\n\n'
+  + '_GaadiPe gives reports and alerts only — it does not issue an RC card or any certificate._\n\n'
   + 'What brings you here?';
 
 const OWNER_TERMS =
@@ -2596,6 +2607,7 @@ async function handle(session, message, mobile) {
           + '━━━━━━━━━━━━━━━\n\n'
           + 'What you get: daily checks, new-challan alerts, and reminders before '
           + 'insurance, PUC or fitness expires.\n\n'
+          + NOT_A_DOCUMENT + '\n\n'
           + `📄 ${SITE}/terms\n💳 ${SITE}/refund\n🔒 ${SITE}/privacy\n\n`
           + '*No auto-renewal.* Nothing is charged automatically, now or later.\n\n'
           + 'By tapping *Agree & pay* you accept the Terms, Refund and Privacy policies.',
