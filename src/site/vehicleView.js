@@ -61,9 +61,6 @@ function basic(data, { detail = 'count' } = {}) {
       // "show only make, model, variant") nothing else about the vehicle.
       vehicle_class: detail === 'none' ? null : (rc.vehicle_class || null),
       fuel: detail === 'none' ? null : (rc.fuel || null),
-      /* The owner's name, masked, once signed in (user, 2026-10-21: "stop showing the owner name — let
-         them sign in and see"). Before sign-in it is off (free_check_show_owner, migration 200). */
-      owner_masked: detail === 'none' ? null : (report.maskName(rc.owner_name) || null),
     },
     /*
      * WHAT is wrong, never WHEN or BY HOW MUCH.
