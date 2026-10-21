@@ -285,6 +285,7 @@ async function vehiclesOf({ state, rto }) {
 /* ─────────────────────────────── services ─────────────────────────────── */
 
 const PROVIDER = `CASE WHEN provider_path = 'RCBACKUP' THEN 'RC backup'
+                       WHEN provider_path = 'WAY2API' THEN 'Way2API'
                        WHEN provider_path LIKE 'VAHAN%' THEN 'VAHAN (RC)'
                        WHEN provider_path LIKE 'ECHALLAN%' THEN 'eChallan'
                        WHEN provider_path LIKE 'FASTAG%' THEN 'FASTag'
@@ -298,7 +299,7 @@ async function services({ days }) {
          x AS (SELECT ${dayOf('created_at')} AS d, ${PROVIDER} AS provider,
                       count(*) FILTER (WHERE ok) AS ok, count(*) FILTER (WHERE NOT ok) AS failed,
                       round(avg(duration_ms) FILTER (WHERE ok))::int AS ms,
-                      sum(cost_paise) FILTER (WHERE provider_path = 'RCBACKUP') AS backup_paise
+                      sum(cost_paise) FILTER (WHERE provider_path IN ('RCBACKUP', 'WAY2API')) AS backup_paise
                  FROM api_calls WHERE NOT cache_hit AND ${since('created_at')} GROUP BY 1, 2)
        SELECT days.d, x.provider, coalesce(x.ok, 0)::int AS ok, coalesce(x.failed, 0)::int AS failed, x.ms,
               coalesce(x.backup_paise, 0)::int AS backup_paise

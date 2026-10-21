@@ -396,6 +396,22 @@ async function backup(regNo, calls, opts, failure) {
     // Their "not found" is not final: IDSPay reads a different source.
   }
   if (opts.noBackup) return { ...failure, calls };
+  /* WAY2API BEFORE IDSPAY (user, 2026-10-21): the same record for ≈ ₹2.40 instead of ₹2.95. Its "not
+     found" is final like IDSPay's; any failure (or off, limit, empty wallet) goes on to IDSPay. */
+  const w = await require('../vehicle/way2api').lookup(regNo).catch((e) => {
+    console.error('[vahan] Way2API threw:', e.message);
+    return null;
+  });
+  if (w) {
+    calls.push({ path: 'WAY2API', outcome: w.outcome, code: w.code, ms: w.ms });
+    if (w.outcome === 'FOUND') {
+      console.warn(`[vahan] ${regNo} served by Way2API after ULIP failed (${failure.code})`);
+      return { ok: true, data: w.data, source: 'WAY2API', fallback: true, ulipFailed: true, calls };
+    }
+    if (w.outcome === 'NOT_FOUND') {
+      return { ok: false, notFound: true, data: null, source: 'WAY2API', code: w.code, error: 'Vehicle not found', calls };
+    }
+  }
   const b = await require('../vehicle/rcBackup').lookup(regNo).catch((e) => {
     console.error('[vahan] backup threw:', e.message);
     return null;

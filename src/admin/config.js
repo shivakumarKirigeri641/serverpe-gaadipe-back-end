@@ -117,6 +117,13 @@ const GROUPS = [
   ]],
   // The paid RC backup when ULIP's VAHAN fails (user, 2026-10-02; switch: Feature flags → RC backup).
   ['RC backup provider', [
+    // Way2API, asked before IDSPay (user, 2026-10-21; vehicle/way2api.js, key WAYTWOAPI_KEY in .env).
+    ['way2api_balance_usd', 'Way2API balance now (US dollars) — update after every recharge', 'Type the wallet balance Way2API shows, in dollars: 10.00. Each charged call takes way2api_cost_usd off. Below one call’s price, IDSPay answers instead. Blank = not tracked.'],
+    ['way2api_enabled', 'Use Way2API before IDSPay (true / false)', 'true = ULIP → eChallan.app → Way2API (≈ ₹2.40) → IDSPay (₹2.95). false = straight to IDSPay.'],
+    ['way2api_cost_usd', 'Way2API cost per call with GST (US dollars)', '0.0254 = $0.0215 + 18% GST. Taken off the balance on every charged call.'],
+    ['way2api_cost_paise', 'Way2API cost per call (paise)', '240 = ₹2.40 (0.0254 × ₹94.3). Used in the money reports.'],
+    ['way2api_low_balance_usd', 'Way2API: warn when the balance falls to (US dollars)', '1 = $1. At or below it: an email once a day.'],
+    ['way2api_daily_limit', 'Way2API: most calls per day', 'Past it, IDSPay is asked until midnight. 300 by default.'],
     // After a recharge (user, 2026-10-20: "an option to update what I recharged to IDSPay").
     ['rc_backup_balance_paise', 'IDSPay balance now (paise) — update after every recharge', 'Type the balance IDSPay shows, in paise: ₹1,500 = 150000. Each call takes its cost off; IDSPay’s own figure replaces it when it sends one. Blank = not tracked. Shown in the server log on every call.'],
     ['rc_backup_low_balance_paise', 'Warn when the balance falls to (paise)', '5000 = ₹50. At or below it: an email once a day, and free checks stop using IDSPay so the rest serves paying customers.'],

@@ -392,4 +392,6 @@ async function freeOpts(extra = {}, regNo = null) {
   return (await paidOnly()) ? { ...extra, backup: 0 } : extra;
 }
 
-module.exports = { lookup, enabled, configured, today, pausedUntil, paidOnly, freeOpts, PATH, _test: { maskName, maskTail, maskAddress, read, noteBalance, balanceIn } };
+module.exports = { lookup, enabled, configured, today, pausedUntil, paidOnly, freeOpts, hasSavedRc, PATH,
+  // Shared with vehicle/way2api.js, the cheaper paid source asked before this one.
+  util: { val, date, number, int, maskName, maskTail, maskAddress, NOT_FOUND, setSetting }, _test: { maskName, maskTail, maskAddress, read, noteBalance, balanceIn } };

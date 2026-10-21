@@ -203,7 +203,7 @@ async function checkedBy(userId, limit = 9) {
  */
 const DATASET_OF = (path) => {
   const p = String(path || '').toUpperCase();
-  if (p.startsWith('VAHAN') || p === 'RCBACKUP') return 'rc';
+  if (p.startsWith('VAHAN') || p === 'RCBACKUP' || p === 'WAY2API') return 'rc';
   if (p.startsWith('ECHALLAN')) return 'challan';
   if (p.startsWith('FASTAG')) return 'fastag';
   return 'other';
@@ -234,6 +234,8 @@ async function recordCalls(userId, vehicleId, data) {
     const dataset = DATASET_OF(c.path);
     // The paid RC backup (vehicle/rcBackup.js) has its own price.
     const cost = c.path === 'RCBACKUP' ? await settings.num('rc_backup_cost_paise', 300)
+      // Way2API (2026-10-21): $0.0254 with GST ≈ ₹2.40; only a charged answer costs.
+      : c.path === 'WAY2API' ? (c.outcome === 'FOUND' || c.outcome === 'NOT_FOUND' ? await settings.num('way2api_cost_paise', 240) : 0)
       : COST_KEY[dataset] ? await settings.num(COST_KEY[dataset], 0)
         : 0;
     const row = await db.one(
@@ -256,6 +258,7 @@ async function recordCalls(userId, vehicleId, data) {
 const providerOf = (path) => {
   const p = String(path || '').toUpperCase();
   if (p === 'RCBACKUP') return 'IDSPay RC backup (₹3)';
+  if (p === 'WAY2API') return 'Way2API RC (₹2.40)';
   if (/^(ECHALLANAPP|ECHALLAN_APP)/.test(p)) return 'eChallan.app';
   if (/^(VAHAN|ECHALLAN|FASTAG)/.test(p)) return `ULIP ${p}`;
   return p || 'cache';

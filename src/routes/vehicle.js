@@ -77,10 +77,10 @@ async function load(kind, regNo, refresh, debug = false, noBackup = false, ulipO
   // The VAHAN light is ULIP's own: an answer from the paid RC backup does not
   // turn it green (the backup has its own light).
   require('../util/providerStatus').record({ rc: 'vahan', challan: 'echallan', fastag: 'fastag' }[kind], {
-    ok: Boolean((r.ok || r.notFound) && !r.ulipFailed && !['RCBACKUP', 'ECHALLANAPP'].includes(r.source)),
+    ok: Boolean((r.ok || r.notFound) && !r.ulipFailed && !['RCBACKUP', 'WAY2API', 'ECHALLANAPP'].includes(r.source)),
     ms: (r.calls || []).reduce((a, c) => a + (Number(c.ms) || 0), 0) || null,
-    error: (r.ok || r.notFound) && !r.ulipFailed && !['RCBACKUP', 'ECHALLANAPP'].includes(r.source) ? null
-      : `${(r.calls || []).filter((c) => !['RCBACKUP', 'ECHALLANAPP'].includes(c.path)).map((c) => c.code).filter(Boolean).join(' / ') || r.code || ''} ${r.ulipFailed ? `(answered by ${r.source === 'ECHALLANAPP' ? 'eChallan.app' : 'the RC backup'})` : r.error || ''}`.trim(),
+    error: (r.ok || r.notFound) && !r.ulipFailed && !['RCBACKUP', 'WAY2API', 'ECHALLANAPP'].includes(r.source) ? null
+      : `${(r.calls || []).filter((c) => !['RCBACKUP', 'WAY2API', 'ECHALLANAPP'].includes(c.path)).map((c) => c.code).filter(Boolean).join(' / ') || r.code || ''} ${r.ulipFailed ? `(answered by ${r.source === 'ECHALLANAPP' ? 'eChallan.app' : 'the RC backup'})` : r.error || ''}`.trim(),
   });
 
   if (r.ok) {

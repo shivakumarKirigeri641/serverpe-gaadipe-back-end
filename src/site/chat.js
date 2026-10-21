@@ -176,7 +176,8 @@ async function anonCheck(req) {
   if (shown && await settings.bool('free_check_show_rto', true)) {
     shown.rto = await view.rtoOf(parsed.regNo).catch(() => null);
   }
-  const SOURCE = { ECHALLANAPP: 'eChallan.app', RCBACKUP: 'RC backup (paid)' };
+  // Way2API counts as the paid backup too, so free_check_backup_per_day caps both.
+  const SOURCE = { ECHALLANAPP: 'eChallan.app', RCBACKUP: 'RC backup (paid)', WAY2API: 'RC backup (paid)' };
   const dataSource = data?.success
     ? (data.cached ? 'saved record' : SOURCE[String(data.source || '').toUpperCase()] || 'ULIP')
     : null;

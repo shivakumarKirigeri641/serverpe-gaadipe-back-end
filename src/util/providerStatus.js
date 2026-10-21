@@ -17,7 +17,7 @@
 const db = require('../db');
 
 const LABEL = {
-  vahan: 'VAHAN (RC)', rc_backup: 'RC backup', echallan_app: 'eChallan.app', echallan: 'eChallan', fastag: 'FASTag', whatsapp: 'WhatsApp', razorpay: 'Razorpay', email: 'Email',
+  vahan: 'VAHAN (RC)', way2api: 'Way2API (RC)', rc_backup: 'RC backup', echallan_app: 'eChallan.app', echallan: 'eChallan', fastag: 'FASTag', whatsapp: 'WhatsApp', razorpay: 'Razorpay', email: 'Email',
 };
 
 function record(provider, { ok, ms = null, error = null } = {}) {
@@ -50,6 +50,7 @@ async function all() {
   // eChallan.app (the free second source) likewise, once its key is set.
   const ea = require('../vehicle/echallanApp');
   const keys = Object.keys(LABEL).filter((k) => (k !== 'rc_backup' || by.rc_backup || backup.configured())
+    && (k !== 'way2api' || by.way2api || require('../vehicle/way2api').configured())
     && (k !== 'echallan_app' || by.echallan_app || ea.configured()));
   // The paid backup's day so far: calls, limit, spend, and whether it is switched on.
   const backupDay = keys.includes('rc_backup')
