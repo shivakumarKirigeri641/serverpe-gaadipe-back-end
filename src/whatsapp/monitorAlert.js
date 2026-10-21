@@ -118,7 +118,8 @@ async function lastWarning(userId) {
   return rows[0] ? { vehicleId: Number(rows[0].vehicle_id), kind: 'exp', docs: rows[0].docs } : null;
 }
 
-const BUTTON = { t: /^thanks for (remembering|reminding)$/i, c: /^check vehicle$/i, p: /^pause this alert$/i };
+// "Got it" (2026-10-21): gp_vehicle_update_v1's first button, worded plainly so Meta keeps it Utility.
+const BUTTON = { t: /^(thanks for (remembering|reminding)|got it)$/i, c: /^check vehicle$/i, p: /^pause this alert$/i };
 const PAUSE_RE = /^(pause (this )?alerts?|pause)\s*[.!]?$/i;
 const RESUME_RE = /^(resume|resume alerts?|unpause( alerts?)?)\s*[.!]?$/i;
 
