@@ -36,7 +36,7 @@ const maskNumber = report.maskNumber;
  * running; when it expired, what else is due, what the challans come to and
  * whether there is a loan on it are the report.
  */
-function basic(data, { detail = 'count' } = {}) {
+function basic(data, { detail = 'count', owner = false } = {}) {
   if (detail === 'public') return publicView(data);
   const rc = data.rc || {};
   const c = data.challans || {};
@@ -61,6 +61,9 @@ function basic(data, { detail = 'count' } = {}) {
       // "show only make, model, variant") nothing else about the vehicle.
       vehicle_class: detail === 'none' ? null : (rc.vehicle_class || null),
       fuel: detail === 'none' ? null : (rc.fuel || null),
+      /* The owner's name, masked, after sign-in — when free_view_show_owner is on (2026-10-21, siteApi
+         freeViewOpts). Before sign-in it is free_check_show_owner (site/chat.js). */
+      owner_masked: detail === 'none' || !owner ? null : (report.maskName(rc.owner_name) || null),
     },
     /*
      * WHAT is wrong, never WHEN or BY HOW MUCH.

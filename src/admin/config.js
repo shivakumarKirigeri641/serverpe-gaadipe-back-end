@@ -100,6 +100,8 @@ const GROUPS = [
     ['reach_push_per_tick', 'Queued notifications sent per minute', '50.'],
     // Like CarInfo (2026-10-10, migration 148).
     ['free_check_show_variant', 'Free check before sign-in: show the variant (true / false)', 'true: the full model, e.g. "SPLENDOR PLUS"; false: only the first word, the rest hidden.'],
+    // The owner's name after sign-in (2026-10-21): its own switch, beside the before-sign-in one.
+    ['free_view_show_owner', 'Free check after sign-in: show the owner name, masked (true / false)', 'true: a signed-in customer sees the owner name, masked (R****H K***R), on the vehicle card. false: only in the ₹19 report.'],
     ['free_check_show_owner', 'Free check before sign-in: show the owner name, masked (true / false)', 'The name masked as the Government masks it (R****H) — lets a buyer confirm it is the seller\'s vehicle.'],
     ['free_check_show_rto', 'Free check before sign-in: show the RTO (true / false)', 'RTO code, office, district and state — worked out from the number, free.'],
     ['free_view_detail', 'Free check after sign-in: how much it shows', 'public = the whole public record like CarInfo (every validity date, age, norms, seats, weight, RC status, how many challans) — the ₹19 report keeps the loan, blacklist/NOC, challan amounts, owners, insurer, FASTag and the verdict; labels / count / none show less.'],
