@@ -460,7 +460,9 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
           + 'and NETC FASTag records through the Unified Logistics Interface Platform (ULIP). These replicas are '
           + 'synchronised periodically and may lag behind the live record at the RTO. GaadiPe is a private '
           + 'service: it does not create, alter or verify this data, and this document is not an official record. '
-          + 'Where anything differs from your papers, the RTO record prevails.',
+          + 'Where anything differs from your papers, the RTO record prevails. '
+          // User, 2026-10-21: not an RC — the official digital RC is free.
+          + 'This report is not an RC card: for the official digital RC, use DigiLocker or mParivahan (free).',
       });
     }
     doc.end();
@@ -473,7 +475,8 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
  * (pay/rebuild.js). 2 = personal details masked, as on Parivahan (2026-10-01).
  * 3 = Indian scripts drawn (Tamil, Hindi and the rest), not dropped (2026-10-02).
  * 4 = drink-driving offences named by their section, no alcohol words (2026-10-19, Meta "ALCOHOL").
+ * 5 = "not an RC card — DigiLocker / mParivahan" in the footer note (2026-10-21).
  */
-const LAYOUT = 4;
+const LAYOUT = 5;
 
 module.exports = { buildVehicleReport, LAYOUT };
