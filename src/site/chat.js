@@ -171,7 +171,8 @@ async function anonCheck(req) {
   // Like CarInfo before sign-in (2026-10-10): variant, masked owner and RTO, each a setting.
   const shown = data?.success ? view.identity(data, {
     variant: await settings.bool('free_check_show_variant', true),
-    owner: await settings.bool('free_check_show_owner', true),
+    // Off by default (user, 2026-10-21): the owner's name is shown after sign-in unless this is switched on.
+    owner: await settings.bool('free_check_show_owner', false),
   }) : null;
   if (shown && await settings.bool('free_check_show_rto', true)) {
     shown.rto = await view.rtoOf(parsed.regNo).catch(() => null);
