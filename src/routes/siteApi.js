@@ -196,9 +196,10 @@ const freeDetail = async () => {
   // 'public' (2026-10-10): the whole public record free after sign-in, like CarInfo (site/vehicleView.publicView).
   return ['public', 'labels', 'count', 'none'].includes(v) ? v : 'count';
 };
-/* The signed-in free view's options (user, 2026-10-21: "a toggle for the owner name before and after
-   sign-in"): how much it shows, and whether the owner's name (masked) is in it — free_view_show_owner. */
-const freeViewOpts = async () => ({ detail: await freeDetail(), owner: await settings.bool('free_view_show_owner', true) });
+/* The signed-in free view's options. The owner's name (masked) is ALWAYS shown once signed in (user,
+   2026-10-21: "one toggle — off: not before sign-in, shown after; on: before and after");
+   free_check_show_owner (site/chat.js) is that one toggle, for before sign-in. */
+const freeViewOpts = async () => ({ detail: await freeDetail(), owner: true });
 /* A vehicle answer with its RTO (office, district, state) — from the number, free. */
 const withRto = async (v) => (v && v.reg_no ? { ...v, rto: await view.rtoOf(v.reg_no).catch(() => null) } : v);
 
