@@ -58,7 +58,7 @@ async function terms(mins) {
     if (!mine) continue;
     const out = await send.buttons(s.mobile,
       'Still want to check your vehicle? 🙂\n\n'
-      + 'Tap *Agree & continue* below, then send any vehicle number (like KA01XX1234). '
+      + 'Tap *Agree & continue* below, then send your vehicle number (like KA01XX1234).'
       + 'You will see its insurance, PUC, tax and challan status in seconds.\n\n'
       // What the button agrees to, in the same message as the button (user,
       // 2026-09-28) — not only in the terms screen further up the chat.

@@ -611,7 +611,7 @@ async function whatYouGet(mobile) {
   const renew = plan && Number(plan.renewal_paise) > 0 ? rupeesOf(plan.renewal_paise) : null;
   const days = plan?.duration_days || 28;
   await reply(mobile, '💡 *What you get with GaadiPe*\n\n'
-    + '✅ *Free check* — send any vehicle number: the vehicle, the owner’s name (masked), registration date and age, RC status, '
+    + '✅ *Free check* — send your vehicle’s number (or one you’re buying): the vehicle, the owner’s name (masked), registration date and age, RC status, '
     + 'seats and weight, the RTO, every validity date (insurance, PUC, road tax, fitness, permit) and how many challans are pending, with the total.\n\n'
     + `📋 *Full report — ${price}* — adds the loan / hypothecation, blacklist and NOC, each challan with offence and place, number of owners, `
     + 'insurer and policy, FASTag, and what to check before you buy — as a PDF.\n\n'
@@ -2232,7 +2232,7 @@ async function handle(session, message, mobile) {
       '🙏 Sorry, we can\'t share a vehicle owner\'s *mobile number* or *address*. It is private and protected by law — '
       + 'and our records don\'t include it either.\n\n'
       + 'If you need to reach the owner — about a parked vehicle or an accident — the *local traffic police* or the *RTO* can help.\n\n'
-      + 'What GaadiPe *can* show: insurance, PUC, tax and fitness, challans, loan and the number of owners — send any vehicle number.',
+      + 'What GaadiPe *can* show: insurance, PUC, tax and fitness, challans, loan and the number of owners — send your vehicle’s number, or one you’re buying.',
       ['check', { id: BTN.WHAT_GET, title: 'What do I get?' }, 'menu']);
     return;
   }
@@ -3220,7 +3220,7 @@ async function handle(session, message, mobile) {
              { id: BTN.FEEDBACK, title: 'Tell us why' }]);
         } else {
           await doors(mobile,
-            'I can check any Indian vehicle for you — just send its number, like *KA01XX1234*.\n\n'
+            'I can check your vehicle, your family’s, or one you’re about to buy — just send its number, like *KA01XX1234*.\n\n'
             + '_For anything else, tap More → Support._');
         }
         return;
