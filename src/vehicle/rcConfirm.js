@@ -22,14 +22,19 @@ const settings = require('../util/settings');
 const DATE_FIELDS = ['insurance_upto', 'pucc_upto', 'tax_upto', 'fitness_upto', 'permit_upto',
   'insuranceUpto', 'puccUpto', 'fitnessUpto', 'permitUpto', 'taxUpto'];
 
-/** Does this RC hold a document expired, or expiring within `days`? (What would make us warn.) */
+/**
+ * Does this RC hold a document expiring within `days`, or lapsed in the last week? (What would make us
+ * warn.) Not one lapsed long ago (2026-10-21): an owner who never renewed made it true every time, and
+ * each time cost a paid lookup for nothing (expiryWatch uses the same 7-day look-back).
+ */
 function needsConfirm(rc, days = 30) {
   if (!rc) return false;
   const soon = Date.now() + days * 864e5;
+  const since = Date.now() - 7 * 864e5;
   return DATE_FIELDS.some((f) => {
     const v = rc[f]; if (!v) return false;
     const t = new Date(v).getTime();
-    return Number.isFinite(t) && t <= soon;
+    return Number.isFinite(t) && t <= soon && t >= since;
   });
 }
 

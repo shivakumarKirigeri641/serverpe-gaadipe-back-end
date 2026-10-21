@@ -54,7 +54,7 @@ const WARN_DAYS = {
 /** Everything due for a re-check, oldest first so nobody starves. */
 async function due(limit = 50) {
   const { rows } = await db.query(
-    `SELECT w.id, w.user_id, w.vehicle_id, w.expires_at, w.fail_count,
+    `SELECT w.id, w.user_id, w.vehicle_id, w.subscription_id, w.expires_at, w.fail_count,
             w.challan_interval_hours, w.created_at,
             -- Age within THIS paid period: a renewal checks at the opening pace again (migration 190).
             extract(epoch FROM (now() - coalesce(w.period_started_at, w.created_at))) / 86400 AS age_days,
@@ -156,18 +156,6 @@ async function checkOne(w) {
   } catch (e) {
     data = null;
   }
-  /* THE SAVED RC STOOD IN, AND IT SHOWS SOMETHING EXPIRED OR EXPIRING (2026-10-20: "user already renewed
-     PUCC but still sees the old one"). ULIP's VAHAN answers commercial vehicles only, so for a private one
-     the saved RC is all we had. Before an update repeats an old date: one fresh lookup (paid source,
-     at most once per vehicle per rc_confirm_days), stored — vehicle/rcConfirm.js. */
-  // Recorded by rcConfirm already: stored again below for the diff, but its calls (IDSPay's ₹3) not counted twice.
-  let recorded = false;
-  if (data?.success && data.rc_saved && require('../vehicle/rcConfirm').needsConfirm(data.rc)) {
-    const fresh = await require('../vehicle/rcConfirm')
-      .refresh({ regNo: w.reg_no, vehicleId: w.vehicle_id, userId: w.user_id, why: 'monitoring update' }).catch(() => null);
-    if (fresh?.success) { data = fresh; recorded = true; }
-  }
-
   if (!data || data.success !== true) {
     // Back off rather than hammering a vehicle the upstream keeps refusing.
     await db.query(
@@ -181,7 +169,26 @@ async function checkOne(w) {
   }
 
   const before = await previous(w.vehicle_id);
-  const items = findings(data, before);
+  let items = findings(data, before);
+
+  /* A FRESH RC ONLY WHEN THERE IS NEWS FOR A PAYING CUSTOMER (user, 2026-10-21: "if this is automatic,
+     ₹3 goes without any reason — only for paid users, only when expiry nears or a challan is detected").
+     ULIP's VAHAN answers commercial vehicles only, so for a private one the saved RC stood in. When this
+     check is about to tell a paying customer something new — a document entering its warning window or
+     lapsing, or a new challan — one fresh lookup first (the paid source, at most once per vehicle per
+     rc_confirm_days), so a renewed document is not reported with its old date (2026-10-20: "user already
+     renewed PUCC but still sees the old one"). A free watch, or nothing new: no paid call. */
+  // Recorded by rcConfirm already: stored again below for the diff, but its calls (IDSPay's ₹3) not counted twice.
+  let recorded = false;
+  if (data.rc_saved && w.subscription_id) {
+    let news = false;
+    for (const item of items) { if (!await alreadySaid(w.id, item.key)) { news = true; break; } }
+    if (news) {
+      const fresh = await require('../vehicle/rcConfirm')
+        .refresh({ regNo: w.reg_no, vehicleId: w.vehicle_id, userId: w.user_id, why: 'monitoring update' }).catch(() => null);
+      if (fresh?.success) { data = fresh; recorded = true; items = findings(data, before); }
+    }
+  }
 
   // Store AFTER diffing — the comparison needs the old snapshot.
   // GaadiPe's own re-check: saved and costed to the customer, but not counted as their check.

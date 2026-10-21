@@ -30,9 +30,20 @@ async function checks() {
   let done = 0;
   for (const v of rows) {
     await db.query(`UPDATE fleet_vehicles SET last_attempt_at = now() WHERE id = $1`, [v.id]);
-    const data = await gateway.full(v.reg_no, { challans: 'all' }).catch((e) => ({ success: false, error: e.message }));
+    /* NOT A PAID LOOKUP EVERY DAY (user, 2026-10-21: "₹3 goes without any reason — only when expiry nears
+       or a challan is detected"). A vehicle already held: ULIP (free; commercial vehicles answer) or the
+       saved RC, and one fresh paid lookup only when a document is near its date (vehicle/rcConfirm, at
+       most once per rc_confirm_days). A vehicle never seen: the full chain once. */
+    const opts = await require('../vehicle/rcBackup').freeOpts({}, v.reg_no).then((o) => (o.rc_saved ? o : {}));
+    let data = await gateway.full(v.reg_no, { challans: 'all', ...opts }).catch((e) => ({ success: false, error: e.message }));
+    let recorded = false;
+    const confirm = require('../vehicle/rcConfirm');
+    if (data?.success && data.rc_saved && v.vehicle_id && confirm.needsConfirm(data.rc)) {
+      const fresh = await confirm.refresh({ regNo: v.reg_no, vehicleId: v.vehicle_id, why: 'fleet check' }).catch(() => null);
+      if (fresh?.success) { data = { ...fresh, challans: data.challans || fresh.challans }; recorded = true; }
+    }
     if (data?.success) {
-      const vehicle = await store.record(null, data).catch(() => null);
+      const vehicle = await store.record(null, data, { calls: !recorded }).catch(() => null);
       await db.query(`UPDATE fleet_vehicles SET vehicle_id = coalesce($2, vehicle_id), last_checked_at = now(), last_check_ok = true,
                              last_error = $3 WHERE id = $1`,
         [v.id, vehicle?.id || null, data.challans ? null : 'e-Challan did not answer']);

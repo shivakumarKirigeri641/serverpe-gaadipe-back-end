@@ -37,7 +37,7 @@ async function deliver(w, intro) {
       WHERE id = $1 AND status IN ('waiting', 'expired') AND attempts < 5 RETURNING id`, [w.id]);
   if (!mine) return false;
   // The full chain (ULIP, eChallan.app, IDSPay) — the same as any free check now.
-  const data = await gateway.full(w.reg_no, await require('../vehicle/rcBackup').freeOpts()).catch(() => null);
+  const data = await gateway.full(w.reg_no, await require('../vehicle/rcBackup').freeOpts({}, w.reg_no)).catch(() => null);
   if (!usable(data)) {
     if (data?.error === 'vehicle_not_found') {
       await db.query(`UPDATE lookup_waitlist SET status = 'failed', done_at = now(), note = 'not found' WHERE id = $1`, [w.id]);

@@ -371,7 +371,24 @@ async function paidOnly() {
 }
 
 /** gateway options for a FREE lookup: ULIP only when the backup is for paying customers. */
-async function freeOpts(extra = {}) {
+/*
+ * IDSPAY ONCE PER VEHICLE FOR FREE CHECKS (user, 2026-10-21: "for free users call IDSPay only once
+ * fresh, that's the investment"). A vehicle GaadiPe already holds an RC for — fetched by anyone, from
+ * any source — is not bought again for a free check: ULIP and eChallan.app (both free) are still asked,
+ * and if they cannot answer, the saved RC stands in (rc_saved). Only a vehicle never seen goes on to
+ * IDSPay, and only while rc_backup_paid_only is off. Paying customers are not affected (rcConfirm).
+ */
+async function hasSavedRc(regNo) {
+  if (!regNo) return false;
+  const row = await db.one(
+    `SELECT 1 AS yes FROM vehicle_snapshots s JOIN vehicles v ON v.id = s.vehicle_id
+      WHERE v.reg_no = $1 AND s.dataset = 'rc' AND (s.data->>'maker' IS NOT NULL OR s.data->>'model' IS NOT NULL)
+      LIMIT 1`, [String(regNo).toUpperCase()]).catch(() => null);
+  return Boolean(row);
+}
+
+async function freeOpts(extra = {}, regNo = null) {
+  if (await hasSavedRc(regNo)) return { ...extra, backup: 0, rc_saved: 1 };
   return (await paidOnly()) ? { ...extra, backup: 0 } : extra;
 }
 

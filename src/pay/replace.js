@@ -75,7 +75,7 @@ async function lookupNew(userId, mobile, toReg) {
   const q = await quota.check(userId, toReg);
   if (!q.allowed) return { ok: false, message: 'You have reached your checks for now. Please try again later.' };
   let data;
-  try { data = await require('../vehicle/gateway').full(toReg, await require('../vehicle/rcBackup').freeOpts()); }
+  try { data = await require('../vehicle/gateway').full(toReg, await require('../vehicle/rcBackup').freeOpts({}, toReg)); }
   catch (e) { data = null; }
   await quota.record(userId, toReg, { repeat: q.repeat, found: data?.success === true });
   if (!data || data.success !== true || !(data.rc && (data.rc.maker || data.rc.model || data.rc.vehicle_class))) {

@@ -136,7 +136,8 @@ async function tick() {
       RETURNING challan_tries`, [r.id, every]);
     if (!mine) continue;
 
-    const data = await gateway.full(r.reg_no, { challans: 'all' }).catch(() => null);
+    // Challans are what is missing; the RC was bought with the report, so never the paid source again here.
+    const data = await gateway.full(r.reg_no, { challans: 'all', backup: 0, rc_saved: 1 }).catch(() => null);
     if (!data?.success || !data.challans) {
       if (mine.challan_tries >= maxTries) console.warn('[challan-followup] %s: gave up after %d tries', r.report_number, mine.challan_tries);
       continue;
