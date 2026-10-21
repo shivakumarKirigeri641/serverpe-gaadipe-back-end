@@ -47,7 +47,8 @@ async function attempts(from, to) {
   const r = await db.one(
     `SELECT count(*)::int AS n FROM payments
       WHERE created_at >= $1 AND created_at < $2 AND amount_paise > 0 AND coalesce(gateway, '') <> 'free'
-        AND coalesce(raw->>'channel', raw->'paid_from'->>'channel', 'whatsapp') ${waView() ? '<>' : '='} 'web'
+        AND ${require('./consented').allChannelsNow() ? 'true'
+          : `coalesce(raw->>'channel', raw->'paid_from'->>'channel', 'whatsapp') ${waView() ? '<>' : '='} 'web'`}
         AND (raw->>'test_mode') IS NULL`, [from, to]);
   return r.n;
 }
@@ -65,7 +66,9 @@ async function figures(from, to) {
       free_reports: m.free_reports, fees_estimated: m.fees_estimated,
     };
   }
-  const [t, m, a] = await Promise.all([command.totals(from, to), ledger.periodMoney(from, to, null, { channel: 'website' }), attempts(from, to)]);
+  // Every channel since WhatsApp closed (2026-10-21, consented.allChannelsNow); command.totals follows it too.
+  const every = require('./consented').allChannelsNow();
+  const [t, m, a] = await Promise.all([command.totals(from, to), ledger.periodMoney(from, to, null, { channel: every ? null : 'website' }), attempts(from, to)]);
   return {
     visitors: t.visitors, searches: t.searches, sign_ins: t.sign_ins, lookups: t.api_calls,
     reports: t.reports, attempts: a, paid: m.payments, revenue: m.gross_paise,
@@ -78,19 +81,19 @@ async function figures(from, to) {
 /* What each figure is, whether up is bad, and where its rows are. */
 const METRICS = [
   ['visitors', 'Visitors', 'Different browsers that opened the website.', {}, '/web/visitors'],
-  ['searches', 'Vehicle checks', 'Vehicle numbers checked on the website — free chat checks and signed-in checks.', {}, '/web/free-checks'],
+  ['searches', 'Vehicle checks', 'Vehicle numbers checked — on the website (free and signed-in), and on WhatsApp before 21 Oct.', {}, '/web/free-checks'],
   ['sign_ins', 'Sign-ins', 'Customers who signed in on the website.', {}, '/web/customers'],
   ['lookups', 'Government lookups', 'Calls to the Government records, found or not.', {}, '/api-monitor'],
-  ['reports', 'Reports generated', 'Full reports (PDF) issued for website payments.', {}, '/documents'],
-  ['attempts', 'Payment attempts', 'Checkouts opened for a paid report on the website.', {}, '/payments'],
-  ['paid', 'Successful payments', 'Website payments completed (free reports not counted).', {}, '/profitability'],
-  ['revenue', 'Revenue', 'What customers paid on the website, GST included.', { money: true }, '/profitability'],
+  ['reports', 'Reports generated', 'Full reports (PDF) issued for payments — website, and WhatsApp before 21 Oct.', {}, '/documents'],
+  ['attempts', 'Payment attempts', 'Checkouts opened for a paid report — website, and WhatsApp before 21 Oct.', {}, '/payments'],
+  ['paid', 'Successful payments', 'Payments completed — website, and WhatsApp before 21 Oct (free reports not counted).', {}, '/profitability'],
+  ['revenue', 'Revenue', 'What customers paid, GST included — website, and WhatsApp before 21 Oct.', { money: true }, '/profitability'],
   ['gst', 'GST', 'Output GST inside that revenue — from the tax invoices.', { money: true, worseUp: true }, '/finance'],
   ['gateway_cost', 'Payment gateway cost', 'Razorpay’s fee and its GST — actual where Razorpay gave it.', { money: true, worseUp: true }, '/profitability'],
   ['api_cost', 'API cost', 'Every Government-records call in the period.', { money: true, worseUp: true }, '/api-monitor'],
   ['messaging_cost', 'SMS cost', 'Sign-in codes by SMS, at the rate in Settings.', { money: true, worseUp: true }, '/profitability'],
   ['refunds', 'Refunds', 'Money returned to customers.', { money: true, worseUp: true }, '/payments?status=refunded'],
-  ['net', 'Net contribution', 'Website revenue after GST, the gateway, refunds, API and SMS.', { money: true }, '/profitability'],
+  ['net', 'Net contribution', 'Revenue after GST, the gateway, refunds, API and messaging.', { money: true }, '/profitability'],
 ];
 
 /* The same figures as the main admin names them (WhatsApp, 2026-10-15). */

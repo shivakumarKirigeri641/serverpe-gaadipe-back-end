@@ -234,11 +234,13 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
      everywhere in this admin panel"). The main admin (X-View: whatsapp) counts WhatsApp
      customers, activity, reports and checks; the web admin keeps the website's. */
   const wa = require('./consented').whatsappOnlyNow();
-  const WEB_PAID = wa ? `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') <> 'web'`
+  // Every channel in the web admin since WhatsApp closed (2026-10-21, consented.allChannelsNow).
+  const all = require('./consented').allChannelsNow();
+  const WEB_PAID = all ? 'true' : wa ? `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') <> 'web'`
     : `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
-  const WEB_CHECK = wa ? `coalesce(detail->>'channel', 'whatsapp') = 'whatsapp'` : `detail->>'channel' = 'web'`;
-  const JOINED = wa ? `coalesce(signup_channel, 'whatsapp') <> 'web'` : `signup_channel = 'web'`;
-  const ACTIVE = wa ? `channel = 'whatsapp'` : `channel = 'web'`;
+  const WEB_CHECK = all ? 'true' : wa ? `coalesce(detail->>'channel', 'whatsapp') = 'whatsapp'` : `detail->>'channel' = 'web'`;
+  const JOINED = all ? 'true' : wa ? `coalesce(signup_channel, 'whatsapp') <> 'web'` : `signup_channel = 'web'`;
+  const ACTIVE = all ? `channel IN ('web', 'whatsapp')` : wa ? `channel = 'whatsapp'` : `channel = 'web'`;
   const today = await db.one(
     `WITH b AS (SELECT date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata' AS d)
      SELECT (SELECT count(*) FROM users, b WHERE created_at >= b.d AND ${JOINED})::int AS joined,

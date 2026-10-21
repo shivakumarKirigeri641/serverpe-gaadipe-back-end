@@ -43,6 +43,16 @@ const METRICS = {
   emails_sent:     ['customer_emails', 'sent_at', `status = 'sent' AND ${NU}`, 'count(*)', 'Customer emails sent'],
 };
 const LOWER_IS_BETTER = new Set(['failed_tries']);
+/* EVERY CHANNEL (2026-10-21, consented.allChannelsNow): customers, checks and money from WhatsApp's
+   history and the website alike. Visits, visitors and the chat stay the website's — only it has them. */
+const PAID_ALL = `status = 'paid' AND amount_paise > 0`;
+const ALL_CHANNELS = {
+  new_customers: `NOT coalesce(is_internal, false)`,
+  checks: `kind IN ('vehicle_check', 'vehicle_check_repeat') AND ${NU}`,
+  checkouts: NU,
+  paid: `${PAID_ALL} AND ${NU}`,
+  revenue_paise: `${PAID_ALL} AND ${NU}`,
+};
 
 /* The seven windows, as [from, to] Dates. */
 function windows(now = new Date()) {
@@ -67,15 +77,19 @@ function windows(now = new Date()) {
 
 const pct = (now, before) => (before ? Math.round(((now - before) / before) * 1000) / 10 : now ? null : 0);
 
-let cache = { at: 0, value: null };
+// One cache per view: the every-channel figures and the website-only ones differ.
+const caches = {};
 async function all({ fresh = false } = {}) {
+  const every = require('./consented').allChannelsNow();
+  const cache = caches[every ? 'all' : 'web'] || { at: 0, value: null };
   if (!fresh && cache.value && Date.now() - cache.at < 60000) return cache.value;
   const w = windows();
   const names = Object.keys(w);
   const earliest = new Date(Math.min(...names.map((n) => w[n][0].getTime())));
   const params = [earliest, ...names.flatMap((n) => w[n])];
   const out = {};
-  await Promise.all(Object.entries(METRICS).map(async ([key, [table, col, where, agg, words]]) => {
+  await Promise.all(Object.entries(METRICS).map(async ([key, [table, col, webWhere, agg, words]]) => {
+    const where = every && ALL_CHANNELS[key] ? ALL_CHANNELS[key] : webWhere;
     const cols = names.map((n, i) => `${agg.replace(/^count\(/, `count(`)} FILTER (WHERE ${col} >= $${2 + i * 2} AND ${col} < $${3 + i * 2}) AS ${n}`);
     // FILTER works on aggregates; sum() is wrapped so FILTER applies inside coalesce.
     const select = agg.startsWith('coalesce(sum(')
@@ -93,8 +107,8 @@ async function all({ fresh = false } = {}) {
       console.error('[compare] %s: %s', key, e.message);
     }
   }));
-  cache = { at: Date.now(), value: { at: new Date().toISOString(), windows: Object.fromEntries(names.map((n) => [n, w[n].map((d) => d.toISOString())])), metrics: out } };
-  return cache.value;
+  caches[every ? 'all' : 'web'] = { at: Date.now(), value: { at: new Date().toISOString(), windows: Object.fromEntries(names.map((n) => [n, w[n].map((d) => d.toISOString())])), metrics: out } };
+  return caches[every ? 'all' : 'web'].value;
 }
 
 module.exports = { all, METRICS, windows };

@@ -122,11 +122,16 @@ const WEB_EVENTS = `
   count(*) FILTER (WHERE e.name = 'page_view')                                          AS page_views,
   count(*) FILTER (WHERE e.name = 'payment_page_viewed')                                AS pay_views`;
 const WEB_CHECK = `(kind = 'chat_anon_check' OR (kind IN ('vehicle_check', 'vehicle_check_repeat') AND detail->>'channel' = 'web'))`;
-const WEB_CHECKS = `
-  count(*) FILTER (WHERE ${WEB_CHECK})                                                  AS searches,
-  count(*) FILTER (WHERE ${WEB_CHECK} AND coalesce(detail->>'found', 'true') <> 'false') AS retrieved,
+/* Every channel in the web admin since WhatsApp closed (2026-10-21, consented.allChannelsNow): WhatsApp's
+   checks and payments count too, so yesterday's WhatsApp day and today's website day are one story. */
+const every = () => require('./consented').allChannelsNow();
+const webCheck = () => (every() ? `kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat')` : WEB_CHECK);
+const webChecks = () => `
+  count(*) FILTER (WHERE ${webCheck()})                                                  AS searches,
+  count(*) FILTER (WHERE ${webCheck()} AND coalesce(detail->>'found', 'true') <> 'false') AS retrieved,
   count(*) FILTER (WHERE kind = 'site_sign_in')                                         AS sign_ins`;
 const WEB_PAY = `coalesce(p.raw->>'channel', p.raw->'paid_from'->>'channel', 'whatsapp') = 'web'`;
+const webPay = () => (every() ? 'true' : WEB_PAY);
 /* The owner's own visits, checks, sign-ins and payments (and every TEST-mode payment)
    stay out of every figure here (user, 2026-10-10). */
 const NM = require('./notMe');
@@ -137,13 +142,13 @@ const ME_PAY = NM.pay('p');                  // payments p
 async function totals(from, to) {
   const [ev, ck, rp, api, money] = await Promise.all([
     db.one(`SELECT ${WEB_EVENTS} FROM events e WHERE e.occurred_at >= $1 AND e.occurred_at < $2 AND ${ME_E}`, [from, to]),
-    db.one(`SELECT ${WEB_CHECKS} FROM event_log WHERE created_at >= $1 AND created_at < $2 AND ${ME_LOG}
+    db.one(`SELECT ${webChecks()} FROM event_log WHERE created_at >= $1 AND created_at < $2 AND ${ME_LOG}
               AND kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat', 'site_sign_in')`, [from, to]),
     db.one(`SELECT count(*)::int AS reports FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
-             WHERE r.created_at >= $1 AND r.created_at < $2 AND ${WEB_PAY} AND ${ME_PAY}`, [from, to]),
+             WHERE r.created_at >= $1 AND r.created_at < $2 AND ${webPay()} AND ${ME_PAY}`, [from, to]),
     db.one(`SELECT coalesce(sum(cost_paise), 0)::int AS api_cost_paise, count(*)::int AS api_calls
               FROM api_calls WHERE created_at >= $1 AND created_at < $2`, [from, to]),
-    ledger.periodMoney(from, to, null, { channel: 'website', notMe: true }),
+    ledger.periodMoney(from, to, null, { channel: every() ? null : 'website', notMe: true }),
   ]);
   const n = Object.fromEntries(Object.entries({ ...ev, ...ck, ...rp }).map(([k, v]) => [k, Number(v || 0)]));
   return {
@@ -172,19 +177,19 @@ async function series(from, to, step) {
             (SELECT count(DISTINCT e.session_id) FILTER (WHERE e.name = 'session_started') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2 AND ${ME_E}) AS visits,
             (SELECT count(*) FILTER (WHERE e.name = 'page_view') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2 AND ${ME_E}) AS page_views,
             (SELECT count(*) FILTER (WHERE e.name = 'payment_page_viewed') FROM events e WHERE e.occurred_at >= b.t AND e.occurred_at < b.t2 AND ${ME_E}) AS pay_views,
-            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WEB_CHECK} AND ${ME_LOG}) AS searches,
-            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${WEB_CHECK} AND ${ME_LOG}
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${webCheck()} AND ${ME_LOG}) AS searches,
+            (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND ${webCheck()} AND ${ME_LOG}
                 AND coalesce(detail->>'found', 'true') <> 'false') AS retrieved,
             (SELECT count(*) FROM event_log WHERE created_at >= b.t AND created_at < b.t2 AND kind = 'site_sign_in' AND ${ME_LOG}) AS sign_ins,
             (SELECT count(*) FROM vehicle_reports r JOIN payments p ON p.id = r.payment_id
-              WHERE r.created_at >= b.t AND r.created_at < b.t2 AND ${WEB_PAY} AND ${ME_PAY}) AS reports,
+              WHERE r.created_at >= b.t AND r.created_at < b.t2 AND ${webPay()} AND ${ME_PAY}) AS reports,
             (SELECT coalesce(sum(cost_paise), 0) FROM api_calls a WHERE a.created_at >= b.t AND a.created_at < b.t2) AS api_cost_paise
        FROM b ORDER BY b.t`,
     [from, to, step === 'hour' ? '1 hour' : '1 day', step === 'hour' ? 'HH24:00' : 'DD Mon']);
   // Each bucket's payments, revenue and net from the ledger's own website payments,
   // less that bucket's API calls — the same arithmetic as the period's total.
   const { rows: all } = await ledger.entries({ from, to, notMe: true });
-  const pays = all.filter((p) => p.channel === 'website');
+  const pays = every() ? all : all.filter((p) => p.channel === 'website');
   const out = [];
   for (const r of rows) {
     const n = Object.fromEntries(Object.entries(r).map(([k, v]) => [k, k === 'label' || k === 't' ? v : Number(v || 0)]));
@@ -462,7 +467,7 @@ async function live({ since = null } = {}) {
   const wa = waView();
   if (wa) delete now.on_site;   // website visitors: not in the WhatsApp admin
   const web = await db.one(
-    `SELECT count(*) FILTER (WHERE ${wa ? WA_CHECK : WEB_CHECK})::int AS searches,
+    `SELECT count(*) FILTER (WHERE ${wa ? WA_CHECK : webCheck()})::int AS searches,
             count(DISTINCT detail->>'mobile') FILTER (WHERE kind = 'site_sign_in')::int AS signing_in
        FROM event_log WHERE created_at > now() - interval '15 minutes' AND ${ME_LOG}
         AND kind IN ('chat_anon_check', 'vehicle_check', 'vehicle_check_repeat', 'site_sign_in')`);

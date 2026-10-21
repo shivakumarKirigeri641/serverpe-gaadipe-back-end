@@ -139,4 +139,12 @@ function chan() {
   };
 }
 
-module.exports = { filter, allowedOf, agreedSql, view, webOnlyNow, whatsappOnlyNow, chan };
+/*
+ * ONE STORY, EVERY CHANNEL (user, 2026-10-21: "count from the WhatsApp numbers till yesterday, and going
+ * on, the web"). In the web admin with admin_web_shows_all on, the counts that are about customers,
+ * checks, reports, payments and money take every channel — WhatsApp's history and the website's from now
+ * on. Counts that only the website has (visitors, visits, pages) stay the website's.
+ */
+const allChannelsNow = () => view.getStore()?.allChannels === true;
+
+module.exports = { filter, allowedOf, agreedSql, view, webOnlyNow, whatsappOnlyNow, allChannelsNow, chan };

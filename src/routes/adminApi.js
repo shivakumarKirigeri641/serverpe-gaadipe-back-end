@@ -111,7 +111,8 @@ router.use(safe(async (req, res, next) => {
   /* EVERY CUSTOMER IN THE WEB ADMIN (user, 2026-10-21: WhatsApp permanently disabled — "transfer all to
      the web platform"). Customers who came through WhatsApp are website customers now, so the web admin
      shows everyone who agreed, in either channel (migration 197). false = website-only, as before. */
-  const webOnly = xView === 'web' && !(await settings.bool('admin_web_shows_all', false));
+  const allChannels = xView === 'web' && await settings.bool('admin_web_shows_all', false);
+  const webOnly = xView === 'web' && !allChannels;
   if (!CONSENT_SKIP.test(req.path)) {
     const inner = res.json.bind(res);
     res.json = (body) => {
@@ -121,7 +122,7 @@ router.use(safe(async (req, res, next) => {
       return res;
     };
   }
-  consented.view.run({ whatsappOnly, webOnly }, next);
+  consented.view.run({ whatsappOnly, webOnly, allChannels }, next);
 }));
 const CONSENT_SKIP = /^\/(session|me|admins|people|sessions|fleets|referrals|quizpe|settings|config|audit|blocks|security)(\/|$)/;
 
