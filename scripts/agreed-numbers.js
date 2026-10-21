@@ -23,6 +23,11 @@
  *                                               who already wrote to the new number
  *                                               (whatsapp_number_since) is left out, so a later batch
  *                                               never asks someone twice
+ *   node scripts/agreed-numbers.js --all --latest --csv latest.csv
+ *                                               LATEST FIRST (2026-10-21: "mobile numbers sorted from
+ *                                               latest to oldest, to SMS them"): by the last time they
+ *                                               used GaadiPe, on WhatsApp or the website; --dates also
+ *                                               prints that day beside each number
  *
  * Prints the count, then the 10-digit numbers, one per line.
  */
@@ -39,6 +44,8 @@ const size = args.includes('--size') ? Math.max(1, Number(args[args.indexOf('--s
 // Only customers who paid at least once (user, 2026-10-20: "give me paid customers, around 37").
 const paidOnly = args.includes('--paid');
 const unpaidOnly = args.includes('--unpaid');
+const latest = args.includes('--latest');
+const dates = args.includes('--dates');
 // A first name fit for "Dear {#var#}": letters only, at most 20, else "Customer".
 const firstName = (s) => {
   const w = String(s || '').trim().split(/\s+/)[0].replace(/[^A-Za-zऀ-ॿ.]/g, '');
@@ -60,6 +67,9 @@ const firstName = (s) => {
                      WHERE right(u.mobile, 10) = a.m AND p.status = 'paid' AND p.amount_paise > 0) AS paid,
             (SELECT max(w.created_at) FROM whatsapp_messages w
               WHERE w.direction = 'in' AND right(regexp_replace(w.mobile, '\\D', '', 'g'), 10) = a.m) AS last_in,
+            -- The website too (2026-10-21, --latest): their last site session.
+            (SELECT max(coalesce(s.last_used_at, s.created_at)) FROM site_sessions s JOIN users u ON u.id = s.user_id
+              WHERE right(u.mobile, 10) = a.m) AS last_web,
             ${since ? `EXISTS (SELECT 1 FROM whatsapp_messages w WHERE w.direction = 'in'
                      AND right(regexp_replace(w.mobile, '\\D', '', 'g'), 10) = a.m AND w.created_at >= $1)` : 'false'} AS on_new
        FROM agreed a
@@ -84,13 +94,18 @@ const firstName = (s) => {
     console.log(`Batch ${batch} of ${Math.ceil(ordered.length / size)} (${size} each): ${rows.length} numbers to SMS, `
       + `${rows.filter((r) => r.paid).length} paying; ${slice.length - rows.length} of this batch already said Hi to the new number.`);
   }
+  // Latest first: the newest of their last WhatsApp message and their last website visit.
+  const seen = (r) => Math.max(new Date(r.last_in || 0).getTime(), new Date(r.last_web || 0).getTime());
+  if (latest) rows = [...rows].sort((x, y) => seen(y) - seen(x) || x.m.localeCompare(y.m));
+  const day = (r) => (seen(r) ? new Date(seen(r) + 5.5 * 3600e3).toISOString().slice(0, 10) : 'never');
   const list = rows.map((r) => r.m);
-  console.log(`${list.length} numbers (${all ? 'WhatsApp + website' : 'WhatsApp'} agreements; STOP, internal and closed accounts left out)\n`);
+  console.log(`${list.length} numbers (${all ? 'WhatsApp + website' : 'WhatsApp'} agreements; STOP, internal and closed accounts left out)`
+    + `${latest ? ', latest first' : ''}\n`);
   // One per line (user: "no, line by line"); --comma for a single comma-separated line.
-  console.log(list.join(args.includes('--comma') ? ',' : '\n'));
+  console.log(dates ? rows.map((r) => `${r.m}  ${day(r)}${r.paid ? '  paid' : ''}`).join('\n') : list.join(args.includes('--comma') ? ',' : '\n'));
   if (file) { fs.writeFileSync(file, `${list.join('\n')}\n`); console.log(`\nAlso written to ${file}, one per line.`); }
   if (csv) {
-    fs.writeFileSync(csv, `mobile,name\n${rows.map((r) => `${r.m},${firstName(r.name)}`).join('\n')}\n`);
+    fs.writeFileSync(csv, `mobile,name,last_seen,paid\n${rows.map((r) => `${r.m},${firstName(r.name)},${day(r)},${r.paid ? 'yes' : 'no'}`).join('\n')}\n`);
     console.log(`\nAlso written to ${csv} as mobile,name (${rows.filter((r) => firstName(r.name) !== 'Customer').length} with a name).`);
   }
   process.exit(0);
