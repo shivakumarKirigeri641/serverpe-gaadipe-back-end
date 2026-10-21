@@ -196,10 +196,24 @@ async function dailyFor(u, day) {
   return { mail: C.dailyMail(u, { paid, changes, others }), changes, regs: paid.map((p) => p.record.vehicle_number) };
 }
 
-async function daily(day, limit) {
+/*
+ * RIGHT AFTER CONFIRMING (user, 2026-10-21: "after user pays but didn't confirm the mail, and confirms
+ * a day or more later, are you sending one round of full details immediately?"). A paying customer who
+ * confirmed in the last 2 days and has had no daily email since gets today's daily — the full details
+ * of every paid vehicle — on the next tick, any hour. It is today's 'daily' row, so the evening run
+ * does not send it twice. Not when a purchase email went (or is still going) after the confirmation:
+ * that one already carries the full challans.
+ */
+const JUST_CONFIRMED = `u.email_verified_at > now() - interval '2 days'
+  AND NOT EXISTS (SELECT 1 FROM customer_emails e WHERE e.user_id = u.id AND e.kind IN ('daily', 'purchase')
+                    AND e.status = 'sent' AND e.sent_at >= u.email_verified_at)
+  AND NOT EXISTS (SELECT 1 FROM customer_emails e WHERE e.user_id = u.id AND e.kind = 'purchase'
+                    AND e.status IN ('pending', 'failed') AND e.attempts < ${MAX_ATTEMPTS})`;
+
+async function daily(day, limit, { justConfirmed = false } = {}) {
   const { rows: people } = await db.query(
     `SELECT u.* FROM users u
-      WHERE ${MAILABLE} AND ${PAYING}
+      WHERE ${MAILABLE} AND ${PAYING} ${justConfirmed ? `AND ${JUST_CONFIRMED}` : ''}
         AND NOT EXISTS (SELECT 1 FROM customer_emails e WHERE e.user_id = u.id AND e.kind = 'daily'
                           AND e.ist_date = $1 AND (e.status IN ('sent', 'skipped') OR e.attempts >= ${MAX_ATTEMPTS}))
       ORDER BY u.id LIMIT $2`, [day, limit]);
@@ -321,6 +335,8 @@ async function runOnce({ force = false } = {}) {
   if (bought) console.log('[customer-mail] purchase emails sent %d', bought);
   const announced = await announcements(Math.max(1, await settings.num('customer_email_per_tick', 10)));
   if (announced) console.log('[customer-mail] announcements sent %d', announced);
+  const confirmedNow = await daily(istToday(), Math.max(1, await settings.num('customer_email_per_tick', 10)), { justConfirmed: true });
+  if (confirmedNow) console.log('[customer-mail] full details sent right after confirming %d', confirmedNow);
   const from = await settings.num('customer_email_hour_ist', 19);
   const until = await settings.num('customer_email_until_hour_ist', 22);
   const hour = istNow().getUTCHours();
