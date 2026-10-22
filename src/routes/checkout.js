@@ -307,8 +307,10 @@ router.get('/pay/:token', safe(async (req, res) => {
   // gaadipe.in, which opens the full report and its PDF there (/chat?paid=REG) —
   // whatever WHATSAPP_ENABLED says. With the WhatsApp account disabled, "Open
   // WhatsApp" after paying sent a paying customer to a dead end.
+  // &amt= the rupees paid, for the website's Meta Pixel Purchase (user, 2026-10-22) — the amount only.
+  const amt = Math.round(Number(pay.amount_paise) || 0) / 100;
   const backUrl = web
-    ? (isReplace ? `${site}/chat?open=subs` : `${site}/chat?paid=${encodeURIComponent(pay.reg_no || '1')}`)
+    ? (isReplace ? `${site}/chat?open=subs&amt=${amt}` : `${site}/chat?paid=${encodeURIComponent(pay.reg_no || '1')}&amt=${amt}`)
     : null;
   void WA_ON;
   const chatText = web ? 'Report' : '';
