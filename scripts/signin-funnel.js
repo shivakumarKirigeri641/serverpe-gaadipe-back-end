@@ -22,7 +22,7 @@ const STEPS = [
   ['1 Visitors on the site', `SELECT count(DISTINCT e.visitor_id) FROM events e WHERE ${WEB}`],
   ['   new to the site that day', `SELECT count(*) FROM visitors v WHERE v.first_seen_at >= $1 AND v.first_seen_at < $2 AND ${notMe.visitor('v.visitor_id')}`],
   ['   saw only one page', `SELECT count(*) FROM (SELECT e.visitor_id FROM events e WHERE ${WEB} AND e.name = 'page_view' GROUP BY 1 HAVING count(*) = 1) x`],
-  ['2 Opened the chat', `SELECT count(DISTINCT e.visitor_id) FROM events e WHERE ${WEB} AND e.name = 'page_view' AND e.page LIKE '/chat%'`],
+  ['2 Opened the chat or app', `SELECT count(DISTINCT e.visitor_id) FROM events e WHERE ${WEB} AND e.name = 'page_view' AND (e.page LIKE '/chat%' OR e.page LIKE '/go%')`],
   ['3 Typed a vehicle number', `SELECT count(DISTINCT ${WHO}) FROM anon_checks a WHERE ${ANON}`],
   ['   stopped at "Agree & check"', `SELECT count(DISTINCT ${WHO}) FROM anon_checks a WHERE ${ANON} AND a.refusal = 'no_consent' AND ${WHO} NOT IN (SELECT ${WHO} FROM anon_checks a WHERE ${ANON} AND a.refusal IS DISTINCT FROM 'no_consent' AND ${WHO} IS NOT NULL)`],
   ['4 Got a free answer', `SELECT count(DISTINCT ${WHO}) FROM anon_checks a WHERE ${ANON} AND a.outcome IN ('shown', 'not_found')`],

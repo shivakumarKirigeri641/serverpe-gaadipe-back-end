@@ -177,6 +177,12 @@ async function anonCheck(req) {
   if (shown && await settings.bool('free_check_show_rto', true)) {
     shown.rto = await view.rtoOf(parsed.regNo).catch(() => null);
   }
+  /* WHAT THE AD SHOWS (user, 2026-10-22: "the way of showing details also matters" — the ads show
+     "Insurance Valid · PUC Expired", the free answer showed make and model only). With
+     free_check_show_status on: each document's state, never its date, and the pending challan count. */
+  if (shown && await settings.bool('free_check_show_status', false)) {
+    shown.status = view.statusOnly(data);
+  }
   // Way2API counts as the paid backup too, so free_check_backup_per_day caps both.
   const SOURCE = { ECHALLANAPP: 'eChallan.app', RCBACKUP: 'RC backup (paid)', WAY2API: 'RC backup (paid)' };
   const dataSource = data?.success

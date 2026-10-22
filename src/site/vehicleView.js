@@ -407,4 +407,29 @@ const one = (p) => ({
   status: p.sent_to_court || p.sent_to_virtual_court ? 'In court' : (p.status || 'Pending'),
 });
 
-module.exports = { basic, full, identity, modelName, rtoOf, verdict, publicView, cleanModel, kindOf };
+/*
+ * EACH DOCUMENT'S STATE, NO DATES (user, 2026-10-22; free_check_show_status): what the ads show —
+ * "Insurance: Valid · PUC: Expired" — and how many challans are pending. When it lapsed or is due,
+ * each challan, the loan and the blacklist stay in sign-in and the report. Due soon = within 30 days.
+ * challans_pending is null when the challan record could not be read (said as nothing, never as 0).
+ */
+function statusOnly(data) {
+  const c = data.challans;
+  return statusOf(data.rc || {}, c && c.pending_count != null ? Number(c.pending_count) : null);
+}
+
+/*
+ * THE HEALTH SCORE (user, 2026-10-22: the GaadiPe app's dashboard — "64 HEALTH"). One rule, here, so the
+ * check, the garage and the app never disagree: start at 100; an expired document −25, one due within
+ * 30 days −10, each pending challan −8 (at most −40). Never below 0. Said as Good (80+), Needs attention
+ * (50–79) or Act now (below 50). From the record's dates and challan count only — no new lookup.
+ */
+function statusOf(rc, challansPending = null) {
+  const documents = report.documentsOf(rc || {})
+    .map((d) => ({ label: d.label, state: d.days < 0 ? 'expired' : d.days <= 30 ? 'due_soon' : 'valid' }));
+  const n = (s) => documents.filter((d) => d.state === s).length;
+  const score = Math.max(0, 100 - n('expired') * 25 - n('due_soon') * 10 - Math.min(40, (Number(challansPending) || 0) * 8));
+  return { documents, challans_pending: challansPending, score, band: score >= 80 ? 'good' : score >= 50 ? 'attention' : 'act' };
+}
+
+module.exports = { basic, full, identity, modelName, rtoOf, verdict, publicView, cleanModel, kindOf, statusOnly, statusOf };

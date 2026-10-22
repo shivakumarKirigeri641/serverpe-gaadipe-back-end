@@ -689,6 +689,10 @@ router.get('/vehicles', safe(async (req, res) => {
     `SELECT v.reg_no, v.maker, v.model, v.fuel, v.vehicle_class, v.rc_status,
             v.insurance_upto, v.pucc_upto, v.fitness_upto, v.tax_upto, v.permit_upto,
             v.reg_upto, uv.check_count, uv.last_checked_at,
+            -- The latest pending challan count on record, for the garage's health score (2026-10-22).
+            (SELECT CASE WHEN s.data->>'pending_count' ~ '^[0-9]+$' THEN (s.data->>'pending_count')::int END
+               FROM vehicle_snapshots s WHERE s.vehicle_id = v.id AND s.dataset = 'challan'
+              ORDER BY s.id DESC LIMIT 1) AS challans_pending,
             EXISTS (SELECT 1 FROM watches w
                      WHERE w.user_id = uv.user_id AND w.vehicle_id = v.id AND w.is_active) AS watched,
             (SELECT max(w.expires_at) FROM watches w
@@ -735,6 +739,8 @@ router.get('/vehicles', safe(async (req, res) => {
       const dueSoon = docs.filter((d) => d.days >= 0 && d.days <= 60).map((d) => d.label);
       if (paid || detail === 'labels') out.expired = expired;
       else if (detail === 'count') out.needs_attention = expired.length + dueSoon.length;
+      // The garage card (the GaadiPe app, 2026-10-22): each document's state and the score — never a date.
+      out.status = view.statusOf(r, r.challans_pending);
       if (!paid) for (const k of DATES) delete out[k];
       return out;
     }),
@@ -770,6 +776,8 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
   await activity.record(req, { action: paid ? 'view_vehicle_paid' : 'view_vehicle', regNo: parsed.regNo });
   res.json({
     vehicle: await withRto(paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, await freeViewOpts())),
+    // Each document's state and the health score, no dates (the GaadiPe app's dashboard, 2026-10-22).
+    status: view.statusOnly(data),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     ...(await offerFor(req, plan, paid, parsed.regNo)),
   });
@@ -929,6 +937,8 @@ router.post('/check', safe(async (req, res) => {
   res.json({
     owner_notice: ownerNotice ? 'This vehicle’s owner is verified on GaadiPe and is told when it is checked (with the last 4 digits of your number).' : null,
     vehicle: await withRto(paid ? await fullRecord(req, parsed.regNo, data) : view.basic(data, await freeViewOpts())),
+    // Each document's state and the health score, no dates (the GaadiPe app's dashboard, 2026-10-22).
+    status: view.statusOnly(data),
     report: paid ? { id: String(paid.id), number: paid.report_number, valid_until: paid.valid_until } : null,
     ...(await offerFor(req, plan, paid, parsed.regNo)),
     // Checks left, shown under the typing box (2026-10-10).

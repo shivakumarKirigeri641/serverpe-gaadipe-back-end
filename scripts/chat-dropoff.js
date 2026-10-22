@@ -40,7 +40,7 @@ const DATE = arg('--date');
            (array_agg(coalesce(e.campaign, e.source, 'unknown') ORDER BY e.occurred_at))[1] AS came_from
       FROM events e WHERE ${IN} AND e.visitor_id IS NOT NULL
      GROUP BY e.visitor_id
-    HAVING bool_or(e.name = 'page_view' AND e.page LIKE '/chat%')`, P);
+    HAVING bool_or(e.name = 'page_view' AND (e.page LIKE '/chat%' OR e.page LIKE '/go%'))`, P);
   await db.query(`ALTER TABLE dv ADD COLUMN checked boolean`);
   await db.query(`UPDATE dv SET checked = searched OR visitor_id IN
     (SELECT visitor_id FROM anon_checks WHERE created_at >= $1 AND created_at < $2 AND visitor_id IS NOT NULL)`, P);
