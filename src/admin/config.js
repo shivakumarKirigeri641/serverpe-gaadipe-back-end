@@ -64,7 +64,7 @@ const GROUPS = [
     ['watch_status_every_days', 'Monitoring update on WhatsApp: every N days', '3: after any daily days, the WhatsApp update goes every N days (days 1, 4, 7 …). 2 = every other day.'],
     ['watch_status_email_every_days', 'Monitoring update by email and notification: every N days', '2: the same update by email and phone notification every N days (days 1, 3, 5 …) — free, so it can be more often.'],
     ['watch_status_alternate_until_day', 'Monitoring update: until day N', '28: routine updates stop after this day of monitoring; after it, only when something changes. 0 = while monitoring runs.'],
-    ['sms_tpl_status', 'SMS template id: monitoring update', '2 values: vehicle, short status ("all clear", "PUC expired"). Empty = not sent by SMS.'],
+    ['sms_tpl_status', 'SMS template id: monitoring update', '3 values: vehicle, short status ("all clear", "PUC expired"), the site (sms_site_value, added by itself). 228567 = gp_vehicle_status_v1. Empty = not sent by SMS.'],
     ['watch_daily_status_every_days', 'Monitoring: "today\'s update" every N days (retired)', 'Replaced on 10 Oct 2026 by the daily / every-other-day settings above.'],
     ['whatsapp_marketing_gap_days', 'WhatsApp: days between marketing to one person', 'No second marketing message to the same customer within this many days (7).'],
     ['nudge_enabled', 'WhatsApp: remind people who said Hi to agree (true / false)', 'Off since 2026-10-09: someone who only said Hi hears from GaadiPe again only if they write.'],
@@ -86,10 +86,13 @@ const GROUPS = [
     ['site_session_after_monitor_days', 'Sign-in: days it lasts after monitoring ends', '7 — so the renewal reminder still opens their account without a code. Otherwise a sign-in lasts site_session_days (30) from the last visit.'],
     // 2026-10-10.
     ['site_single_session', 'Sign-in: one device at a time (true / false)', 'true: signing in ends the account\'s other sign-ins (they are told "you signed in on another device") and their notification subscriptions. false: several devices stay signed in.'],
+    // (2026-10-22) The alert templates' DLT header, and the site their last value names.
+    ['sms_alert_sender_id', 'SMS alerts: sender header', 'GAADIP — the header the alert templates are approved under (sign-in codes keep the .env header).'],
+    ['sms_site_value', 'SMS alerts: the site in the message', 'gaadipe.in — the last value of the challan, status and monitoring-end SMS ("Full details on gaadipe.in").'],
     ['sms_alerts_enabled', 'SMS alerts and notices: on (true / false)', 'The master switch for every SMS other than sign-in codes. Each kind also needs its approved DLT template id below.'],
     ['sms_tpl_expiry', 'SMS template id: document expiry', 'Fast2SMS message id of the approved DLT template — 3 values: document, vehicle, date. Empty = not sent.'],
-    ['sms_tpl_challan', 'SMS template id: new challan', '2 values: vehicle, what was found. Empty = not sent.'],
-    ['sms_tpl_monitor_end', 'SMS template id: monitoring ending', '2 values: vehicle, end date. Empty = not sent.'],
+    ['sms_tpl_challan', 'SMS template id: new challan', '3 values: vehicle, what was found, the site (added by itself). 228568 = gp_challan_alert_v1. Empty = not sent.'],
+    ['sms_tpl_monitor_end', 'SMS template id: monitoring ending', '3 values: vehicle, end date, the site (added by itself). 228569 = gp_monitor_end_v1. Empty = not sent.'],
     ['sms_tpl_service', 'SMS template id: one-time service notice', 'No values — "GaadiPe is now on gaadipe.in" (scripts/sms-notice.js). Empty = not sent.'],
     ['sms_tpl_offers', 'SMS template id: offers (promotional)', '1 value: the tip. Only to customers who opted in, 9 am – 9 pm. Empty = not sent.'],
     // Manual SMS from the web admin's SMS & notifications page (migration 155).
@@ -102,6 +105,8 @@ const GROUPS = [
     ['free_check_show_variant', 'Free check before sign-in: show the variant (true / false)', 'true: the full model, e.g. "SPLENDOR PLUS"; false: only the first word, the rest hidden.'],
     // ONE toggle for the owner's name (user, 2026-10-21): signed-in customers always see it.
     ['free_check_show_owner', 'Owner name before sign-in (true / false)', 'false: the owner name (masked, like R****H K***R) is shown only after the customer signs in. true: shown before AND after sign-in.'],
+    // (user, 2026-10-22: "the way details are shown matters" — the ads show statuses, the free answer did not.)
+    ['free_check_show_status', 'Free check before sign-in: show each document\'s status (true / false)', 'true: Insurance, PUC, Registration, Road tax (and Fitness, Permit for commercial) as Valid / Due soon / Expired, with no dates, and how many challans are pending. false: make and model only. The dates, challan details, loan and blacklist stay in sign-in and the ₹19 report.'],
     ['free_check_show_rto', 'Free check before sign-in: show the RTO (true / false)', 'RTO code, office, district and state — worked out from the number, free.'],
     ['free_view_detail', 'Free check after sign-in: how much it shows', 'public = the whole public record like CarInfo (every validity date, age, norms, seats, weight, RC status, how many challans) — the ₹19 report keeps the loan, blacklist/NOC, challan amounts, owners, insurer, FASTag and the verdict; labels / count / none show less.'],
     ['free_check_backup_per_day', 'Free check before sign-in: paid RC backup calls a day', 'When ULIP and eChallan.app cannot answer, a free check may use the paid RC backup (IDSPay) up to this many times a day; after that it stops at eChallan.app. 0 = never. Paid reports are not affected.'],

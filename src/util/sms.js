@@ -276,7 +276,14 @@ async function sendTemplateRaw(kind, mobile, values = [], meta = {}) {
     const at = v.slice(0, 31).lastIndexOf(' ');
     return (at > 0 ? v.slice(0, at) : v.slice(0, 30)).replace(/\s+and$/, '').trim();
   };
-  const cut = values.map((v) => fit(plain(String(v ?? '').replace(/\s+/g, ' ').trim())));
+  /* THE SITE AS THE LAST VALUE (user, 2026-10-22: the approved wording — "Full details on {#var#}",
+     "Visit: {#var#}", "Keep alerts on by visiting {#var#}"): challan, status and monitor_end carry the
+     website as their third value. Added here, once, so every caller keeps sending [vehicle, what]. */
+  const SITE_LAST = ['challan', 'status', 'monitor_end'];
+  const all = SITE_LAST.includes(kind) && values.length === 2
+    ? [...values, String(await settings.get('sms_site_value', 'gaadipe.in') || 'gaadipe.in').trim()]
+    : values;
+  const cut = all.map((v) => fit(plain(String(v ?? '').replace(/\s+/g, ' ').trim())));
   if (!configured()) {
     console.warn('[sms] no SMS_PROVIDER set — would have sent %s to ••••%s', kind, m.slice(-4));
     return { ok: true, simulated: true };
@@ -286,7 +293,11 @@ async function sendTemplateRaw(kind, mobile, values = [], meta = {}) {
     const promoSender = tpl?.sender || (PROMOTIONAL.includes(kind)
       ? (String(await settings.get('sms_promo_sender_id', '') || '').trim() || process.env.FAST2SMS_PROMO_SENDER_ID || null) : null);
     if (PROMOTIONAL.includes(kind) && !promoSender) throw new Error('no promotional sender id (Settings sms_promo_sender_id)');
-    const out = await sendViaFast2sms({ mobile: m, messageId: await fast2smsMessageId(messageId), values: cut, sender: promoSender });
+    /* The alert templates are approved under their own header, GAADIP (2026-10-22: gp_*_alert_v1 on the
+       DLT portal) — not the sign-in code's header in .env; a mismatch is refused by Fast2SMS. */
+    const alertSender = ALERT.includes(kind) && !tpl?.sender
+      ? String(await settings.get('sms_alert_sender_id', 'GAADIP') || 'GAADIP').trim() : null;
+    const out = await sendViaFast2sms({ mobile: m, messageId: await fast2smsMessageId(messageId), values: cut, sender: alertSender || promoSender });
     console.log('[sms] %s sent to ••••%s', kind, m.slice(-4));
     return { ok: true, id: out.id };
   } catch (e) {
