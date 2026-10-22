@@ -67,7 +67,9 @@ const show = (title, obj) => { console.log(`\n── ${title}`); console.log(JSO
   console.log(`   WHATSAPP_ENABLED (.env)     ${wa.enabled ? 'on' : 'off'}`);
   console.log(`   app secret (.env)           ${wa.appSecret ? 'set' : '❌ missing — webhook signatures not checked'}`);
   console.log(`   verify token (.env)         ${wa.verifyToken ? 'set' : '❌ missing — Meta cannot verify the webhook'}`);
-  console.log(`   safety lock (.env)          ${wa.allowedRecipients ? `ON — replies only to ${String(wa.allowedRecipients).replace(/\d(?=\d{4})/g, '•')}` : 'off (everyone)'}`);
+  // allowedRecipients is a list of 10-digit numbers — an empty list means no lock (replies to everyone).
+  const lock = Array.isArray(wa.allowedRecipients) ? wa.allowedRecipients : [];
+  console.log(`   safety lock (.env)          ${lock.length ? `ON — replies only to ${lock.map((m) => `••••••${m.slice(-4)}`).join(', ')}` : '⚠️  OFF — the bot replies to EVERYONE who writes'}`);
   console.log(`   webhook URL                 https://api.gaadipe.in/serverpe/platform/gaadipe/v1/public/users/whatsapp/webhook\n`);
   process.exit(0);
 })().catch((e) => { console.error(e.message); process.exit(1); });
