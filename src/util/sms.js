@@ -228,7 +228,14 @@ async function sendTemplateRaw(kind, mobile, values = [], meta = {}) {
   const settings = require('./settings');
   // The master switch is for the automatic SMS; a manual or promotional send from the admin is a decision of its own.
   // 'service' too (2026-10-13): only ever sent by hand, from the admin's SMS broadcast or the web admin.
-  if (!['manual', 'promo', 'service'].includes(kind) && !(await settings.bool('sms_alerts_enabled', false))) return { ok: false, skipped: true, error: 'sms_alerts_off' };
+  if (!['manual', 'promo', 'service'].includes(kind) && !(await settings.bool('sms_alerts_enabled', false))) {
+    /* A test of an alert template (scripts/test-sms-alert.js, 2026-10-22: "SMS templates approved") may go
+       before the switch is on — to GaadiPe's own internal numbers only, so the wording is seen first. */
+    const own = meta.test && await require('../db').one(
+      `SELECT 1 FROM users WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $1 AND is_internal LIMIT 1`,
+      [String(mobile || '').replace(/\D/g, '').slice(-10)]).catch(() => null);
+    if (!own) return { ok: false, skipped: true, error: 'sms_alerts_off' };
+  }
   /* A broadcast SMS carries its own template (sms_templates, migration 187, 2026-10-15): its
      message id and header; everything else uses the one template Settings name for its kind. */
   const tpl = meta.templateId
