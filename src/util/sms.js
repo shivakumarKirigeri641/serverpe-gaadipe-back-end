@@ -161,8 +161,17 @@ async function logSms({ kind, mobile, out, values = null, queueId = null, adminI
   try {
     const db = require('../db');
     const m = String(mobile || '').replace(/\D/g, '').slice(-10);
-    const u = m ? await db.one(`SELECT id FROM users WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $1 LIMIT 1`, [m]) : null;
+    const u = m ? await db.one(`SELECT id, name FROM users WHERE right(regexp_replace(mobile, '\\D', '', 'g'), 10) = $1 LIMIT 1`, [m]) : null;
     const status = out.simulated ? 'simulated' : out.ok ? 'sent' : out.skipped ? 'skipped' : 'failed';
+    /* WHO GOT WHICH SMS, IN THE SERVER LOG (user, 2026-10-22: "put a log line when an SMS is sent, to whom").
+       One line per SMS: the kind, the customer (name and account), the mobile with its middle hidden — the
+       full number is in the admin under that account, and a log is plain text kept a long time — what it
+       said (never a sign-in code) and how it went. */
+    const who = [u?.name ? String(u.name).trim().split(/\s+/).slice(0, 2).join(' ') : null, u?.id ? `user ${u.id}` : 'no account',
+      m ? `${m.slice(0, 2)}••••••${m.slice(-2)}` : 'no mobile'].filter(Boolean).join(' · ');
+    const said = values && kind !== 'otp' ? ` · "${values.join(' | ').slice(0, 120)}"` : '';
+    const how = status === 'sent' ? `sent${out.id ? ` (${out.id})` : ''}` : `${status}${out.error ? `: ${String(out.error).slice(0, 120)}` : ''}`;
+    (status === 'failed' ? console.error : console.log)('[sms] %s → %s%s · %s', kind, who, said, how);
     await db.query(
       `INSERT INTO notify_log (channel, kind, user_id, mobile, status, error, provider_id, preview, queue_id, admin_id)
             VALUES ('sms', $1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -188,11 +197,10 @@ async function send(mobile, text, { variables = {}, templateId = null } = {}) {
       : PROVIDER === 'msg91' ? await sendViaMsg91({ mobile: m, variables, templateId })
       : PROVIDER === 'twilio' ? await sendViaTwilio({ mobile: m, text })
       : (() => { throw new Error(`Unknown SMS_PROVIDER "${PROVIDER}"`); })();
-    console.log('[sms] sent to ••••%s via %s', m.slice(-4), PROVIDER);
+    // The server log line is written by logSms (who, how it went) — never the text: it carries the code.
     await logSms({ kind: 'otp', mobile: m, out: { ok: true, id: out.id } });
     return { ok: true, id: out.id };
   } catch (e) {
-    console.error('[sms] send to ••••%s failed: %s', m.slice(-4), e.message);
     await logSms({ kind: 'otp', mobile: m, out: { ok: false, error: e.message } });
     return { ok: false, error: e.message };
   }
@@ -298,10 +306,9 @@ async function sendTemplateRaw(kind, mobile, values = [], meta = {}) {
     const alertSender = ALERT.includes(kind) && !tpl?.sender
       ? String(await settings.get('sms_alert_sender_id', 'GAADIP') || 'GAADIP').trim() : null;
     const out = await sendViaFast2sms({ mobile: m, messageId: await fast2smsMessageId(messageId), values: cut, sender: alertSender || promoSender });
-    console.log('[sms] %s sent to ••••%s', kind, m.slice(-4));
+    // The server log line — who, what, how it went — is written by logSms, after this returns.
     return { ok: true, id: out.id };
   } catch (e) {
-    console.error('[sms] %s to ••••%s failed: %s', kind, m.slice(-4), e.message);
     return { ok: false, error: e.message };
   }
 }
