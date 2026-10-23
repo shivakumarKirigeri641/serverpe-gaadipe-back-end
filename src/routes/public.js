@@ -137,6 +137,9 @@ router.get('/notice', async (_req, res) => {
       /* "Try in WhatsApp" on the landing page (user, 2026-10-23: "if disabled, a quick way to hide it"):
          shown while site_whatsapp_try is true — scripts/wa-button.js on|off, no rebuild needed. */
       whatsapp_try: await settings.bool('site_whatsapp_try', true),
+      /* The yellow "GaadiPe is now fully on the web" sign (user, 2026-10-23: "remove this") — shown only while
+         site_moved_notice is true; scripts/wa-button.js web-only turns it (and the top bar) back on. */
+      moved_notice: await settings.bool('site_moved_notice', false),
     });
   } catch {
     res.json({ on: false });
