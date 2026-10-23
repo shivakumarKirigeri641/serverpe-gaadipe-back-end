@@ -405,7 +405,9 @@ router.get('/pay/:token', safe(async (req, res) => {
   Nothing is charged automatically, now or later.</p>
   <!-- (user, 2026-10-23) What they buy belongs to their mobile number, not to WhatsApp: if WhatsApp is ever
        unavailable, the report, invoice and alerts are all on the website with the same number. -->
-  <p class="muted" style="margin:12px 0 0"><b>If WhatsApp is ever disabled, you can continue on the web.</b></p>
+  <!-- Highlighted (user, 2026-10-23: "make it blue or a highlight colour so the customer understands"). -->
+  <p style="margin:12px 0 0;padding:10px 12px;border-radius:10px;background:#e8f1fe;border:1px solid #b6d4fb;color:#0b57d0;font-weight:700;line-height:1.4">
+    ℹ️ If WhatsApp is ever disabled, you can continue on the web.</p>
 </div>
 
 <div class="card">
