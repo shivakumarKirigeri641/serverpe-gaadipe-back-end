@@ -826,7 +826,7 @@ const WELCOME =
   + '_GaadiPe gives reports and alerts only — it does not issue an RC card or any certificate._\n\n'
   /* ALWAYS ON THE WEBSITE TOO (user, 2026-10-23: "tell them that if WhatsApp goes disabled, they can continue
      by signing in on the web"). Said calmly — the account belongs to their mobile number, not to WhatsApp. */
-  + '📱 Your account works on gaadipe.in too: sign in there with this mobile number anytime — your vehicles, reports and alerts are all there, even if WhatsApp is ever unavailable.\n\n'
+  + '📱 *If WhatsApp is ever disabled*, you can continue on the web: sign in at gaadipe.in with this mobile number — all your vehicles, reports and alerts will be there.\n\n'
   + 'What brings you here?';
 
 const OWNER_TERMS =
