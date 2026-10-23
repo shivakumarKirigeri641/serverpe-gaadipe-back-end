@@ -707,6 +707,9 @@ const baseUrl = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 const INTRO =
   'Namaste! 🙏 *GaadiPe* shows your vehicle\'s insurance, PUC, tax, challan and loan status '
   + 'from vehicle registration records, right here on WhatsApp.\n\n';
+/* ON EVERY HI (user, 2026-10-23: "tell them that if WhatsApp is disabled, they can continue on the web").
+   WhatsApp has no colours: the quote block shows as a highlighted strip, and bold stands out. */
+const WEB_LINE = '> 📱 *If WhatsApp is ever disabled, you can continue on the web: sign in at gaadipe.in*\n\n';
 
 /* WHAT GAADIPE IS NOT (user, 2026-10-21: "mention that GaadiPe does not provide any RC card or any
    certificate — only alerts, reports and notifications"). Said in What you get, the welcome and the
@@ -1773,7 +1776,17 @@ async function start(mobile) {
   const price = plan
     ? `✅ Basic check — *free* · 📋 Full report — ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}* (only if you want it)\n\n`
     : '';
-  await send.buttons(mobile, INTRO + price + OWNER_TERMS,
+  /* ONCE, NOT ON EVERY HI (user, 2026-10-23: "accept the Terms one time, and ask again when the policies
+     change"). Someone who already agreed to the policies in force goes straight to the start; anyone else —
+     never agreed, or agreed to an older version — is shown the Terms with the Agree buttons. */
+  const agreed = await agreedVersion(mobile).catch(() => null);
+  if (agreed && agreed === await policyVersion()) {
+    await setState(mobile, 'owner_start', 'hi — terms already agreed');
+    await doors(mobile, INTRO + price + WEB_LINE
+      + 'What would you like to do?\n\n_To check a vehicle, just send its number, like *KA01XX1234*._');
+    return;
+  }
+  await send.buttons(mobile, INTRO + price + WEB_LINE + OWNER_TERMS,
     AGREE_BUTTONS(),
     { footer: 'ServerPe App Solutions' });
   await setState(mobile, 'owner_consent', 'terms shown');
