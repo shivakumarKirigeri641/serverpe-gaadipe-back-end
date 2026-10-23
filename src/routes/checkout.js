@@ -149,8 +149,9 @@ const page = (title, body) => `<!doctype html>
           --soft:#F3F8F7; --bad:#B42318; }
   /* The "continue on the web" note (user, 2026-10-23: "a little shake, a little red, so they notice"):
      a soft red box that nudges side to side twice after the page opens, then rests. */
-  .wa-note { margin:12px 0 0; padding:10px 12px; border-radius:10px; background:#fef3f2; border:1px solid #fda29b;
-             color:#b42318; font-weight:700; line-height:1.4; animation: wa-nudge .7s ease-in-out .8s 2; }
+  /* Light blue, not red (user, 2026-10-23: "red looks like an error or a warning") — information, still nudged. */
+  .wa-note { margin:12px 0 0; padding:10px 12px; border-radius:10px; background:#eaf4ff; border:1px solid #9ec5f8;
+             color:#0b57d0; font-weight:700; line-height:1.4; animation: wa-nudge .7s ease-in-out .8s 2; }
   @keyframes wa-nudge { 0%,100% { transform:translateX(0); } 20% { transform:translateX(-5px); } 40% { transform:translateX(5px); }
                         60% { transform:translateX(-3px); } 80% { transform:translateX(3px); } }
   @media (prefers-reduced-motion: reduce) { .wa-note { animation:none; } }
@@ -413,7 +414,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   <!-- (user, 2026-10-23) What they buy belongs to their mobile number, not to WhatsApp: if WhatsApp is ever
        unavailable, the report, invoice and alerts are all on the website with the same number. -->
   <!-- Highlighted (user, 2026-10-23: "make it blue or a highlight colour so the customer understands"). -->
-  <p class="wa-note">⚠️ If WhatsApp is ever disabled, you can continue on the web.</p>
+  <p class="wa-note">ℹ️ If WhatsApp is ever disabled, you can continue on the web.</p>
 </div>
 
 <div class="card">

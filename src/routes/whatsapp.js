@@ -185,6 +185,17 @@ async function handle(body) {
           // Meta's message id and the number, so a redelivered webhook is one.
           const userId = (await db.one(`SELECT id FROM users WHERE mobile = $1`, [rec.mobile]).catch(() => null))?.id || null;
           const at = m.timestamp ? new Date(Number(m.timestamp) * 1000) : null;
+          /* WHICH OF OUR WHATSAPP NUMBERS THEY CAME THROUGH (user, 2026-10-23: "mark every new user arriving on
+             this number, so I can SMS them if WhatsApp is disabled"). Stamped once, on the first message to each
+             number (user_wa_numbers, never overwritten) — so the list stays right even after the number changes
+             again; users.wa_business_number is the latest one. scripts/wa-number-customers.js lists them for SMS. */
+          if (userId && wa.ownNumber) {
+            const ours = String(wa.ownNumber).replace(/\D/g, '');
+            await db.query(`INSERT INTO user_wa_numbers (user_id, business_number) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [userId, ours])
+              .catch((e) => console.error('[wa] number stamp:', e.message));
+            await db.query(`UPDATE users SET wa_business_number = $2, wa_business_number_at = now()
+                             WHERE id = $1 AND wa_business_number IS DISTINCT FROM $2`, [userId, ours]).catch(() => {});
+          }
           track.fire({ key: `wa_chat:${rec.mobile}`, name: 'whatsapp_chat_started', channel: 'whatsapp',
                        at, userId, mobile: rec.mobile });
           track.fire({ key: `wa_msg:${m.id}`, name: 'whatsapp_message_received', channel: 'whatsapp',
