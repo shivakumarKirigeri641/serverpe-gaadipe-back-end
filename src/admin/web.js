@@ -25,6 +25,7 @@
 const db = require('../db');
 const notMe = require('./notMe');
 const settings = require('../util/settings');
+const { config } = require('../config');
 
 const RANGES = { today: 0, '7d': 6, '30d': 29 };
 const rangeOf = (r) => (Object.prototype.hasOwnProperty.call(RANGES, r) ? r : 'today');
@@ -224,7 +225,7 @@ async function customers({ range, q = '', channel = 'all', reach = 'all', active
   const r = rangeOf(range);
   const term = String(q || '').trim().replace(/[%_]/g, '');
   const CH = ['all', 'web', 'whatsapp', 'both'].includes(channel) ? channel : 'all';
-  const RE = ['all', 'push', 'email', 'none'].includes(reach) ? reach : 'all';
+  const RE = ['all', 'push', 'email', 'none', 'wa_number'].includes(reach) ? reach : 'all';
   const { rows } = await db.query(
     `WITH web AS (
        SELECT user_id, min(created_at) AS first_at FROM site_sign_ins
@@ -265,6 +266,9 @@ async function customers({ range, q = '', channel = 'all', reach = 'all', active
             (SELECT count(*) FROM payments WHERE user_id = b.id AND status = 'paid') AS paid,
             (SELECT coalesce(sum(amount_paise), 0) FROM payments WHERE user_id = b.id AND status = 'paid') AS revenue_paise,
             b.push_devices,
+            -- The WhatsApp business number they came through (user, 2026-10-23; migration 210) — the list to SMS
+            -- if that number is ever disabled.
+            b.wa_business_number, b.wa_business_number_at,
             EXISTS (SELECT 1 FROM whatsapp_sessions ws WHERE ws.wa_opt_out_at IS NOT NULL
                        AND right(regexp_replace(ws.mobile, '\\D', '', 'g'), 10) = right(regexp_replace(b.mobile, '\\D', '', 'g'), 10)) AS wa_stop,
             count(*) OVER () AS total_rows
@@ -275,9 +279,12 @@ async function customers({ range, q = '', channel = 'all', reach = 'all', active
         AND ($6 = 'all' OR $6 = CASE WHEN b.web_first IS NOT NULL AND b.wa_first IS NOT NULL THEN 'both'
                                      WHEN b.web_first IS NOT NULL THEN 'web' ELSE 'whatsapp' END)
         AND ($7 = 'all' OR ($7 = 'push' AND b.push_devices > 0) OR ($7 = 'email' AND b.email_ok)
-             OR ($7 = 'none' AND b.push_devices = 0 AND NOT b.email_ok))
+             OR ($7 = 'none' AND b.push_devices = 0 AND NOT b.email_ok)
+             -- Came through the current WhatsApp number (2026-10-23): reach = 'wa_number'.
+             OR ($7 = 'wa_number' AND b.wa_business_number IS NOT NULL
+                 AND b.wa_business_number = (SELECT regexp_replace(coalesce($8, ''), '\\D', '', 'g'))))
       ORDER BY last_seen DESC NULLS LAST LIMIT $3 OFFSET $4`,
-    [RANGES[r], term, Math.min(200, Number(limit) || 100), Number(offset) || 0, active === 'all' ? 'all' : 'range', CH, RE]);
+    [RANGES[r], term, Math.min(200, Number(limit) || 100), Number(offset) || 0, active === 'all' ? 'all' : 'range', CH, RE, String(config.whatsapp.ownNumber || '')]);
   /* The whole base, for the cards above the list: who can be reached, by what. */
   const s = await db.one(
     `WITH wa AS (SELECT DISTINCT right(regexp_replace(mobile, '\\D', '', 'g'), 10) AS m10 FROM whatsapp_messages WHERE direction = 'in'),
@@ -292,14 +299,20 @@ async function customers({ range, q = '', channel = 'all', reach = 'all', active
             count(*) FILTER (WHERE on_wa AND NOT on_web) AS whatsapp_only, count(*) FILTER (WHERE on_web AND on_wa) AS both,
             count(*) FILTER (WHERE push) AS push, count(*) FILTER (WHERE email_ok) AS email,
             count(*) FILTER (WHERE NOT push AND NOT email_ok) AS unreachable,
-            count(*) FILTER (WHERE on_wa AND NOT push AND NOT email_ok) AS whatsapp_unreachable
-       FROM b`);
+            count(*) FILTER (WHERE on_wa AND NOT push AND NOT email_ok) AS whatsapp_unreachable,
+            -- Came through the current WhatsApp number (2026-10-23; migration 210).
+            (SELECT count(*) FROM user_wa_numbers x JOIN users u ON u.id = x.user_id
+              WHERE x.business_number = regexp_replace($1, '\\D', '', 'g')
+                AND u.deactivated_at IS NULL AND NOT coalesce(u.is_internal, false)) AS wa_number
+       FROM b`, [String(config.whatsapp.ownNumber || '')]);
   const monthBase = await settings.num('free_checks_per_month', 30);
   const perReport = await settings.num('checks_per_report_bonus', 5);
   return {
     range: r, total: rows[0] ? n(rows[0].total_rows) : 0,
     summary: Object.fromEntries(Object.entries(s).map(([k, v]) => [k, n(v)])),
     checks_rule: { month: monthBase, per_report: perReport },
+    // The current WhatsApp business number, for the Customers screen's "came through" filter and card.
+    wa_number: String(config.whatsapp.ownNumber || '').replace(/\D/g, '') || null,
     rows: rows.map(({ total_rows, ...x }) => ({ ...x, user_id: String(x.user_id), open_sessions: n(x.open_sessions),
       checks: n(x.checks), vehicles: n(x.vehicles), watching: n(x.watching), paid: n(x.paid),
       revenue_paise: n(x.revenue_paise), push_devices: n(x.push_devices),
