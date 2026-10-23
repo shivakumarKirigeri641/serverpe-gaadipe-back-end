@@ -824,6 +824,9 @@ const WELCOME =
   + 'Check your vehicle\'s RC, insurance, PUC, fitness, permit, challans and FASTag — '
   + 'and get reminded *before* something expires or a new challan appears.\n\n'
   + '_GaadiPe gives reports and alerts only — it does not issue an RC card or any certificate._\n\n'
+  /* ALWAYS ON THE WEBSITE TOO (user, 2026-10-23: "tell them that if WhatsApp goes disabled, they can continue
+     by signing in on the web"). Said calmly — the account belongs to their mobile number, not to WhatsApp. */
+  + '📱 Your account works on gaadipe.in too: sign in there with this mobile number anytime — your vehicles, reports and alerts are all there, even if WhatsApp is ever unavailable.\n\n'
   + 'What brings you here?';
 
 const OWNER_TERMS =
