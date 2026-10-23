@@ -260,6 +260,8 @@ app.listen(config.port, () => {
   require('./jobs/waitlist').start(Number(process.env.WAITLIST_TICK_SECONDS) || 300);
   // The WhatsApp account as Meta sees it — limit tier, quality — read hourly (back 2026-10-09).
   require('./jobs/metaStatus').start(Number(process.env.META_STATUS_TICK_SECONDS) || 3600);
+  // The WhatsApp failsafe (2026-10-23): blocked by Meta -> GaadiPe switches to the web on its own, owner told.
+  require('./jobs/waGuard').start(Number(process.env.WA_GUARD_TICK_SECONDS) || 600);
   // ULIP's VAHAN, asked every 15 minutes (free): "VAHAN is back" the moment it is.
   require('./jobs/vahanWatch').start(Number(process.env.VAHAN_WATCH_TICK_SECONDS) || 900);
   // Mail to support@gaadipe.in, announced as it arrives (2026-10-04).

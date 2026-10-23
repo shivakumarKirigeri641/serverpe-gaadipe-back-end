@@ -94,6 +94,8 @@ async function accountNews(wabaId, field, value) {
   await db.query(`INSERT INTO event_log (kind, detail) VALUES ('meta_account_news', $1)`,
     [JSON.stringify({ waba: wabaId, field, value })]);
   console.log('[wa] meta %s: %s', field, JSON.stringify(value).slice(0, 300));
+  // Any account news (a ban, a restriction, a quality drop…): the failsafe checks Meta now, not in 10 minutes.
+  require('../jobs/waGuard').fromWebhook(field);
   const event = value.event || value.decision || value.current_limit || value.alert_type || '';
   const bits = [
     event && `Event: ${event}`,
