@@ -134,6 +134,9 @@ router.get('/notice', async (_req, res) => {
       check: await checkNotice(settings),
       // The chat asks for sign-in before a check when this is on (2026-10-08).
       sign_in_required: await settings.bool('check_sign_in_required', true),
+      /* "Try in WhatsApp" on the landing page (user, 2026-10-23: "if disabled, a quick way to hide it"):
+         shown while site_whatsapp_try is true — scripts/wa-button.js on|off, no rebuild needed. */
+      whatsapp_try: await settings.bool('site_whatsapp_try', true),
     });
   } catch {
     res.json({ on: false });
