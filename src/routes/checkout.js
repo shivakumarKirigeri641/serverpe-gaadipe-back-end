@@ -405,10 +405,9 @@ router.get('/pay/:token', safe(async (req, res) => {
   Nothing is charged automatically, now or later.</p>
   <!-- (user, 2026-10-23) What they buy belongs to their mobile number, not to WhatsApp: if WhatsApp is ever
        unavailable, the report, invoice and alerts are all on the website with the same number. -->
-  <p class="muted" style="margin:12px 0 0"><b>Always yours on the website too.</b>
-  Your report, invoice and alerts are saved to your mobile number, not to WhatsApp. If WhatsApp is ever
-  unavailable, sign in at <a href="${esc(site)}/chat" target="_blank" rel="noopener">${esc(String(site).replace(/^https?:\/\//, ''))}</a>
-  with this mobile number and everything is there — alerts continue by SMS and email.</p>
+  <p class="muted" style="margin:12px 0 0"><b>If WhatsApp is ever disabled, you can continue on the web.</b>
+  Sign in at <a href="${esc(site)}/chat" target="_blank" rel="noopener">${esc(String(site).replace(/^https?:\/\//, ''))}</a>
+  with this mobile number — your report, invoice and alerts are all there.</p>
 </div>
 
 <div class="card">
