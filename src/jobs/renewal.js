@@ -147,6 +147,7 @@ async function runOnce({ limit = 20 } = {}) {
 
     const payload = { regNo: r.reg_no, endsOn: r.ends_on, paise: priced.paise,
                       days: priced.plan.duration_days || 28 };
+    let waTold = false;   // the SMS below goes only when WhatsApp did not deliver
 
     if (r.email && r.email_verified_at && !r.email_unsubscribed_at) {
       const out = await C.deliver(r.email, mailFor(r, payload), r.email_token);
@@ -192,7 +193,16 @@ async function runOnce({ limit = 20 } = {}) {
         { language: await settings.get('wa_template_language', 'en'),
           buttons: ['r', 'm', 'n'].map((a) => `ren|${a}|${r.reg_no}`) },
       ).catch(() => ({ ok: false }));
-      if (out.ok) told += 1;
+      if (out.ok) { told += 1; waTold = true; }
+    }
+
+    /* SMS TOO (2026-10-24: five renewal reminders reached nobody — most paying customers have no confirmed
+       email and no notification device, and this reminder had no SMS). The approved monitor_end template:
+       "GaadiPe monitoring for {vehicle} ends on {date}. Keep alerts on by visiting gaadipe.in" — sent unless
+       WhatsApp already told them. Never throws; skipped while sms_alerts_enabled is off. */
+    if (!waTold) {
+      const sms = await require('../util/sms').sendTemplate('monitor_end', r.mobile, [r.reg_no, istDay(r.ends_on)]).catch(() => ({ ok: false }));
+      if (sms.ok) told += 1;
     }
   }
 
