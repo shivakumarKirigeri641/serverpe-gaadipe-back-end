@@ -410,6 +410,30 @@ async function list(mobile, { body, button, rows, header, footer, sectionTitle }
  * The id is good for 30 days, so re-sending the same invoice later means
  * uploading it again — cheap, and simpler than storing ids that quietly expire.
  */
+/** Upload a PDF to Meta's media store: { ok, id } — used by a plain document and by a template's document header. */
+async function uploadPdf(filePath, name) {
+  const fs = require('fs');
+  try {
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', 'application/pdf');
+    form.append('file', new Blob([fs.readFileSync(filePath)], { type: 'application/pdf' }), name);
+    const up = await fetch(
+      `https://graph.facebook.com/${wa.apiVersion}/${wa.phoneNumberId}/media`,
+      { method: 'POST', headers: { Authorization: `Bearer ${wa.token}` }, body: form,
+        signal: AbortSignal.timeout(30000) });
+    const j = await up.json().catch(() => ({}));
+    if (!j.id) {
+      console.error('[wa] media upload failed:', JSON.stringify(j.error || j));
+      return { ok: false, error: j.error?.message || 'upload_failed' };
+    }
+    return { ok: true, id: j.id };
+  } catch (e) {
+    console.error('[wa] media upload threw:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
 async function document(mobile, filePath, { filename, caption } = {}) {
   const fs = require('fs');
   if (await switchedOff('document', mobile)) return { ok: false, error: 'whatsapp_off' };
@@ -433,28 +457,9 @@ async function document(mobile, filePath, { filename, caption } = {}) {
 
   const name = filename || require('path').basename(filePath);
 
-  let mediaId;
-  try {
-    const form = new FormData();
-    form.append('messaging_product', 'whatsapp');
-    form.append('type', 'application/pdf');
-    form.append('file',
-      new Blob([fs.readFileSync(filePath)], { type: 'application/pdf' }), name);
-
-    const up = await fetch(
-      `https://graph.facebook.com/${wa.apiVersion}/${wa.phoneNumberId}/media`,
-      { method: 'POST', headers: { Authorization: `Bearer ${wa.token}` }, body: form,
-        signal: AbortSignal.timeout(30000) });
-    const j = await up.json().catch(() => ({}));
-    if (!j.id) {
-      console.error('[wa] media upload failed:', JSON.stringify(j.error || j));
-      return { ok: false, error: j.error?.message || 'upload_failed' };
-    }
-    mediaId = j.id;
-  } catch (e) {
-    console.error('[wa] media upload threw:', e.message);
-    return { ok: false, error: e.message };
-  }
+  const up = await uploadPdf(filePath, name);
+  if (!up.ok) return up;
+  const mediaId = up.id;
 
   return post({
     messaging_product: 'whatsapp',
@@ -475,7 +480,7 @@ async function document(mobile, filePath, { filename, caption } = {}) {
  *   order — it comes back on the tap (message.button.payload), so the reply knows
  *   which vehicle and document the button was under (2026-10-12).
  */
-async function template(mobile, name, params = [], { language = 'en', buttons = [] } = {}) {
+async function template(mobile, name, params = [], { language = 'en', buttons = [], headerDocument = null } = {}) {
   const clean = params.map(p => String(p ?? '').replace(/\s*\n\s*/g, ' · ').trim());
 
   /* THE TEMPLATE'S OWN WORDING (user, 2026-10-20: "make sure no offence words go in alerts or
@@ -554,6 +559,9 @@ async function template(mobile, name, params = [], { language = 'en', buttons = 
       name,
       language: { code: language },
       components: [
+        // A document header (2026-10-24, gp_report_ready_v1): the customer's own PDF, uploaded just before.
+        ...(headerDocument?.id ? [{ type: 'header', parameters: [{ type: 'document',
+          document: { id: headerDocument.id, filename: headerDocument.filename || 'GaadiPe report.pdf' } }] }] : []),
         ...(values.length ? [{ type: 'body', parameters: values.map(text => ({ type: 'text', text })) }] : []),
         ...buttons.map((payload, i) => ({ type: 'button', sub_type: 'quick_reply', index: String(i),
                                           parameters: [{ type: 'payload', payload: String(payload).slice(0, 128) }] })),
@@ -692,5 +700,5 @@ async function optedOut(mobile) {
   return Boolean(row);
 }
 
-module.exports = { _unmasked: unmasked, text, buttons, ctaUrl, list, document, template, windowOpen, toWaId, allowed, optedOut, mayStart, live, numberSince,
+module.exports = { _unmasked: unmasked, text, buttons, ctaUrl, list, document, uploadPdf, template, windowOpen, toWaId, allowed, optedOut, mayStart, live, numberSince,
                    agreedTerms, optedInToOffers, categoryOf, consentGate, _varCount: varCount };

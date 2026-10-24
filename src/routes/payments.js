@@ -402,12 +402,31 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
   const until = fmt(new Date(doc.valid_until));
   const link = base ? `\n${base}/report/${doc.access_token}` : '';
   // The PDF alone — no link beside it (2026-10-19, SCAM strikes); the link only as a button if it fails.
-  const sent = doc.pdf_path
+  let sent = doc.pdf_path
     ? await send.document(pay.mobile, doc.pdf_path, {
         filename: `${doc.report_number}.pdf`,
         caption: `📋 GaadiPe report ${doc.report_number} — ${pay.reg_no}\nDownload again any time until ${until} from My reports.`,
       })
     : { ok: false };
+  /* THE CHAT WINDOW IS CLOSED (2026-10-24: gp_report_ready_v1 approved, Utility, with a document header) —
+     e.g. paid later, or on the website: the approved template, the report PDF attached at its top.
+     Values: name, vehicle, report number, monitoring active till. Buttons, in the template's order:
+     "Thanks, got it" (-> the menu), "Check another vehicle", then the static "My reports" link. */
+  if (!sent.ok && sent.error === 'window_closed' && doc.pdf_path) {
+    const tpl = String(await require('../util/settings').get('wa_template_report_ready', '') || '').trim();
+    if (tpl && (await send.mayStart(pay.mobile).catch(() => ({ ok: false }))).ok) {
+      const up = await send.uploadPdf(doc.pdf_path, `${doc.report_number}.pdf`);
+      if (up.ok) {
+        const sub = pay.subscription_id ? await db.one(`SELECT ends_on FROM subscriptions WHERE id = $1`, [pay.subscription_id]).catch(() => null) : null;
+        const name = String(pay.wa_profile_name || '').trim().split(/\s+/)[0] || 'there';
+        sent = await send.template(pay.mobile, tpl,
+          [name, pay.reg_no, doc.report_number, sub?.ends_on ? fmt(new Date(sub.ends_on)) : until],
+          { language: await require('../util/settings').get('wa_template_language', 'en'),
+            buttons: ['menu', 'check_another'], headerDocument: { id: up.id, filename: `${doc.report_number}.pdf` } })
+          .catch((e) => ({ ok: false, error: e.message }));
+      }
+    }
+  }
   if (!sent.ok && link) {
     const btn = await send.ctaUrl(pay.mobile,
       `📋 GaadiPe report ${doc.report_number} — ${pay.reg_no}\n\nThe PDF could not be attached here. Tap below to open it (until ${until}).`,
