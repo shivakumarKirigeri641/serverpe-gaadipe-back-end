@@ -31,7 +31,9 @@ const RULES = [
 
   as('government'),
   // Government look-alike — phrases first.
-  R(/\b(?:the\s+)?(?:government|govt\.?)(?:['’]s)?\s+of\s+india\b/gi, 'public'),
+  // "Government of India records / data" → "vehicle records"; its website → the rules below; alone → "Department-owned".
+  R(/\b(?:the\s+)?(?:government|govt\.?)(?:['’]s)?\s+of\s+india(?:['’]s)?\s+(?:vehicle\s+)?(?:records?|data(?:base)?)\b/gi, 'vehicle records'),
+  R(/\b(?:the\s+)?(?:government|govt\.?)(?:['’]s)?\s+of\s+india\b(?!['’]?s?\s+(?:vehicle\s+)?(?:records?|data|server|service|system|portal|website|site|e-?challan)\b)/gi, 'Department-owned'),
   R(/\b(?:the\s+)?(?:government|govt\.?)(?:['’]s)?\s+(?:vehicle\s+)?records?\s+(?:server|service|system)\b/gi, 'our vehicle records source'),
   R(/\b(?:a\s+)?(?:government|govt\.?)[-\s]+issued\b/gi, (m) => (/^a\s/i.test(m) ? 'an officially issued' : 'officially issued')),
   R(/\b(the\s+)?(?:government|govt\.?)(?:['’]s)?\s+(?:vehicle\s+)?(?:record(s?)|data(?:base)?)\b/gi,
@@ -42,7 +44,15 @@ const RULES = [
   R(/\b(?:vahan|parivahan|sarathi)(?:\s+(?:and|&)\s+e-?challan)?\s+(?:records?|data(?:base)?)\b/gi, 'vehicle records'),
   R(/\b(?:vahan|parivahan|sarathi)(?:\.nic\.in|\.gov\.in)?\b/gi, 'vehicle records'),
   R(/\bofficial\s+(?:portal|website|site)\b/gi, 'website'),
-  R(/\b(?:government|govt\.?)(?:['’]s)?\b/gi, 'public'),
+  /* WHO OWNS IT, IN NEUTRAL WORDS (user, 2026-10-24: "no state name, no centre, no public sector"): an owner
+     type or financer from the records — "State Government", "Govt of Karnataka", "Government Undertaking" —
+     reads "Department-owned"; "Government Department" → "Department"; "Government vehicle" → "Department vehicle". */
+  R(/\b(?:state|central|union)\s+(?:government|govt\.?)\b/gi, 'Department-owned'),
+  R(/\b(?:the\s+)?(?:government|govt\.?)\s+of\s+[A-Za-z]+(?:\s+[A-Za-z]+)?(?=\s*(?:$|[,.;:)\]|]))/gi, 'Department-owned'),
+  R(/\b(?:government|govt\.?)\s+(?:undertaking|enterprise|corporation|company)\b/gi, 'Department-owned'),
+  R(/\b(?:government|govt\.?)\s+department\b/gi, 'Department'),
+  R(/\b(?:government|govt\.?)\s+vehicles?\b/gi, (m) => (/s$/i.test(m) ? 'Department vehicles' : 'Department vehicle')),
+  R(/\b(?:government|govt\.?)(?:['’]s)?\b/gi, 'Department'),
   R(/सरकारी\s*रिकॉर्ड/g, 'वाहन रिकॉर्ड'),
   R(/सरकारी\s*/g, ''),
   R(/सरकार(?:ी|\s)?/g, ''),
