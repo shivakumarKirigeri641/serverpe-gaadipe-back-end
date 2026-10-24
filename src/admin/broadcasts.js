@@ -136,7 +136,7 @@ async function templates({ refresh = false } = {}) {
       .map((m) => Number(m.replace(/\D/g, ''))))].sort((a, b) => a - b);
     return {
       name: t.name, language: t.language, status: t.status, category: t.category,
-      body, footer, header_format: header?.format || null,
+      body, footer, header_format: header?.format || null, header_text: header?.format === 'TEXT' ? (header.text || '') : null,
       buttons: buttons.map((b) => b.text).filter(Boolean),
       variables: vars,
       automated: AUTOMATED(t.name),
@@ -152,9 +152,13 @@ async function templates({ refresh = false } = {}) {
    */
   for (const t of rows) {
     await db.query(
-      `UPDATE wa_templates SET approval_status = $3, category = coalesce($4, category), modified_at = now()
+      /* The wording too (2026-10-24): the saved copy was the old, banned account's text under the same
+         name, and the send-time word check read it. Meta's approved text replaces it. */
+      `UPDATE wa_templates SET approval_status = $3, category = coalesce($4, category),
+              body_text = coalesce($5, body_text), footer_text = coalesce($6, footer_text), header_text = coalesce($7, header_text),
+              modified_at = now()
         WHERE template_name = $1 AND language = $2`,
-      [t.name, t.language, t.status, t.category]).catch(() => {});
+      [t.name, t.language, t.status, t.category, t.body || null, t.footer || null, t.header_text]).catch(() => {});
   }
   const byKey = new Map(rows.map((t) => [`${t.name}|${t.language}`, t]));
   for (const t of await stored()) {

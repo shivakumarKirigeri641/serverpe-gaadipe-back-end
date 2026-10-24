@@ -488,7 +488,10 @@ async function template(mobile, name, params = [], { language = 'en', buttons = 
      text lives at Meta. gp_monitoringalert_en_v1 said "keep the documents updated to avoid fines"
      and was rejected as SCAM. So a template whose saved wording (wa_templates) holds any of the
      words (util/safeWords) is never sent — the admin is told once a day to replace it. */
-  const saved = await db.one(
+  // Meta's own copy of the wording first (readTemplates); GaadiPe's saved copy only if Meta could not be read.
+  await readTemplates();
+  const live = categories.words.get(name);
+  const saved = live != null ? { words: live } : await db.one(
     `SELECT concat_ws(' ', header_text, body_text, footer_text) AS words FROM wa_templates
       WHERE template_name = $1 ORDER BY (language = $2) DESC LIMIT 1`, [name, language]).catch(() => null);
   if (saved?.words && require('../util/safeWords').risky(saved.words)) {
@@ -575,11 +578,11 @@ async function template(mobile, name, params = [], { language = 'en', buttons = 
 const ten = (m) => String(m || '').replace(/\D/g, '').slice(-10);
 
 /* Meta's category for each template, and how many {{n}} its body has — read (GET only) and kept an hour. */
-let categories = { at: 0, map: new Map(), vars: new Map() };
+let categories = { at: 0, map: new Map(), vars: new Map(), words: new Map() };
 async function readTemplates() {
   if (Date.now() - categories.at > 60 * 60 * 1000 && wa.token && wa.businessId) {
     try {
-      const map = new Map(); const vars = new Map();
+      const map = new Map(); const vars = new Map(); const words = new Map();
       let next = `https://graph.facebook.com/${wa.apiVersion}/${wa.businessId}/message_templates?fields=name,category,components&limit=200`;
       for (let i = 0; next && i < 10; i += 1) {
         const r = await fetch(next, { headers: { Authorization: `Bearer ${wa.token}` }, signal: AbortSignal.timeout(15000) });
@@ -589,10 +592,14 @@ async function readTemplates() {
           map.set(t.name, String(t.category || '').toUpperCase());
           const body = (t.components || []).find((c) => c.type === 'BODY');
           if (body?.text) vars.set(t.name, new Set(String(body.text).match(/\{\{\d+\}\}/g) || []).size);
+          /* The approved wording AS META HOLDS IT (2026-10-24: the saved copy in wa_templates was the old,
+             banned account's text under the same name — "…to avoid fines" — and stopped the new, clean template). */
+          words.set(t.name, (t.components || []).filter((c) => ['HEADER', 'BODY', 'FOOTER'].includes(c.type) && c.text)
+            .map((c) => c.text).join(' '));
         }
         next = j.paging?.next || null;
       }
-      if (map.size) categories = { at: Date.now(), map, vars };
+      if (map.size) categories = { at: Date.now(), map, vars, words };
     } catch { /* keep the last answer */ }
   }
 }
