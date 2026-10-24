@@ -710,7 +710,8 @@ const INTRO =
   'Namaste! 🙏 *GaadiPe* shows any vehicle\'s insurance, PUC, tax, challan and loan status, right here on WhatsApp.\n\n';
 /* ON EVERY HI (user, 2026-10-23: "tell them that if WhatsApp is disabled, they can continue on the web").
    WhatsApp has no colours: the quote block shows as a highlighted strip, and bold stands out. */
-const WEB_LINE = '> 📱 *If WhatsApp is ever disabled, continue at gaadipe.in*\n\n';
+// Quiet, on our side (user, 2026-10-24: "small, so the user just reads and ignores it"): plain italics, no strip.
+const WEB_LINE = '_If our WhatsApp is ever disabled or unavailable, continue at gaadipe.in_\n\n';
 
 /* WHAT GAADIPE IS NOT (user, 2026-10-21: "mention that GaadiPe does not provide any RC card or any
    certificate — only alerts, reports and notifications"). Said in What you get, the welcome and the
@@ -1775,7 +1776,8 @@ async function start(mobile) {
   // Full report expecting it free called it "worst". Read from the plan.
   const plan = await billing.reportPlan().catch(() => null);
   const price = plan
-    ? `✅ Basic check — *free* · 📋 Full report — ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}* (only if you want it)\n\n`
+    // "Full report @ just ₹19" (user, 2026-10-24: "something attractive").
+    ? `✅ Basic check — *FREE*\n📋 Full report @ just ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}/-* 🔥 _(only if you want it)_\n\n`
     : '';
   /* ONCE, NOT ON EVERY HI (user, 2026-10-23: "accept the Terms one time, and ask again when the policies
      change"). Someone who already agreed to the policies in force goes straight to the start; anyone else —
