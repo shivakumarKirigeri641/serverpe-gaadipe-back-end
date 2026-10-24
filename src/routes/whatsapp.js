@@ -71,9 +71,6 @@ router.post('/whatsapp/webhook', (req, res) => {
   }
 
   res.sendStatus(200);          // acknowledge first, then do the work
-  // QuizPe's test numbers only (QUIZPE_TEST_MOBILES, 2026-10-24): their webhooks go to QuizPe, untouched here.
-  const quizpe = require('../whatsapp/quizpeTest');
-  if (quizpe.claims(req.body)) return quizpe.forward(req.rawBody, req.get('x-hub-signature-256'));
   handle(req.body).catch(e => console.error('[wa] handling failed:', e.message));
 });
 
