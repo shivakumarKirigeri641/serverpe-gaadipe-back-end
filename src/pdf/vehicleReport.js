@@ -479,8 +479,8 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
           + 'synchronised periodically and may lag behind the live record at the RTO. GaadiPe is a private '
           + 'service: it does not create, alter or verify this data, and this document is not an official record. '
           + 'Where anything differs from your papers, the RTO record prevails. '
-          // User, 2026-10-21: not an RC — the official digital RC is free.
-          + 'This report is not an RC card: for the official digital RC, use DigiLocker or mParivahan (free).',
+          // User, 2026-10-21: not an RC. Plainer (2026-10-24): no app names — just where the RC itself is.
+          + 'This report is not an RC card: your RC card, or its digital copy on your phone, is the document to show.',
       });
     }
     doc.end();
@@ -494,7 +494,8 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
  * 3 = Indian scripts drawn (Tamil, Hindi and the rest), not dropped (2026-10-02).
  * 4 = drink-driving offences named by their section, no alcohol words (2026-10-19, Meta "ALCOHOL").
  * 5 = "not an RC card — DigiLocker / mParivahan" in the footer note (2026-10-21).
+ * 6 = that note in plain words, no app names (2026-10-24).
  */
-const LAYOUT = 5;
+const LAYOUT = 6;
 
 module.exports = { buildVehicleReport, LAYOUT };
