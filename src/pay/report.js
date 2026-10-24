@@ -168,8 +168,16 @@ async function whatsappPdf(row) {
     const r = row.snapshot ? row : await db.one(`SELECT * FROM vehicle_reports WHERE id = $1`, [row.id]);
     if (!r?.snapshot) return row.pdf_path || null;
     const business = await db.one(`SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
+    /* EVERY VALUE THROUGH THE WHATSAPP WORD FILTER (2026-10-24): the records' own text can say "State Government"
+       (owner type), "Govt" (an RTO, permit or financer) and the like — fine on the website and email, not in a
+       PDF sent on WhatsApp. Text only; numbers, dates and ids are left as they are. */
+    const safe = require('../util/safeWords');
+    const clean = (v, depth = 0) => (depth > 8 ? v
+      : typeof v === 'string' ? safe.clean(v)
+        : Array.isArray(v) ? v.map((x) => clean(x, depth + 1))
+          : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, clean(x, depth + 1)])) : v);
     const pdf = await buildVehicleReport({
-      report: r, business, data: r.snapshot, consent: r.consent || null, summaryOnly: true,
+      report: r, business, data: clean(r.snapshot), consent: r.consent || null, summaryOnly: true,
       requester: { name: r.requester_name, mobile: r.requested_by, ip: r.ip, device: r.device, channel: r.channel || 'whatsapp' },
     });
     fs.mkdirSync(DIR, { recursive: true });
