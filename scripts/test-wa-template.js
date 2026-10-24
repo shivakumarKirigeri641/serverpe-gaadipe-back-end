@@ -45,10 +45,12 @@ const KINDS = {
 
   if (which === 'report_ready') {
     // Your latest report's PDF, else the website's sample report.
-    const r = await db.one(`SELECT report_number, reg_no, pdf_path, valid_until FROM vehicle_reports
+    const r = await db.one(`SELECT * FROM vehicle_reports
       WHERE user_id = $1 AND pdf_path IS NOT NULL ORDER BY id DESC LIMIT 1`, [own.id]).catch(() => null);
     const sample = path.join(__dirname, '..', '..', 'serverpe-gaadipe-front-end', 'public', 'sample-report.pdf');
-    const file = r?.pdf_path && fs.existsSync(r.pdf_path) ? r.pdf_path : (fs.existsSync(sample) ? sample : null);
+    // The WhatsApp summary copy, exactly what a customer gets (reports.whatsappPdf) — never the full report.
+    const summary = r ? await require('../src/pay/report').whatsappPdf(r) : null;
+    const file = summary && fs.existsSync(summary) ? summary : (fs.existsSync(sample) ? sample : null);
     if (!file) { console.log('No report PDF found for you, and no sample-report.pdf next to the back end.'); process.exit(1); }
     const fname = `${r?.report_number || 'GaadiPe-sample-report'}.pdf`;
     const up = await send.uploadPdf(file, fname);
