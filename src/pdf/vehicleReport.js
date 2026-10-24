@@ -480,7 +480,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
           + 'service: it does not create, alter or verify this data, and this document is not an official record. '
           + 'Where anything differs from your papers, the RTO record prevails. '
           // User, 2026-10-21: not an RC. Plainer (2026-10-24): no app names — just where the RC itself is.
-          + 'This report is not an RC card: your RC card, or its digital copy on your phone, is the document to show.',
+          + 'This report is only for information. It is not an RC and cannot be used in place of one.',
       });
     }
     doc.end();
