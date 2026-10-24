@@ -704,12 +704,13 @@ const baseUrl = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
    screen. The same three documents, the same STOP promise and the same
    recorded agreement — only fewer words before the button. The documents
    themselves and the policy version are unchanged, so nobody is re-asked. */
+/* SHORT FIRST MESSAGE (user, 2026-10-24: half the ad visitors stopped at the first message — three links and
+   contract wording before anything useful). Plain words first, the Terms in one line at the end. */
 const INTRO =
-  'Namaste! 🙏 *GaadiPe* shows your vehicle\'s insurance, PUC, tax, challan and loan status '
-  + 'from vehicle registration records, right here on WhatsApp.\n\n';
+  'Namaste! 🙏 *GaadiPe* shows any vehicle\'s insurance, PUC, tax, challan and loan status, right here on WhatsApp.\n\n';
 /* ON EVERY HI (user, 2026-10-23: "tell them that if WhatsApp is disabled, they can continue on the web").
    WhatsApp has no colours: the quote block shows as a highlighted strip, and bold stands out. */
-const WEB_LINE = '> 📱 *If WhatsApp is ever disabled, you can continue on the web: sign in at gaadipe.in*\n\n';
+const WEB_LINE = '> 📱 *If WhatsApp is ever disabled, continue at gaadipe.in*\n\n';
 
 /* WHAT GAADIPE IS NOT (user, 2026-10-21: "mention that GaadiPe does not provide any RC card or any
    certificate — only alerts, reports and notifications"). Said in What you get, the welcome and the
@@ -837,11 +838,11 @@ const OWNER_TERMS =
   // "Reply STOP anytime" is no longer repeated here (user, 2026-10-05): the
   // Terms they agree to already say it (migration 062), and the line was
   // prompting people to reply STOP straight away.
-  `Please agree to our Terms (${SITE}/terms), Privacy (${SITE}/privacy) and Refund (${SITE}/refund) policies to continue.`
-  // One account, any channel (Terms 4.1, 2026-10-07).
-  + ' You also agree to receive messages about your account, checks and reports on WhatsApp, SMS or email — the same account works on gaadipe.in.'
+  // One line (user, 2026-10-24): the same agreement — Terms, Privacy, Refund, and one account on any channel (Terms 4.1).
+  `Tap *Agree & continue* to start. By tapping, you agree to our Terms, Privacy and Refund policies (${SITE}/terms) `
+  + 'and to messages about your checks on WhatsApp, SMS or email.'
   // The offers opt-in, in the same message (user, 2026-10-09: "no separate step"), as its own button.
-  + '\n\nTap *Agree, news & offers* to also get our newsletter and occasional offers here — at most one a week; reply STOP any time.';
+  + '\n\n_*Agree, news & offers* also sends an occasional offer — at most once a week, STOP any time._';
 
 /*
  * AGREE, OR AGREE + OFFERS (user, 2026-10-09). One message, two buttons: the
