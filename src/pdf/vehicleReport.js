@@ -88,7 +88,11 @@ const { consentBlock, consentLine } = require('./consent');
  * says ADMIN COPY on every page. What the source itself masked (ULIP stars
  * owner names and the chassis tail) stays masked: GaadiPe never had it.
  */
-const buildVehicleReport = ({ report, business = {}, data, requester = {}, consent = null, adminView = false }) =>
+/* summaryOnly (user, 2026-10-24: "the report attached on WhatsApp must have only the important ones"): the
+   copy sent on WhatsApp keeps the vehicle, ownership, documents, challan COUNTS and amounts, loan, blacklist and
+   FASTag — but no offence names, no challan-by-challan list and no places. Those stay in the full report (the
+   website and email), as the WhatsApp wording rule says. */
+const buildVehicleReport = ({ report, business = {}, data, requester = {}, consent = null, adminView = false, summaryOnly = false }) =>
   new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: T.M, bufferPages: true });
     const chunks = [];
@@ -179,7 +183,13 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
      * the website). A sample shows it too, so people see what they are buying.
      */
     {
-      const lines = require('../site/vehicleView').verdict(data);
+      /* The WhatsApp copy (summaryOnly): the blacklist reason is the records' own text ("…due to reason
+         Government Decision… FIR…") — said only as "blacklisted" there, and every line passes the WhatsApp word
+         filter (util/safeWords), as every WhatsApp message does. The full wording stays in the full report. */
+      const safe = require('../util/safeWords');
+      const lines = require('../site/vehicleView').verdict(data).map((l) => (!summaryOnly ? l
+        : /^Blacklist:/.test(l.text) ? { ...l, text: 'Blacklist: this vehicle is blacklisted. Do not buy until the RTO clears it — details in the full report.' }
+          : { ...l, text: safe.clean(l.text) }));
       const worst = lines.some((l) => l.tone === 'wrong') ? 'bad' : lines.some((l) => l.tone === 'watch') ? 'warn' : 'ok';
       y = T.sectionTitle(doc, 'Verdict — before you pay', y,
         worst === 'bad' ? T.BRAND.red || T.BRAND.brand : worst === 'warn' ? '#E07B00' : T.BRAND.green);
@@ -224,8 +234,9 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       ['Ownership serial', rc.owner_serial ? `${rc.owner_serial}` : '—'],
       ['Financer', titleCase(rc.financer) || 'Not financed'],
       ['Blacklist status', rc.blacklist_status && rc.blacklist_status !== '—'
-        ? titleCase(rc.blacklist_status) : 'None recorded'],
-      ['NOC', rc.noc_details && rc.noc_details !== '—' ? titleCase(rc.noc_details) : 'None recorded'],
+        ? (summaryOnly ? 'Blacklisted' : titleCase(rc.blacklist_status)) : 'None recorded'],
+      ['NOC', rc.noc_details && rc.noc_details !== '—'
+        ? (summaryOnly ? require('../util/safeWords').clean(titleCase(rc.noc_details)) : titleCase(rc.noc_details)) : 'None recorded'],
     ], y, { cols: 2 });
 
     /* ── documents, problems first ── */
@@ -297,7 +308,14 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
        that answers nothing. What an owner actually needs is "what do I keep
        getting caught for, and what is it costing me" — which is four rows —
        followed by the recent ones as compact single lines they can look up. */
-    const top = (c.summary?.top_offences || []).slice(0, 5);
+    // The WhatsApp copy stops at the counts: no offences, no list, no places (summaryOnly).
+    if (summaryOnly && !noAnswer) {
+      doc.fillColor(T.BRAND.muted).font(doc._F.regular).fontSize(7.8)
+         .text('This is the summary copy. The challan-by-challan details (date, challan number, offence, place and amount) '
+           + 'are in your full report on gaadipe.in (sign in with this mobile number) and in your email.', T.M, y + 4, { width: W });
+      y = doc.y + 8;
+    }
+    const top = summaryOnly ? [] : (c.summary?.top_offences || []).slice(0, 5);
     if (top.length) {
       y = T.ensureSpace(doc, y, 80);
       y = T.table(doc, [
@@ -345,7 +363,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
       y = doc.y + 8;
     };
 
-    const pending = newestFirst(c.pending);
+    const pending = summaryOnly ? [] : newestFirst(c.pending);
     if (pending.length) {
       y = T.ensureSpace(doc, y, 90);
       y = T.sectionTitle(doc, `Pending challans (${c.pending_count ?? pending.length})`, y,
@@ -357,7 +375,7 @@ const buildVehicleReport = ({ report, business = {}, data, requester = {}, conse
         : 'Every challan number is complete and can be searched on the e-Challan portal.');
     }
 
-    const disposed = newestFirst(c.disposed);
+    const disposed = summaryOnly ? [] : newestFirst(c.disposed);
     if (disposed.length) {
       y = T.ensureSpace(doc, y, 90);
       y = T.sectionTitle(doc, `Paid / disposed challans (${c.disposed_count ?? disposed.length})`, y,

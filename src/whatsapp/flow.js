@@ -1277,7 +1277,7 @@ async function sendReports(mobile) {
       continue;
     }
     const sent = r.pdf_path
-      ? await send.document(mobile, r.pdf_path,
+      ? await send.document(mobile, await reports.whatsappPdf(r),
           { filename: `${r.report_number}.pdf`,
             caption: `📋 ${r.report_number} — ${r.reg_no} · valid until ${fmt(new Date(r.ends_on))}` })
       : { ok: false };
@@ -2013,8 +2013,10 @@ async function sendValidReport(mobile, r, { next = true } = {}) {
     console.error('[wa] report %s rebuild: %s', r.report_number, e.message);
     return r.pdf_path;
   }) : r.pdf_path;
-  const sent = file
-    ? await send.document(mobile, file, { filename: `${r.report_number}.pdf`, caption })
+  // The WhatsApp copy: the important facts only, no offence list (2026-10-24, reports.whatsappPdf).
+  const waFile = file ? await reports.whatsappPdf({ ...r, pdf_path: file }) : null;
+  const sent = waFile
+    ? await send.document(mobile, waFile, { filename: `${r.report_number}.pdf`, caption })
     : { ok: false };
   if (!sent.ok) {
     if (link) await linkButton(mobile, `📋 GaadiPe report ${r.report_number} — ${r.reg_no}\n\nThe PDF could not be attached here. Tap below to open it.`, link, 'Open my report');

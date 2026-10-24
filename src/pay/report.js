@@ -156,6 +156,32 @@ async function rebuild(row, data) {
   return { ...row, snapshot: data, pdf_path: file };
 }
 
+/**
+ * THE WHATSAPP COPY (user, 2026-10-24: "the report attached on WhatsApp must have only the important ones").
+ * The same report, summaryOnly: vehicle, ownership, documents, challan counts and amounts, loan, blacklist,
+ * FASTag — no offence names, no challan list, no places (those stay in the full report and the email).
+ * Built from the stored snapshot next to the full PDF as <number>-summary.pdf; returns its path, or the full
+ * report's path if it cannot be built (never worse than before).
+ */
+async function whatsappPdf(row) {
+  try {
+    const r = row.snapshot ? row : await db.one(`SELECT * FROM vehicle_reports WHERE id = $1`, [row.id]);
+    if (!r?.snapshot) return row.pdf_path || null;
+    const business = await db.one(`SELECT * FROM business_details WHERE is_active ORDER BY id DESC LIMIT 1`) || {};
+    const pdf = await buildVehicleReport({
+      report: r, business, data: r.snapshot, consent: r.consent || null, summaryOnly: true,
+      requester: { name: r.requester_name, mobile: r.requested_by, ip: r.ip, device: r.device, channel: r.channel || 'whatsapp' },
+    });
+    fs.mkdirSync(DIR, { recursive: true });
+    const file = path.join(DIR, `${r.report_number}-summary.pdf`);
+    fs.writeFileSync(file, pdf);
+    return file;
+  } catch (e) {
+    console.error('[report] WhatsApp summary copy of %s failed: %s', row.report_number, e.message);
+    return row.pdf_path || null;
+  }
+}
+
 /** The latest report for a vehicle this person can see. */
 const latestFor = (userId, regNo) => db.one(
   `SELECT * FROM vehicle_reports
@@ -172,4 +198,4 @@ const validFor = (userId, regNo) => db.one(
       AND valid_until IS NOT NULL AND valid_until > now()
     ORDER BY id DESC LIMIT 1`, [userId, regNo]);
 
-module.exports = { issue, rebuild, latestFor, validFor, describeDevice, nextNumber };
+module.exports = { issue, rebuild, latestFor, validFor, describeDevice, nextNumber, whatsappPdf };

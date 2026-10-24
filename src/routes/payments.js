@@ -247,7 +247,8 @@ async function notifyPaid(result) {
             channel: paidFrom.channel || 'whatsapp',
           },
         });
-        await send.document(user.mobile, doc.pdf_path, {
+        // The WhatsApp copy: the important facts only, no offence list (2026-10-24, reports.whatsappPdf).
+        await send.document(user.mobile, await reports.whatsappPdf(doc), {
           filename: `${doc.report_number}.pdf`,
           caption: `📋 Vehicle report ${doc.report_number} — ${veh.reg_no}`,
         });
@@ -402,8 +403,10 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
   const until = fmt(new Date(doc.valid_until));
   const link = base ? `\n${base}/report/${doc.access_token}` : '';
   // The PDF alone — no link beside it (2026-10-19, SCAM strikes); the link only as a button if it fails.
-  let sent = doc.pdf_path
-    ? await send.document(pay.mobile, doc.pdf_path, {
+  // The WhatsApp copy: the important facts only, no offence list (2026-10-24, reports.whatsappPdf).
+  const waFile = doc.pdf_path ? await reports.whatsappPdf(doc) : null;
+  let sent = waFile
+    ? await send.document(pay.mobile, waFile, {
         filename: `${doc.report_number}.pdf`,
         caption: `📋 GaadiPe report ${doc.report_number} — ${pay.reg_no}\nDownload again any time until ${until} from My reports.`,
       })
@@ -412,10 +415,10 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
      e.g. paid later, or on the website: the approved template, the report PDF attached at its top.
      Values: name, vehicle, report number, monitoring active till. Buttons, in the template's order:
      "Thanks, Got it" (-> the menu), "Check another vehicle", "My reports" — all three quick replies, as approved. */
-  if (!sent.ok && sent.error === 'window_closed' && doc.pdf_path) {
+  if (!sent.ok && sent.error === 'window_closed' && waFile) {
     const tpl = String(await require('../util/settings').get('wa_template_report_ready', '') || '').trim();
     if (tpl && (await send.mayStart(pay.mobile).catch(() => ({ ok: false }))).ok) {
-      const up = await send.uploadPdf(doc.pdf_path, `${doc.report_number}.pdf`);
+      const up = await send.uploadPdf(waFile, `${doc.report_number}.pdf`);
       if (up.ok) {
         const sub = pay.subscription_id ? await db.one(`SELECT ends_on FROM subscriptions WHERE id = $1`, [pay.subscription_id]).catch(() => null) : null;
         const name = String(pay.wa_profile_name || '').trim().split(/\s+/)[0] || 'there';
