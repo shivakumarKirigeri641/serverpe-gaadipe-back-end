@@ -61,7 +61,7 @@ const show = (title, obj) => { console.log(`\n── ${title}`); console.log(JSO
 
   // 6. GaadiPe's own switches
   console.log('\n── 6. GaadiPe settings');
-  const keys = ['whatsapp_sending_enabled', 'flag_whatsapp_flow', 'whatsapp_number_since', 'wa_template_monitoring', 'template_daily_status', 'wa_template_renewal'];
+  const keys = ['whatsapp_sending_enabled', 'flag_whatsapp_flow', 'whatsapp_number_since', 'wa_template_monitoring', 'template_daily_status', 'wa_template_renewal', 'wa_template_report_ready'];
   const { rows } = await db.query(`SELECT key, value FROM app_settings WHERE key = ANY($1)`, [keys]);
   for (const k of keys) console.log(`   ${k.padEnd(26)} ${rows.find((r) => r.key === k)?.value ?? '(not set)'}`);
   console.log(`   WHATSAPP_ENABLED (.env)     ${wa.enabled ? 'on' : 'off'}`);
