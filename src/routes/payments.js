@@ -411,7 +411,7 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
   /* THE CHAT WINDOW IS CLOSED (2026-10-24: gp_report_ready_v1 approved, Utility, with a document header) —
      e.g. paid later, or on the website: the approved template, the report PDF attached at its top.
      Values: name, vehicle, report number, monitoring active till. Buttons, in the template's order:
-     "Thanks, got it" (-> the menu), "Check another vehicle", then the static "My reports" link. */
+     "Thanks, Got it" (-> the menu), "Check another vehicle", "My reports" — all three quick replies, as approved. */
   if (!sent.ok && sent.error === 'window_closed' && doc.pdf_path) {
     const tpl = String(await require('../util/settings').get('wa_template_report_ready', '') || '').trim();
     if (tpl && (await send.mayStart(pay.mobile).catch(() => ({ ok: false }))).ok) {
@@ -422,7 +422,7 @@ async function deliverPaidReport(paymentId, { withText = false } = {}) {
         sent = await send.template(pay.mobile, tpl,
           [name, pay.reg_no, doc.report_number, sub?.ends_on ? fmt(new Date(sub.ends_on)) : until],
           { language: await require('../util/settings').get('wa_template_language', 'en'),
-            buttons: ['menu', 'check_another'], headerDocument: { id: up.id, filename: `${doc.report_number}.pdf` } })
+            buttons: ['menu', 'check_another', 'my_reports'], headerDocument: { id: up.id, filename: `${doc.report_number}.pdf` } })
           .catch((e) => ({ ok: false, error: e.message }));
       }
     }
