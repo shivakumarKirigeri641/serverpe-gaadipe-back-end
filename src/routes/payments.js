@@ -157,7 +157,8 @@ async function handle(body) {
     console.log('[pay] %s ref=%s -> %s', event, reference, result.reason);
     return;
   }
-  console.log('[pay] activated subscription %d until %s',
+  if (result.oneTime) console.log('[pay] one-time report paid (payment %d)', result.payment.id);
+  else console.log('[pay] activated subscription %d until %s',
     result.subscription.id, result.endsOn.toISOString().slice(0, 10));
 
   await notifyPaid(result);
@@ -201,7 +202,7 @@ async function notifyPaid(result) {
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const fmt = (d) => `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
-  const ends = fmt(result.endsOn);
+  const ends = result.endsOn ? fmt(result.endsOn) : null;   // none for the one-time report (REPORT11)
   const amount = (result.payment.amount_paise / 100).toFixed(result.payment.amount_paise % 100 ? 2 : 0);  // ₹10.62 stays ₹10.62
 
   if (result.plan?.kind === 'report') {
@@ -273,7 +274,7 @@ async function notifyReportPaid(result, user, veh, { ends, amount }) {
 
   await send.text(user.mobile,
     'Payment received ✅\n\n'
-    + `₹${amount} · full report${veh ? ` for *${veh.reg_no}*` : ''}`);
+    + `₹${amount} · full report${result.oneTime ? ' (one time)' : ''}${veh ? ` for *${veh.reg_no}*` : ''}`);
 
   const delivered = await deliverPaidReport(result.payment.id, { withText: true });
   if (!delivered.ok) {
@@ -284,6 +285,20 @@ async function notifyReportPaid(result, user, veh, { ends, amount }) {
       + 'Tap below in a few minutes and I will send it. Your payment is safe.',
       [{ id: 'download_report', title: 'Send my report' },
        { id: 'menu',            title: 'Menu' }]);
+  }
+
+  // The one-time report (REPORT11): no monitoring to describe — what they have, and the ₹19 if they want alerts later.
+  if (result.oneTime) {
+    await send.buttons(user.mobile,
+      `📄 Your full report for *${veh ? veh.reg_no : 'this vehicle'}* is in *My reports*.\n\n`
+      + 'This was a one-time report — no alerts for this vehicle. Want new-challan alerts and expiry warnings for '
+      + '28 days? Check the vehicle again and choose *Report + alerts*.'
+      + (delivered.ok && veh ? '\n\n_Selling or buying? *Share report* gives a summary link you can forward._' : ''),
+      [delivered.ok && veh ? { id: 'share_report', title: 'Share report' } : { id: 'download_report', title: 'My report' },
+       { id: 'invoice',         title: 'My GST invoice' },
+       { id: 'check_another',   title: 'Check a vehicle' }]);
+    await sendInvoice(user, result.payment.id).catch(() => {});
+    return;
   }
 
   await send.buttons(user.mobile,

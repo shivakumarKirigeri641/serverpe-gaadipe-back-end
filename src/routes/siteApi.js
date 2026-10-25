@@ -90,6 +90,8 @@ router.get('/pricing', safe(async (_req, res) => {
   const validDays = await settings.num('report_valid_days', 7);
   res.json({
     price_paise: plan?.price_paise ?? null,
+    // The one-time report, no monitoring (2026-10-25, REPORT11) — null when it is off.
+    one_time_paise: (await billing.oneTimePlan().catch(() => null))?.price_paise ?? null,
     // The renewal price, as set in admin (2026-10-14) — the site's "₹11 to renew" reads it.
     renewal_paise: plan?.renewal_paise ?? null,
     // Replace vehicle (2026-10-20: "update marketing site that we give renewal & replace"):
@@ -1105,7 +1107,9 @@ router.post('/buy', safe(async (req, res) => {
       message: 'Please check the vehicle first, then buy the report.' });
   }
 
-  const plan = await billing.reportPlan();
+  // The ₹11 one-time report (one_time: true, 2026-10-25, REPORT11) or the ₹19 with 28 days of alerts.
+  const oneTime = req.body?.one_time === true;
+  const plan = oneTime ? await billing.oneTimePlan() : await billing.reportPlan();
   const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
   // The site opens checkout through its own origin, so a public base URL (a
   // tunnel, the API domain) is not needed for a website purchase.
@@ -1124,8 +1128,10 @@ router.post('/buy', safe(async (req, res) => {
    * reward — Rs.9 + GST (report_credits.price_paise). The credit is attached to
    * this payment now and spent only when it is paid (billing.activate).
    */
-  const priced = await billing.reportPriceFor(req.user.id, vehicle.id,
-    { creditPaise: reducedCredit?.price_paise || null });
+  // The one-time report has one price; a referral credit still wins if it is cheaper.
+  const priced = oneTime
+    ? { paise: Math.min(Number(plan.price_paise), Number(reducedCredit?.price_paise) || Infinity) }
+    : await billing.reportPriceFor(req.user.id, vehicle.id, { creditPaise: reducedCredit?.price_paise || null });
   const amountPaise = priced.paise;
 
   // The owner's own test purchases (razorpay.isTestBuyer): Razorpay TEST keys, ₹0 in the books.

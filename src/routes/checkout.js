@@ -220,7 +220,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   const pay = await db.one(
     `SELECT p.*, u.mobile, u.wa_profile_name, u.display_name, u.state_code, u.email,
             v.reg_no, v.maker, v.model, pl.duration_days,
-            pl.kind AS plan_kind, pl.price_paise AS plan_price_paise
+            pl.kind AS plan_kind, pl.price_paise AS plan_price_paise, pl.monitoring AS plan_monitoring
        FROM payments p
        JOIN users u ON u.id = p.user_id
        LEFT JOIN plans pl ON pl.id = p.plan_id
@@ -326,7 +326,8 @@ router.get('/pay/:token', safe(async (req, res) => {
   const planLine = isReplace
     ? `Replace vehicle · ${rep.from_reg || ''} → ${rep.to_reg || pay.reg_no || ''}`
     : isReport
-    ? 'Full vehicle report'
+    // The one-time report (REPORT11, 2026-10-25) says so; the ₹19 names its alerts.
+    ? (pay.plan_monitoring === false ? 'Full vehicle report · one time' : `Full vehicle report + ${pay.duration_days || 28} days of alerts`)
     : `GaadiPe Watch · ${pay.duration_days || 28} days`;
   const where = web ? 'in your GaadiPe account' : 'on WhatsApp';
   const benefits = isReplace
@@ -340,8 +341,10 @@ router.get('/pay/:token', safe(async (req, res) => {
        'Loan / hypothecation, blacklist and NOC status',
        'Every challan, with offence, place and amount',
        'Insurer, policy and PUC references',
-       `New challans watched for ${pay.duration_days || 90} days`,
-       'A warning before insurance, PUC, road tax or fitness expires — no end date',
+       ...(pay.plan_monitoring === false
+         ? ['One time — no alerts or monitoring for this vehicle']
+         : [`New challans watched for ${pay.duration_days || 90} days`,
+            'A warning before insurance, PUC, road tax or fitness expires']),
        `GST invoice ${where}, and emailed to you`]
     : ['Daily checks on this vehicle',
        'A message the moment a new challan appears',
@@ -606,8 +609,8 @@ router.post('/pay/:token/verify', express.json(), safe(async (req, res) => {
   });
 
   if (result.activated) {
-    console.log('[checkout] activated subscription %d from the browser callback',
-      result.subscription.id);
+    console.log('[checkout] activated %s from the browser callback',
+      result.oneTime ? `one-time report (payment ${result.payment.id})` : `subscription ${result.subscription.id}`);
     const { notifyPaid } = require('./payments');
     notifyPaid(result).catch(e => console.error('[checkout] notify:', e.message));
   } else {

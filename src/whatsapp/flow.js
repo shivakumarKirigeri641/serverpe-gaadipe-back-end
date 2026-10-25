@@ -73,6 +73,8 @@ const BTN = {
   PAY_CONFIRM: 'pay_confirm',
   VERIFY_RC: 'verify_rc',
   BUY_REPORT: 'buy_report',
+  // The ₹11 one-time report, no monitoring (2026-10-25, REPORT11).
+  BUY_ONETIME: 'buy_report_once',
   DOWNLOAD_REPORT: 'download_report',
   FEEDBACK: 'feedback',
   REFER: 'refer',
@@ -607,6 +609,7 @@ async function emailCodeSent(mobile, email, out) {
 /** "What do I get?" — the offer in one message, prices from the plan. */
 async function whatYouGet(mobile) {
   const plan = await billing.reportPlan().catch(() => null);
+  const once = await billing.oneTimePlan().catch(() => null);
   const price = plan ? rupeesOf(plan.price_paise) : '₹19';
   const renew = plan && Number(plan.renewal_paise) > 0 ? rupeesOf(plan.renewal_paise) : null;
   const days = plan?.duration_days || 28;
@@ -623,9 +626,11 @@ async function whatYouGet(mobile) {
     + '✅ *Free check* — send any vehicle number: the vehicle, owner (masked), registration date and age, RC status, '
     + 'RTO, every validity date (insurance, PUC, road tax, fitness, permit) and pending challans with the total.\n\n'
     + checks
-    + `📋 *Full report — ${price}* — adds the loan / hypothecation, blacklist and NOC, each challan with offence and place, number of owners, `
+    + `📋 *Full report — ${once ? `${rupeesOf(once.price_paise)} one time` : price}* — adds the loan / hypothecation, blacklist and NOC, each challan with offence and place, number of owners, `
     + 'insurer and policy, FASTag, and a buyer’s checklist — as a PDF.\n\n'
-    + `🔔 *${days} days of monitoring included* — a message before any document expires, and when a new challan appears.\n\n`
+    + (once
+      ? `🔔 *Full report + ${days} days of alerts — ${price}* — expiry warnings and new-challan alerts.\n\n`
+      : `🔔 *${days} days of monitoring included* — a message before any document expires, and when a new challan appears.\n\n`)
     + (renew ? `🔄 *Renew for ${renew}* — another ${days} days.\n\n` : '')
     + '🚛 *Fleets (5+)* — an Excel report of every vehicle, emailed every evening.\n\n'
     // Said upfront (2026-10-15): people rated 1★ expecting the owner's phone number.
@@ -675,6 +680,8 @@ async function currentOffers(mobile) {
   if (custom) lines.push(`🔥 ${custom}`, '');
   if (gifts) lines.push(`🎉 *You have ${gifts} free full report${gifts === 1 ? '' : 's'}* from GaadiPe — send any vehicle number to use ${gifts === 1 ? 'it' : 'one'}.`, '');
   lines.push('✅ *Basic vehicle check — free.* Send any number.');
+  const once = await billing.oneTimePlan().catch(() => null);
+  if (once) lines.push(`📋 *Full report — ${rupeesOf(once.price_paise)}* — one time, no alerts.`);
   if (plan) {
     lines.push(plan.discount_paise
       ? `📋 *Full report — ~${rupeesOf(plan.list_price_paise)}~ ${rupeesOf(plan.price_paise)}* (${rupeesOf(plan.discount_paise)} off) — with ${days} days of alerts.`
@@ -1800,6 +1807,27 @@ async function reportMenu(mobile, regNo, data, bought) {
     return;
   }
 
+  /* TWO CHOICES (user, 2026-10-25): the ₹11 one-time report beside the ₹19 with 28 days of alerts — "just ₹8
+     more". Without the one-time plan (not migrated, or switched off) the page is as before. */
+  const once = await billing.oneTimePlan().catch(() => null);
+  if (once) {
+    const p1 = `₹${Math.round(once.price_paise / 100)}`;
+    const more = Math.round((plan.price_paise - once.price_paise) / 100);
+    await send.buttons(mobile,
+      `🔒 *Full report for ${regNo}*\n\n`
+      + lockedLines(data).join('\n')
+      + `\n\n📋 *Full report — ${p1}* · one time\n`
+      + `PDF report — download again for ${validDays} days. No alerts.\n\n`
+      + `🔔 *Full report + ${plan.duration_days} days of alerts — ${was}${price}*${off} ⭐${more > 0 ? ` _just ₹${more} more_` : ''}\n`
+      + 'The same report, plus new-challan alerts and a warning before insurance, PUC, road tax, fitness or permit expires.\n\n'
+      + `🚫 No queues · 🚫 No travel · 🚫 No follow-ups — *from just ${p1}* ✨\n\n`
+      + '_Prices include GST. Personal details are masked. Nothing renews automatically._',
+      [{ id: BTN.BUY_ONETIME,   title: `Report ${p1}` },
+       { id: BTN.BUY_REPORT,    title: `Report + alerts ${price}` },
+       { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
+    return;
+  }
+
   await send.buttons(mobile,
     `🔒 *Full report for ${regNo}*\n\n`
     + lockedLines(data).join('\n')
@@ -1826,9 +1854,12 @@ async function start(mobile) {
   // The price before the first tap (user, 2026-09-30): someone who tapped
   // Full report expecting it free called it "worst". Read from the plan.
   const plan = await billing.reportPlan().catch(() => null);
+  const once = await billing.oneTimePlan().catch(() => null);
   const price = plan
-    // "Full report @ just ₹19" (user, 2026-10-24: "something attractive").
-    ? `✅ Basic check — *FREE*\n📋 Full report @ just ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}/-* 🔥 _(only if you want it)_\n\n`
+    // "Full report @ just ₹19" (user, 2026-10-24: "something attractive"); from ₹11 one time (2026-10-25, REPORT11).
+    ? (once
+      ? `✅ Basic check — *FREE*\n📋 Full report @ just *₹${Math.round(once.price_paise / 100)}/-* 🔥 · with ${plan.duration_days} days of alerts *₹${Math.round(plan.price_paise / 100)}/-* _(only if you want it)_\n\n`
+      : `✅ Basic check — *FREE*\n📋 Full report @ just ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}/-* 🔥 _(only if you want it)_\n\n`)
     : '';
   /* ONCE, NOT ON EVERY HI (user, 2026-10-23: "accept the Terms one time, and ask again when the policies
      change"). Someone who already agreed to the policies in force goes straight to the start; anyone else —
@@ -2836,7 +2867,10 @@ async function handle(session, message, mobile) {
        * to the payment page rather than through a second summary. The page
        * itself repeats the summary before any money moves.
        */
+      case BTN.BUY_ONETIME:
       case BTN.BUY_REPORT: {
+        // Which report: the ₹11 one-time (REPORT11) or the ₹19 with 28 days of alerts (REPORT19).
+        const oneTime = intent.id === BTN.BUY_ONETIME;
         const user = await store.upsertUser(mobile);
         const reg = await pendingReg(mobile);
         const vehicle = reg
@@ -2846,7 +2880,7 @@ async function handle(session, message, mobile) {
           await send.text(mobile, 'Please send the vehicle number again.');
           return;
         }
-        await funnel(mobile, 'buy_tapped', { reg_no: vehicle.reg_no });
+        await funnel(mobile, 'buy_tapped', { reg_no: vehicle.reg_no, one_time: oneTime });
 
         // Already bought and still valid: hand it over, never charge twice.
         const existing = await reports.validFor(user.id, vehicle.reg_no);
@@ -2878,7 +2912,7 @@ async function handle(session, message, mobile) {
 
         // Every precondition is checked BEFORE an order exists, so a missing
         // setting never leaves an orphan order behind.
-        const plan = await billing.reportPlan();
+        const plan = oneTime ? await billing.oneTimePlan() : await billing.reportPlan();
         if (!plan || !razorpay.configured() || !baseUrl() || !(await require('../util/flags').on('payments'))) {
           console.error('[pay] cannot sell a report: plan=%s razorpay=%s PUBLIC_BASE_URL=%s',
             Boolean(plan), razorpay.configured(), Boolean(baseUrl()));
@@ -2948,7 +2982,7 @@ async function handle(session, message, mobile) {
         await funnel(mobile, 'link_sent', { reg_no: vehicle.reg_no, payment_row: row.id });
         // The link stays the message; Support and Other vehicle sit under it (2026-10-12).
         await linkButton(mobile,
-          `*${vehicle.reg_no}* — GaadiPe full report · ₹${Math.round(row.amount_paise / 100)}\n\n`
+          `*${vehicle.reg_no}* — GaadiPe full report${oneTime ? ' (one time)' : ` + ${plan.duration_days} days of alerts`} · ₹${Math.round(row.amount_paise / 100)}\n\n`
           + 'Tap below to pay on GaadiPe’s checkout (UPI, card, netbanking). '
           + 'The report arrives in this chat the moment the payment goes through.',
         `${baseUrl()}/pay/${row.checkout_token}`, payButtonText(row.amount_paise), { footer: PAY_FOOTER, fallbackKeys: ['support', 'other'] });

@@ -41,6 +41,12 @@ const reportPlan = async () => {
            price_paise: cut(p.price_paise), renewal_paise: cut(p.renewal_paise) };
 };
 
+/*
+ * THE ONE-TIME REPORT (user, 2026-10-25: "₹11 — full report one time, no monitoring"; migration 212).
+ * The same report as REPORT19, no subscription, no watch. Sold beside the ₹19 for every vehicle.
+ */
+const oneTimePlan = () => db.one(`SELECT * FROM plans WHERE code = 'REPORT11' AND is_active LIMIT 1`);
+
 /**
  * What a full report costs THIS customer for THIS vehicle (user, 2026-09-23).
  *
@@ -161,6 +167,26 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
         [pay.user_id, vehicleId, JSON.stringify({ payment_id: razorpayPaymentId, amount_paise: pay.amount_paise,
           subscription_id: moved.sub.id, ends_on: moved.endsOn.toISOString().slice(0, 10), replace: pay.raw?.replace || null })]);
       return { activated: true, subscription: moved.sub, endsOn: moved.endsOn, payment: pay, vehicleId, plan, replaced: pay.raw?.replace || null };
+    }
+
+    /* THE ONE-TIME REPORT (REPORT11, migration 212): paid, and nothing more — no subscription, no watch, no
+       renewal. The report itself is issued by the delivery (routes/payments.js), as for the ₹19. */
+    if (plan?.kind === 'report' && plan.monitoring === false) {
+      await c.query(
+        `UPDATE payments SET status = 'paid', payment_id = $2, order_id = $3, paid_at = now(),
+                amount_paise = CASE WHEN $5 THEN 0 ELSE amount_paise END,
+                raw = COALESCE(raw, '{}'::jsonb) || $4::jsonb
+                      || CASE WHEN $5 THEN jsonb_build_object('test_amount_paise', amount_paise) ELSE '{}'::jsonb END
+          WHERE id = $1`,
+        [pay.id, razorpayPaymentId, orderId || null, JSON.stringify({ gateway: raw || {} }), test]);
+      await c.query(
+        `UPDATE report_credits SET used_at = now(), used_reg_no = (SELECT reg_no FROM vehicles WHERE id = $2)
+          WHERE payment_id = $1 AND used_at IS NULL AND reward = 'report_at_price'`, [pay.id, vehicleId]);
+      await c.query(
+        `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'payment_paid', $3)`,
+        [pay.user_id, vehicleId, JSON.stringify({ payment_id: razorpayPaymentId, amount_paise: pay.amount_paise,
+          one_time: true, plan: plan.code })]);
+      return { activated: true, subscription: null, endsOn: null, oneTime: true, payment: pay, vehicleId, plan };
     }
 
     // ONE SUBSCRIPTION PER VEHICLE. Looked up by vehicle, not by customer:
@@ -366,4 +392,4 @@ async function refund({ razorpayPaymentId, refundId, raw }) {
   return result;
 }
 
-module.exports = { watchPlan, reportPlan, priceFor, reportPriceFor, createPending, activate, refund };
+module.exports = { watchPlan, reportPlan, oneTimePlan, priceFor, reportPriceFor, createPending, activate, refund };
