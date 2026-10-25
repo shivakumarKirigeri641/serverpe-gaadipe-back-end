@@ -106,6 +106,9 @@ const GROUPS = [
     ['free_check_show_variant', 'Free check before sign-in: show the variant (true / false)', 'true: the full model, e.g. "SPLENDOR PLUS"; false: only the first word, the rest hidden.'],
     // ONE toggle for the owner's name (user, 2026-10-21): signed-in customers always see it.
     ['free_check_show_owner', 'Owner name before sign-in (true / false)', 'false: the owner name (masked, like R****H K***R) is shown only after the customer signs in. true: shown before AND after sign-in.'],
+    // Suspicious-activity guard (2026-10-25): sign-in codes for many different numbers from one address.
+    ['site_otp_ip_numbers_per_hour', 'Sign-in codes: different numbers per device, per hour', '3: one internet address may ask for codes for at most this many different mobile numbers an hour (0 = no limit). The admin is alerted when it is hit.'],
+    ['site_otp_ip_numbers_per_day', 'Sign-in codes: different numbers per device, per day', '5: the same, per day.'],
     // The GaadiPe app's dashboard (user, 2026-10-22; migration 206).
     ['free_check_show_status', 'Free check before sign-in: show each document\'s status (true / false)', 'true: Insurance, PUC, Registration, Road tax (and Fitness, Permit for commercial) as Valid / Due soon / Expired, the pending challan count and the health score — no dates. false: make and model only. Dates, challan details, loan and blacklist stay in sign-in and the ₹19 report.'],
     ['free_check_show_rto', 'Free check before sign-in: show the RTO (true / false)', 'RTO code, office, district and state — worked out from the number, free.'],

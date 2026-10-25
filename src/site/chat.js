@@ -33,7 +33,14 @@ const hash = (v) => crypto.createHash('sha256').update(String(v || '')).digest('
 /** The basic check for a visitor who has not signed in. */
 async function anonCheck(req) {
   const parsed = plate.parse(req.body?.reg_no);
-  if (!parsed.ok) return { status: 400, body: { error: 'bad_plate', message: parsed.error } };
+  if (!parsed.ok) {
+    // A mobile number typed as a vehicle number, again and again from one address: the admin hears (util/suspicious).
+    if (parsed.mobileLike) {
+      require('../util/suspicious').note('mobile_lookup', req.ip,
+        { said: require('../util/suspicious').mask(req.body?.reg_no), where: 'website chat (not signed in)' });
+    }
+    return { status: 400, body: { error: 'bad_plate', message: parsed.error } };
+  }
 
   /* SIGN IN FOR EVERY CHECK (user, 2026-10-08: "make sign-in mandatory for any
      vehicle check"). Switch: check_sign_in_required (migration 137, on). Off, the

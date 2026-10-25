@@ -195,7 +195,20 @@ function strictProblem(shape) {
  * Returns { ok, regNo, pretty, format, repaired, error }.
  * `error` is written to be shown to a person as-is.
  */
+/*
+ * A MOBILE NUMBER IN THE VEHICLE BOX (user, 2026-10-25: a visitor typed four mobile numbers there, hoping to look
+ * people up). Ten digits (with or without +91 / 0) and nothing else is never a plate - say plainly that GaadiPe checks
+ * vehicles, never people. `mobileLike` lets callers notice someone doing it repeatedly (util/suspicious.js).
+ */
+const MOBILE_LIKE = /^(?:\+?91|0)?[6-9]\d{9}$/;
+const MOBILE_ERROR = 'That looks like a mobile number. GaadiPe checks a vehicle by its number plate, like KA01AB1234 — '
+  + 'we never look up people by phone number.';
+
 function parse(input) {
+  const digits = String(input ?? '').replace(/[\s()-]/g, '');
+  if (/^\+?\d+$/.test(digits) && (MOBILE_LIKE.test(digits) || digits.replace(/\D/g, '').length >= 10)) {
+    return { ok: false, regNo: '', mobileLike: true, error: MOBILE_ERROR };
+  }
   const raw = normalize(input);
 
   if (!raw) {

@@ -35,6 +35,16 @@ const db = require('../db');
 const auth = require('../site/auth');
 const view = require('../site/vehicleView');
 const plate = require('../util/plate');
+const suspicious = require('../util/suspicious');
+
+/* A number that is not a plate. A MOBILE number in the vehicle box is someone hoping to look a person up (2026-10-25):
+   told plainly that GaadiPe never does that, and noticed if it keeps happening from one address (util/suspicious). */
+function badPlate(req, res, parsed) {
+  if (parsed.mobileLike) {
+    suspicious.note('mobile_lookup', req.ip, { said: suspicious.mask(req.body?.reg_no || req.params?.regNo), where: `website ${req.path}` });
+  }
+  return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+}
 const device = require('../site/device');
 const quota = require('../util/quota');
 const blocks = require('../admin/blocks');
@@ -491,7 +501,7 @@ router.post('/referrals/join', safe(async (req, res) => {
 /* Spend a free report on a vehicle — the same declaration as a purchase is required. */
 router.post('/credits/use', safe(async (req, res) => {
   const parsed = plate.parse(req.body?.reg_no);
-  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  if (!parsed.ok) return badPlate(req, res, parsed);
   if (req.body?.declared !== true) {
     return res.status(400).json({ error: 'declaration_required',
       message: 'Please confirm that this vehicle is yours or that its owner is known to you.' });
@@ -758,7 +768,7 @@ router.get('/vehicles', safe(async (req, res) => {
  */
 router.get('/vehicles/:regNo', safe(async (req, res) => {
   const parsed = plate.parse(req.params.regNo);
-  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  if (!parsed.ok) return badPlate(req, res, parsed);
 
   const paid = await reports.validFor(req.user.id, parsed.regNo);
   // Their own vehicle: today's record first (vehicle/rcConfirm.ownerRefresh, once a day per vehicle).
@@ -800,7 +810,7 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
  */
 router.get('/vehicles/:regNo/card', safe(async (req, res) => {
   const parsed = plate.parse(req.params.regNo);
-  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  if (!parsed.ok) return badPlate(req, res, parsed);
   const mine = await db.one(
     `SELECT v.id, uv.check_count, uv.last_checked_at,
             EXISTS (SELECT 1 FROM watches w WHERE w.user_id = uv.user_id AND w.vehicle_id = v.id AND w.is_active) AS watched
@@ -845,7 +855,7 @@ router.get('/vehicles/:regNo/card', safe(async (req, res) => {
  */
 router.delete('/vehicles/:regNo', safe(async (req, res) => {
   const parsed = plate.parse(req.params.regNo);
-  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  if (!parsed.ok) return badPlate(req, res, parsed);
   // The same rule as WhatsApp's "Remove a vehicle" (vehicle/remove.js, 2026-10-13).
   const out = await require('../vehicle/remove').removeForUser(req.user.id, parsed.regNo, { channel: 'web' });
   if (!out.ok) return res.status(404).json({ error: 'not_yours', message: 'This vehicle is not in your list.' });
@@ -864,7 +874,7 @@ router.delete('/vehicles/:regNo', safe(async (req, res) => {
  */
 router.post('/check', safe(async (req, res) => {
   const parsed = plate.parse(req.body?.reg_no);
-  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  if (!parsed.ok) return badPlate(req, res, parsed);
 
   // Many DIFFERENT vehicles from one account or address in an hour is scraping.
   const scan = await require('../security/guard').noteVehicleCheck(req, parsed.regNo);
@@ -1045,7 +1055,7 @@ const DECLARATION = DECLARATIONS.en;
 
 router.post('/buy', safe(async (req, res) => {
   const parsed = plate.parse(req.body?.reg_no);
-  if (!parsed.ok) return res.status(400).json({ error: 'bad_plate', message: parsed.error });
+  if (!parsed.ok) return badPlate(req, res, parsed);
 
   if (req.body?.declared !== true) {
     return res.status(400).json({ error: 'declaration_required',

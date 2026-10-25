@@ -119,6 +119,31 @@ async function requestCodeInner({ mobile, ip }) {
     return { ok: false, error: 'too_many',
       message: 'Too many codes requested for that number. Please try again later.' };
   }
+
+  /*
+   * CODES FOR MANY DIFFERENT NUMBERS FROM ONE ADDRESS (user, 2026-10-25: "extra guard to prevent suspicious").
+   * The limit above is per NUMBER, so one visitor could still send codes to ten strangers - an SMS bill, and
+   * texts landing on people who never asked. One IP may ask for at most site_otp_ip_numbers_per_hour (3)
+   * different numbers an hour and site_otp_ip_numbers_per_day (5) a day; a number it already asked for is not
+   * counted again. GaadiPe's own numbers are never held back. Refused quietly, and the admin is told.
+   */
+  if (ip) {
+    const hourCap = await settings.num('site_otp_ip_numbers_per_hour', 3);
+    const dayCap = await settings.num('site_otp_ip_numbers_per_day', 5);
+    const seen = await db.one(
+      `SELECT count(DISTINCT mobile) FILTER (WHERE created_at > now() - interval '1 hour')::int AS hour,
+              count(DISTINCT mobile)::int AS day,
+              bool_or(mobile = $2) AS known
+         FROM site_otps WHERE ip = $1 AND created_at > now() - interval '1 day'`, [ip, m]).catch(() => null);
+    const internal = await db.one(
+      `SELECT 1 AS yes FROM users WHERE right(mobile, 10) = $1 AND is_internal LIMIT 1`, [m]).catch(() => null);
+    if (seen && !seen.known && !internal && ((hourCap > 0 && seen.hour >= hourCap) || (dayCap > 0 && seen.day >= dayCap))) {
+      require('../util/suspicious').note('otp_ip_limit', ip,
+        { numbers: `${seen.hour} this hour, ${seen.day} today`, refused: require('../util/suspicious').mask(m) }, { limit: 1, windowMinutes: 60 });
+      return { ok: false, error: 'too_many',
+        message: 'Too many sign-in attempts from this device. Please try again later.' };
+    }
+  }
   if (recent.last_at && Date.now() - new Date(recent.last_at).getTime() < resend * 1000) {
     const wait = Math.ceil((resend * 1000 - (Date.now() - new Date(recent.last_at).getTime())) / 1000);
     return { ok: false, error: 'wait', retryAfter: wait,

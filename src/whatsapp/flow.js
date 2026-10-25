@@ -3361,6 +3361,12 @@ async function handle(session, message, mobile) {
       // correcting themselves rather than tapping the button.
       const parsed = plate.parse(intent.text);
       if (!parsed.ok) {
+        // Mobile numbers sent as vehicle numbers, repeatedly: the admin hears (util/suspicious, 2026-10-25).
+        if (parsed.mobileLike) {
+          // The full number for the admin, so they can block it if it carries on.
+          require('../util/suspicious').note('mobile_lookup', `WhatsApp ${mobile}`,
+            { said: require('../util/suspicious').mask(intent.text), where: 'WhatsApp' });
+        }
         await send.text(mobile, parsed.error);
         return;
       }
