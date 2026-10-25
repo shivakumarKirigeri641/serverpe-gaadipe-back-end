@@ -374,22 +374,34 @@ router.get('/pay/:token', safe(async (req, res) => {
     : waButton('Open WhatsApp', chatText)}
 </div>
 
-<div id="main">
+<!--
+  ONE SCREEN, ONE BUTTON (user, 2026-10-25: "I don't know why people leave at the payment view"). The page read
+  like a tax form - GST lines, a "Billed to" form and the Pay button at the very bottom. Now: what they buy and
+  the price "GST included" at the top with the Pay button and who handles the money; the invoice details folded
+  into one line with Edit (open only when something is missing); the GST breakdown inside it; a Pay bar that
+  stays at the bottom of the screen. The invoice itself is unchanged.
+-->
+<div id="main" style="padding-bottom:84px">
 <div class="card">
-  <h1>Order summary</h1>
   <div class="veh">${esc(pay.reg_no || '')}</div>
   ${vehicleName ? `<div class="muted">${esc(vehicleName)}</div>` : ''}
-  <div class="row" style="margin-top:12px"><span>Plan</span>
-    <b>${esc(planLine)}</b></div>
-  ${pay.raw?.referral_credit_id && pay.plan_price_paise > grossPaise ? `<div class="row"><span>Referral reward (QuizPe)</span>
-    <b>₹${(pay.plan_price_paise / 100).toFixed(2)} → ₹${gross.toFixed(2)}</b></div>` : ''}
-  <div class="row"><span>Taxable value</span><b>₹${taxable.toFixed(2)}</b></div>
-  <div id="tax"></div>
-  <div class="row total"><span>Total payable</span><b>₹${gross.toFixed(2)}</b></div>
+  <div style="margin-top:8px;font-weight:700">${esc(planLine)}</div>
+  ${pay.raw?.referral_credit_id && pay.plan_price_paise > grossPaise ? `<div class="muted">Referral reward (QuizPe): ₹${(pay.plan_price_paise / 100).toFixed(2)} → ₹${gross.toFixed(2)}</div>` : ''}
+  <div style="margin:10px 0 2px;font-size:34px;font-weight:900;letter-spacing:-.5px">₹${grossPaise % 100 ? gross.toFixed(2) : gross.toFixed(0)}
+    <span style="font-size:14px;font-weight:600;color:#5d6b67">· GST included</span></div>
+  <button id="pay" style="margin-top:10px">Pay ₹${grossPaise % 100 ? gross.toFixed(2) : gross.toFixed(0)} securely</button>
+  <div id="err" class="err"></div>
+  <p style="margin:10px 0 0;text-align:center;font-size:13px;color:#41514e">🔒 Secured by <b>Razorpay</b> · UPI, cards, netbanking</p>
+  <p style="margin:6px 0 0;text-align:center;font-size:12px;color:#5d6b67">GPay · PhonePe · Paytm · BHIM · any UPI app</p>
 </div>
 
 <div class="card">
-  <h1>Billed to</h1>
+  <details id="billed"${buyerName && buyerState ? '' : ' open'}>
+  <summary style="cursor:pointer;list-style:none;display:flex;justify-content:space-between;gap:8px;align-items:center">
+    <span><span class="muted">Invoice to:</span> <b id="billedTo">${esc([buyerName, STATES[buyerState]].filter(Boolean).join(', ') || 'your name and state')}</b></span>
+    <span style="color:#0f766e;font-weight:700;white-space:nowrap">Edit</span>
+  </summary>
+  <div style="margin-top:10px">
   <label class="fld"><span>Name on the invoice</span>
     <input id="bname" maxlength="80" autocomplete="name" placeholder="Your full name" value="${esc(buyerName)}"></label>
   <label class="fld"><span>State / union territory</span>
@@ -405,6 +417,13 @@ router.get('/pay/:token', safe(async (req, res) => {
   <p class="muted" style="margin:6px 0 0">${emailOptional
     ? 'Your report and invoice arrive in your WhatsApp chat either way. '
     : ''}Name, phone (${esc('+91 ' + String(pay.mobile).slice(-10))})${emailOptional ? ' and email, if given,' : ' and email'} are printed on the invoice.</p>
+  <div style="margin-top:12px;border-top:1px solid #e3ece9;padding-top:8px">
+    <div class="row"><span>Taxable value</span><b>₹${taxable.toFixed(2)}</b></div>
+    <div id="tax"></div>
+    <div class="row total"><span>Total</span><b>₹${gross.toFixed(2)}</b></div>
+  </div>
+  </div>
+  </details>
 </div>
 
 <div class="card">
@@ -420,16 +439,19 @@ router.get('/pay/:token', safe(async (req, res) => {
   <p class="wa-note">ℹ️ If WhatsApp is ever disabled, you can continue on the web.</p>
 </div>
 
-<div class="card">
-  <button id="pay">Pay ₹${grossPaise % 100 ? gross.toFixed(2) : gross.toFixed(0)} securely</button>
-  <div id="err" class="err"></div>
-  <p class="muted" style="margin:12px 0 0;text-align:center">
-    By paying you accept our
-    <a href="${esc(site)}/terms" target="_blank" rel="noopener">Terms</a>,
-    <a href="${esc(site)}/refund" target="_blank" rel="noopener">Refund</a> and
-    <a href="${esc(site)}/privacy" target="_blank" rel="noopener">Privacy</a> policies.
-  </p>
+<p class="muted" style="margin:12px 0 0;text-align:center">
+  By paying you accept our
+  <a href="${esc(site)}/terms" target="_blank" rel="noopener">Terms</a>,
+  <a href="${esc(site)}/refund" target="_blank" rel="noopener">Refund</a> and
+  <a href="${esc(site)}/privacy" target="_blank" rel="noopener">Privacy</a> policies.
+</p>
 </div>
+
+<!-- Always within reach: the same Pay, at the bottom of the screen. -->
+<div id="payBar" style="position:fixed;left:0;right:0;bottom:0;z-index:20;background:#fff;border-top:1px solid #e3ece9;padding:10px 14px calc(10px + env(safe-area-inset-bottom));box-shadow:0 -6px 18px rgba(0,0,0,.08)">
+  <div style="max-width:520px;margin:0 auto">
+    <button id="pay2">Pay ₹${grossPaise % 100 ? gross.toFixed(2) : gross.toFixed(0)} securely · Razorpay</button>
+  </div>
 </div>
 
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
@@ -437,6 +459,8 @@ router.get('/pay/:token', safe(async (req, res) => {
   var btn = document.getElementById('pay'), err = document.getElementById('err');
   var bname = document.getElementById('bname'), bstate = document.getElementById('bstate'),
       bemail = document.getElementById('bemail');
+  var pay2 = document.getElementById('pay2'), billedTo = document.getElementById('billedTo'),
+      billed = document.getElementById('billed'), ready = false;
   var EMAIL_RE = /^[^@\\s]+@[^@\\s]+\\.[^@\\s]{2,}$/;
   var HOME = ${JSON.stringify(home)}, TAX = ${taxPaise}, CGST = ${cgstPaise}, EMAIL_OPTIONAL = ${emailOptional};
   function rs(p) { return '₹' + (p / 100).toFixed(2); }
@@ -450,14 +474,21 @@ router.get('/pay/:token', safe(async (req, res) => {
         + '<div class="row"><span>SGST @ 9%</span><b>' + rs(TAX - CGST) + '</b></div>'
       : '<div class="row"><span>IGST @ 18%</span><b>' + rs(TAX) + '</b></div>';
     var mail = bemail.value.trim();
-    btn.disabled = bname.value.trim().length < 2 || !s
-      || (mail ? !EMAIL_RE.test(mail) : !EMAIL_OPTIONAL);
+    // Ready to pay? The buttons stay tappable either way: a tap with something missing opens the details and
+    // says what (a disabled button cannot be tapped, and so cannot explain itself).
+    ready = !(bname.value.trim().length < 2 || !s || (mail ? !EMAIL_RE.test(mail) : !EMAIL_OPTIONAL));
+    btn.disabled = false; pay2.disabled = false;
+    btn.style.opacity = pay2.style.opacity = ready ? '1' : '.75';
+    // The folded line follows the fields.
+    var stName = s ? bstate.options[bstate.selectedIndex].text : '';
+    billedTo.textContent = [bname.value.trim(), stName].filter(Boolean).join(', ') || 'your name and state';
   }
   bname.oninput = renderTax; bstate.onchange = renderTax; bemail.oninput = renderTax; renderTax();
   // Paid: swap the order summary for the success card, and try to open the
   // chat straight away. The card's button covers browsers that block that.
   function done() {
     document.getElementById('main').style.display = 'none';
+    document.getElementById('payBar').style.display = 'none';
     document.getElementById('done').style.display = 'block';
     // Say where it is going, in the address they typed a moment ago. It is the
     // one place the buyer learns that the report and the invoice will be in
@@ -475,7 +506,15 @@ router.get('/pay/:token', safe(async (req, res) => {
   }
   // Billed-to first: saved on the payment, which is what the invoice prints.
   btn.onclick = function () {
-    btn.disabled = true; err.textContent = '';
+    // Something missing (a name, the state): open the folded details and say so, rather than a dead button.
+    if (btn.disabled) return;                       // already on its way
+    if (!ready) {
+      if (billed) billed.open = true;
+      err.textContent = 'Please add your name and state for the GST invoice' + (EMAIL_OPTIONAL ? '' : ', and your email') + '.';
+      if (billed) billed.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    btn.disabled = true; pay2.disabled = true; err.textContent = '';
     fetch(location.pathname + '/buyer', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: bname.value.trim(), state_code: bstate.value, email: bemail.value.trim() })
@@ -509,7 +548,7 @@ router.get('/pay/:token', safe(async (req, res) => {
               done();
             } else {
               err.textContent = out.message || 'We could not confirm the payment yet. Please check WhatsApp in a minute.';
-              btn.disabled = false; btn.textContent = 'Pay again';
+              btn.disabled = false; pay2.disabled = false; btn.textContent = 'Pay again';
             }
           })
           .catch(function () {
@@ -530,7 +569,8 @@ router.get('/pay/:token', safe(async (req, res) => {
      from the site's payment window (?go=1), the name, state, email and declaration
      were just given there: save them and open Razorpay at once. This page stays
      underneath, for a second try if Razorpay is closed. */
-  if (/[?&]go=1(&|$)/.test(location.search) && !btn.disabled) btn.onclick();
+  pay2.onclick = function () { btn.onclick(); };
+  if (/[?&]go=1(&|$)/.test(location.search) && ready) btn.onclick();
 </script>`));
 }));
 
