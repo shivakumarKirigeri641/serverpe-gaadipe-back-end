@@ -282,7 +282,28 @@ function extractAll(text) {
   return single.ok ? [single.regNo] : [];
 }
 
+/*
+ * A NUMBER INSIDE A SENTENCE (user, 2026-10-25: "Please see whether Registration certificate of vehicle number
+ * KA01AB1234 is valid" got "tap Agree" instead of a check). The whole message first; else every run shaped like a
+ * plate — 2 letters, 1–2 digits, 0–3 letters, 1–4 digits, or a BH number — with the spaces and dashes people type,
+ * each checked by parse(). The first valid one, or null.
+ */
+const IN_TEXT = /(?:^|[^A-Z0-9])((?:\d{2}[\s-]*BH[\s-]*\d{4}[\s-]*[A-Z]{1,2})|(?:[A-Z]{2}[\s-]*\d{1,2}[\s-]*(?:[A-Z][\s-]*){0,3}\d{1,4}))(?![A-Z0-9])/g;
+// Only a modern number with a real state code (or BH) counts — never "hi 123", which parse() takes as a legacy plate.
+const real = (p) => p.ok && !p.repaired && p.format !== 'legacy'
+  && (/^\d{2}BH/.test(p.regNo) || STATE_CODES.has(p.regNo.slice(0, 2)));
+function findIn(text) {
+  const whole = parse(text);
+  if (real(whole)) return whole.regNo;
+  const up = String(text ?? '').toUpperCase();
+  for (const m of up.matchAll(IN_TEXT)) {
+    const p = parse(m[1]);
+    if (real(p)) return p.regNo;
+  }
+  return null;
+}
+
 module.exports = {
-  normalize, isValid, isTagId, parse, pretty, extractAll,
+  normalize, isValid, isTagId, parse, pretty, extractAll, findIn,
   shapeOf, STATE_CODES, ULIP_PATTERN,
 };

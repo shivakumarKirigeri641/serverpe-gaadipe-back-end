@@ -56,7 +56,13 @@ async function terms(mins) {
           AND last_inbound_at <= now() - make_interval(mins => $2)
       RETURNING id`, [s.id, mins]);
     if (!mine) continue;
-    const out = await send.buttons(s.mobile,
+    // A new person agrees by sending a number (flow.js NEW_TERMS, 2026-10-25); someone asked again after a Terms update taps.
+    const out = !(await send.agreedTerms(s.mobile)) ? await send.buttons(s.mobile,
+      'Still want to check your vehicle? 🙂\n\n'
+      + 'Just send its number, like *KA01AB1234* — you will see its insurance, PUC, tax and challan status in seconds.\n\n'
+      + `_By typing and sending a vehicle number, you agree to our Terms, Privacy & Refund policies (${SITE}/terms)._`,
+      [{ id: 'agree_owner', title: 'Agree & continue' }],
+      { footer: 'ServerPe App Solutions' }) : await send.buttons(s.mobile,
       'Still want to check your vehicle? 🙂\n\n'
       + 'Tap *Agree & continue* below, then send your vehicle number (like KA01XX1234).'
       + 'You will see its insurance, PUC, tax and challan status in seconds.\n\n'

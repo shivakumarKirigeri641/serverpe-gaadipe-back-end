@@ -853,6 +853,23 @@ const OWNER_TERMS =
  * Swapped and renamed (user, 2026-10-13: "swap the buttons; replace 'get offers'
  * with 'get newsletter & offers'") — "Agree, news & offers" is that, in 20.
  */
+/*
+ * A NEW PERSON AGREES BY SENDING A VEHICLE NUMBER (user, 2026-10-25: "by typing a vehicle number you agree to the
+ * terms — as we did on the web — only for completely new people"). Of 11 ad visitors, 6 never tapped Agree, and one
+ * who typed their number in a sentence got "tap Agree" instead of a check. Someone who agreed before (a Terms update)
+ * still uses the buttons; the offers opt-in is only ever the "Agree, news & offers" button.
+ */
+const NEW_TERMS =
+  '👉 *Send your vehicle number to start* — like *KA01AB1234*.\n'
+  + `_By typing and sending a vehicle number, you agree to our Terms, Privacy & Refund policies (${SITE}/terms) `
+  + 'and to messages about your checks on WhatsApp, SMS or email. You can also tap a button below._'
+  + '\n\n_*Agree, news & offers* also sends an occasional offer — at most once a week, STOP any time._';
+// The exact words recorded with an agreement made by sending a number.
+const SEND_AGREE_WORDS = 'By typing and sending a vehicle number, I agree to the Terms, Privacy and Refund policies, '
+  + 'and to messages about my checks on WhatsApp, SMS or email.';
+/** Never agreed to anything, on WhatsApp or the website. */
+const neverAgreed = async (mobile) => !(await agreedVersion(mobile).catch(() => null)) && !(await send.agreedTerms(mobile));
+
 const AGREE_BUTTONS = () => [
   { id: BTN.AGREE_OWNER_OFFERS, title: 'Agree, news & offers' },
   { id: BTN.AGREE_OWNER, title: 'Agree & continue' },
@@ -905,7 +922,7 @@ const setState = (mobile, state, reason) => db.query(
  * append-only: a later agreement adds a row, it does not overwrite the proof of
  * an earlier one.
  */
-async function recordConsent(mobile, role, documents) {
+async function recordConsent(mobile, role, documents, extra = {}) {
   const session = await db.one(
     `SELECT id, user_id FROM whatsapp_sessions WHERE mobile = $1`, [mobile]);
   await db.query(
@@ -913,7 +930,7 @@ async function recordConsent(mobile, role, documents) {
     [session?.user_id || null,
      JSON.stringify({ mobile, role, documents, channel: 'whatsapp',
                       policy_version: await policyVersion(),
-                      at: new Date().toISOString() })]);
+                      at: new Date().toISOString(), ...extra })]);
   await db.query(
     `UPDATE whatsapp_sessions
         SET context = context || $2::jsonb, modified_at = now()
@@ -1789,10 +1806,11 @@ async function start(mobile) {
       + 'What would you like to do?\n\n_To check a vehicle, just send its number, like *KA01XX1234*._');
     return;
   }
-  await send.buttons(mobile, INTRO + price + WEB_LINE + OWNER_TERMS,
+  const fresh = !agreed && !(await send.agreedTerms(mobile));
+  await send.buttons(mobile, INTRO + price + WEB_LINE + (fresh ? NEW_TERMS : OWNER_TERMS),
     AGREE_BUTTONS(),
     { footer: 'ServerPe App Solutions' });
-  await setState(mobile, 'owner_consent', 'terms shown');
+  await setState(mobile, 'owner_consent', fresh ? 'terms shown (new: number agrees)' : 'terms shown');
 }
 
 /*
@@ -3357,12 +3375,30 @@ async function handle(session, message, mobile) {
       return;
     }
 
-    case 'owner_consent':
+    case 'owner_consent': {
+      // A new person's vehicle number is their agreement (NEW_TERMS) — straight on to the free check.
+      if (await neverAgreed(mobile)) {
+        const reg = plate.findIn(intent.text || '');
+        if (reg) {
+          await recordConsent(mobile, 'owner', ['terms', 'privacy', 'refund'], { how: 'vehicle_number_sent', words: SEND_AGREE_WORDS });
+          await funnel(mobile, 'agreed', { offers: false, by: 'number' });
+          await funnel(mobile, 'number', { reg_no: reg, repaired: false });
+          await setState(mobile, 'owner_lookup', 'agreed by sending a number');
+          await send.text(mobile, `✅ Thank you. Checking *${reg}* … ⏳`);
+          await deliverReport(mobile, reg, message);
+          return;
+        }
+        await send.buttons(mobile,
+          'Just send your *vehicle number* to start — like *KA01AB1234*. Or tap *Agree & continue* above.',
+          [{ id: BTN.CHECK_ANOTHER, title: 'Start again' }]);
+        return;
+      }
       await send.buttons(mobile,
         'Please tap *Agree & continue* (or *Agree, news & offers*) above to proceed. '
         + 'Tap below to start again.',
         [{ id: BTN.CHECK_ANOTHER, title: 'Start again' }]);
       return;
+    }
 
     case 'partner_consent':
       await send.buttons(mobile,
