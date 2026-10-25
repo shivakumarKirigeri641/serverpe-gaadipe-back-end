@@ -610,16 +610,27 @@ async function whatYouGet(mobile) {
   const price = plan ? rupeesOf(plan.price_paise) : '₹19';
   const renew = plan && Number(plan.renewal_paise) > 0 ? rupeesOf(plan.renewal_paise) : null;
   const days = plan?.duration_days || 28;
+  /* The free checks, and how many this person has left (user, 2026-10-25: "in What do I get? as well"). The
+     limits from Settings (the same as util/quota.js); nothing while limits are off. Two lines below were
+     tightened so the page stays under WhatsApp's 1,024 characters and keeps its buttons. */
+  const user = await store.upsertUser(mobile).catch(() => null);
+  const q = user ? await quota.left(user.id).catch(() => null) : null;
+  const perDay = await settings.num('free_checks_per_day', 20);
+  const checks = !q?.enforced ? ''
+    : q.unlimited ? '🔢 *Free checks:* no limit for you.\n\n'
+      : `🔢 *Free checks:* ${perDay} a day${q.month ? `, ${q.month.base} a month (+${q.month.per_report} with every report you buy)` : ''}. `
+        + `You have *${q.today.left} left today*${q.month ? ` · ${q.month.left} this month` : ''}.\n\n`;
   await reply(mobile, '💡 *What you get with GaadiPe*\n\n'
-    + '✅ *Free check* — send your vehicle’s number (or one you’re buying): the vehicle, the owner’s name (masked), registration date and age, RC status, '
-    + 'seats and weight, the RTO, every validity date (insurance, PUC, road tax, fitness, permit) and how many challans are pending, with the total.\n\n'
+    + '✅ *Free check* — send any vehicle number: the vehicle, owner (masked), registration date and age, RC status, '
+    + 'RTO, every validity date (insurance, PUC, road tax, fitness, permit) and pending challans with the total.\n\n'
+    + checks
     + `📋 *Full report — ${price}* — adds the loan / hypothecation, blacklist and NOC, each challan with offence and place, number of owners, `
-    + 'insurer and policy, FASTag, and what to check before you buy — as a PDF.\n\n'
+    + 'insurer and policy, FASTag, and a buyer’s checklist — as a PDF.\n\n'
     + `🔔 *${days} days of monitoring included* — a message before any document expires, and when a new challan appears.\n\n`
     + (renew ? `🔄 *Renew for ${renew}* — another ${days} days.\n\n` : '')
-    + '🚛 *Fleets (5+ vehicles)* — one Excel report of every vehicle, by email, every evening.\n\n'
+    + '🚛 *Fleets (5+)* — an Excel report of every vehicle, emailed every evening.\n\n'
     // Said upfront (2026-10-15): people rated 1★ expecting the owner's phone number.
-    + '🔒 *Never shared:* an owner\'s mobile number or address — they are private by law, and we don\'t receive them.\n\n'
+    + '🔒 *Never shared:* an owner\'s mobile number or address — private by law; we don\'t receive them.\n\n'
     + NOT_A_DOCUMENT_SHORT + '\n\n'
     + `Sample report: ${require('../mail/customer').SITE()}/sample-report.pdf`,
   ['check', { id: BTN.FLEET, title: 'Fleet (5+ vehicles)' }, 'menu']);
