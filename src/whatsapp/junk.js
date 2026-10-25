@@ -48,7 +48,8 @@ async function check(mobile, message) {
   return 'notice';
 }
 
-const NOTICE = 'I could not understand those messages, so I will pause for a while 🙏\n\n'
-  + 'Send a vehicle number (like *KA01AB1234*) any time later and I will check it.';
+const NOTICE = 'We are unable to process these messages, so automatic replies on this chat are paused for about an hour.\n\n'
+  + 'To continue at any time, simply send a vehicle registration number (for example, *KA01AB1234*) and we will '
+  + 'resume right away.\n\n_Thank you — Team GaadiPe_';
 
 module.exports = { check, isJunk, NOTICE };
