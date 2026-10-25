@@ -68,7 +68,9 @@ const GROUPS = [
     ['watch_daily_status_every_days', 'Monitoring: "today\'s update" every N days (retired)', 'Replaced on 10 Oct 2026 by the daily / every-other-day settings above.'],
     ['whatsapp_marketing_gap_days', 'WhatsApp: days between marketing to one person', 'No second marketing message to the same customer within this many days (7).'],
     ['nudge_enabled', 'WhatsApp: remind people who said Hi to agree (true / false)', 'Off since 2026-10-09: someone who only said Hi hears from GaadiPe again only if they write.'],
-    ['nudge_hi_enabled', 'WhatsApp: one reminder to someone who said Hi but sent no vehicle number (true / false)', 'true (2026-10-25): "just send its number, like KA01AB1234" - once per person ever, inside their 24-hour window, never at night (9 pm - 8 am), never after STOP.'],
+    ['wa_junk_mute_after', 'WhatsApp: pause after this many meaningless messages in 10 minutes', '6. Single characters or symbols only; Hi, STOP, buttons and vehicle numbers never count. They are told once, honestly, then not answered.'],
+    ['wa_junk_mute_minutes', 'WhatsApp: that pause lasts (minutes)', '60. STOP / START still work during it.'],
+    ['nudge_hi_enabled','WhatsApp: one reminder to someone who said Hi but sent no vehicle number (true / false)', 'true (2026-10-25): "just send its number, like KA01AB1234" - once per person ever, inside their 24-hour window, never at night (9 pm - 8 am), never after STOP.'],
     ['nudge_hi_after_minutes', 'WhatsApp: that reminder after (minutes)', '30. At least 15.'],
     ['nudge_payment_enabled','WhatsApp: one reminder about an unpaid payment link (true / false)', 'true (2026-10-25): an hour after someone tapped Report and did not pay, one reminder with a Pay button - inside their 24-hour window, never at night, never after STOP, never twice.'],
     // The free check before sign-in (migrations 142–143).

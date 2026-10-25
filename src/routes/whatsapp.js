@@ -247,6 +247,18 @@ async function handle(body) {
             continue;
           }
         }
+        // Meaningless messages again and again (whatsapp/junk.js, 2026-10-25): one honest pause notice, then quiet.
+        if (rec && wa.replyEnabled) {
+          const j = await require('../whatsapp/junk').check(rec.mobile, m).catch(() => 'answer');
+          if (j === 'notice') {
+            console.log('[wa] %s sent junk repeatedly — paused', rec.mobile);
+            await send.text(rec.mobile, require('../whatsapp/junk').NOTICE).catch(() => {});
+            require('../util/activity').whoOf(rec.mobile).then((who) => require('../util/activity')
+              .log('⏸️', 'Bot paused for an hour · kept sending meaningless messages', { who, detail: 'WhatsApp' })).catch(() => {});
+            continue;
+          }
+          if (j === 'quiet') { console.log('[wa] %s paused (junk) — recorded, not answered', rec.mobile); continue; }
+        }
         if (rec && wa.replyEnabled) {
           // One person's bad message must not stop the rest of the batch.
           await flow.handle(rec.session, m, rec.mobile)
