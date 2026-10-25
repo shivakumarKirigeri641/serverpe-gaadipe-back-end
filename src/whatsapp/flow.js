@@ -416,7 +416,7 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
       { id: BTN.WHAT_GET,        title: 'What do I get?',   description: 'Free check, full report, monitoring, fleets' },
       { id: BTN.SUPPORT,         title: 'Help & support',   description: 'Ask us anything · terms, privacy and refunds' },
       // In Terms & privacy's place (user, 2026-10-13: "one more option in menu: current offers").
-      { id: BTN.OFFERS_NOW,      title: 'Current offers',   description: 'Prices, renewals and what is on offer today' },
+      { id: BTN.OFFERS_NOW,      title: 'Current offers',   description: 'Prices, renewals — and get our offers here' },
       { id: BTN.STOP_MENU,       title: 'Stop / delete account', description: 'Stop messages, or delete my data' },
     ],
   });
@@ -675,6 +675,15 @@ async function currentOffers(mobile) {
   }
   if (replace) lines.push(`🔁 *Changed your vehicle?* Move your monitoring to it for ${rupeesOf(replace.price_paise)}, GST included.`);
   await reply(mobile, lines.join('\n'), ['check', { id: BTN.MY_MONITORING, title: 'My monitoring' }, 'menu']);
+  /* THE OFFERS OPT-IN LIVES HERE (user, 2026-10-25: "one option in the menu to agree to offers"), now that a new
+     person agrees by sending a number and sees no "Agree, news & offers" button. Yes is recorded with OFFERS_WORDS
+     (BTN.OFFERS_YES); STOP withdraws it everywhere. */
+  if (await send.optedInToOffers(mobile)) {
+    await send.text(mobile, '✅ You get our occasional tips & offers here. Reply *STOP* any time to stop them.');
+  } else {
+    await send.buttons(mobile, OFFERS_ASK,
+      [{ id: BTN.OFFERS_YES, title: 'Yes, send offers' }, { id: BTN.OFFERS_NO, title: 'No thanks' }]);
+  }
 }
 
 async function termsAndPrivacy(mobile) {
@@ -859,11 +868,11 @@ const OWNER_TERMS =
  * who typed their number in a sentence got "tap Agree" instead of a check. Someone who agreed before (a Terms update)
  * still uses the buttons; the offers opt-in is only ever the "Agree, news & offers" button.
  */
+// No buttons (user, 2026-10-25: "still you ask Agree — have the offers opt-in in the menu"): Menu → Current offers.
 const NEW_TERMS =
   '👉 *Send your vehicle number to start* — like *KA01AB1234*.\n'
   + `_By typing and sending a vehicle number, you agree to our Terms, Privacy & Refund policies (${SITE}/terms) `
-  + 'and to messages about your checks on WhatsApp, SMS or email. You can also tap a button below._'
-  + '\n\n_*Agree, news & offers* also sends an occasional offer — at most once a week, STOP any time._';
+  + 'and to messages about your checks on WhatsApp, SMS or email._';
 // The exact words recorded with an agreement made by sending a number.
 const SEND_AGREE_WORDS = 'By typing and sending a vehicle number, I agree to the Terms, Privacy and Refund policies, '
   + 'and to messages about my checks on WhatsApp, SMS or email.';
@@ -1807,9 +1816,12 @@ async function start(mobile) {
     return;
   }
   const fresh = !agreed && !(await send.agreedTerms(mobile));
-  await send.buttons(mobile, INTRO + price + WEB_LINE + (fresh ? NEW_TERMS : OWNER_TERMS),
-    AGREE_BUTTONS(),
-    { footer: 'ServerPe App Solutions' });
+  if (fresh) await send.text(mobile, INTRO + price + WEB_LINE + NEW_TERMS);
+  else {
+    await send.buttons(mobile, INTRO + price + WEB_LINE + OWNER_TERMS,
+      AGREE_BUTTONS(),
+      { footer: 'ServerPe App Solutions' });
+  }
   await setState(mobile, 'owner_consent', fresh ? 'terms shown (new: number agrees)' : 'terms shown');
 }
 
@@ -3388,9 +3400,8 @@ async function handle(session, message, mobile) {
           await deliverReport(mobile, reg, message);
           return;
         }
-        await send.buttons(mobile,
-          'Just send your *vehicle number* to start — like *KA01AB1234*. Or tap *Agree & continue* above.',
-          [{ id: BTN.CHECK_ANOTHER, title: 'Start again' }]);
+        await send.text(mobile, 'Just send your *vehicle number* to start — like *KA01AB1234*.\n\n'
+          + `_By sending it, you agree to our Terms, Privacy & Refund policies (${SITE}/terms)._`);
         return;
       }
       await send.buttons(mobile,
