@@ -64,6 +64,15 @@ const AGREED = (col) => `EXISTS (SELECT 1 FROM event_log e WHERE e.kind = 'conse
      GROUP BY 1 ORDER BY 2 DESC`);
   if (wa.length) console.table(wa); else console.log('   none');
 
+  /* THE PAYMENT REMINDER (2026-10-25): how many went, what people tapped, and how many paid after one. */
+  console.log(`\n── Payment reminders, last ${hours} h`);
+  console.table(await q(`
+    SELECT (SELECT count(*)::int FROM payments WHERE nudged_at > ${since}) AS sent,
+           (SELECT count(*)::int FROM event_log WHERE kind = 'funnel' AND detail->>'step' = 'reminder_pay' AND created_at > ${since}) AS tapped_pay,
+           (SELECT count(*)::int FROM event_log WHERE kind = 'funnel' AND detail->>'step' = 'reminder_check_another' AND created_at > ${since}) AS tapped_check_another,
+           (SELECT count(*)::int FROM event_log WHERE kind = 'funnel' AND detail->>'step' = 'reminder_not_now' AND created_at > ${since}) AS tapped_not_now,
+           (SELECT count(*)::int FROM payments WHERE nudged_at > ${since} AND status = 'paid') AS paid_after_reminder`));
+
   const left = await q(`SELECT count(*)::int AS n FROM users WHERE deactivated_at > ${since}`);
   console.log(`\n── Accounts deactivated: ${left[0]?.n ?? 0}`);
   console.log('\nFor WhatsApp quality and account health: node scripts/wa-check.js');
