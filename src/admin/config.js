@@ -68,7 +68,9 @@ const GROUPS = [
     ['watch_daily_status_every_days', 'Monitoring: "today\'s update" every N days (retired)', 'Replaced on 10 Oct 2026 by the daily / every-other-day settings above.'],
     ['whatsapp_marketing_gap_days', 'WhatsApp: days between marketing to one person', 'No second marketing message to the same customer within this many days (7).'],
     ['nudge_enabled', 'WhatsApp: remind people who said Hi to agree (true / false)', 'Off since 2026-10-09: someone who only said Hi hears from GaadiPe again only if they write.'],
-    ['nudge_payment_enabled', 'WhatsApp: one reminder about an unpaid payment link (true / false)', 'true (2026-10-25): an hour after someone tapped Report and did not pay, one reminder with a Pay button - inside their 24-hour window, never at night, never after STOP, never twice.'],
+    ['nudge_hi_enabled', 'WhatsApp: one reminder to someone who said Hi but sent no vehicle number (true / false)', 'true (2026-10-25): "just send its number, like KA01AB1234" - once per person ever, inside their 24-hour window, never at night (9 pm - 8 am), never after STOP.'],
+    ['nudge_hi_after_minutes', 'WhatsApp: that reminder after (minutes)', '30. At least 15.'],
+    ['nudge_payment_enabled','WhatsApp: one reminder about an unpaid payment link (true / false)', 'true (2026-10-25): an hour after someone tapped Report and did not pay, one reminder with a Pay button - inside their 24-hour window, never at night, never after STOP, never twice.'],
     // The free check before sign-in (migrations 142–143).
     ['chat_anon_checks_per_day', 'Free check before sign-in: per browser, per day', 'How many vehicles one browser may check without signing in each day (1).'],
     ['chat_anon_checks_per_day_ip', 'Free check before sign-in: per network, per day', 'How many free checks one network address may make a day. Homes and offices share one address on Wi-Fi — 3 lets a family each try once.'],
@@ -117,7 +119,10 @@ const GROUPS = [
     ['free_check_show_status', 'Free check before sign-in: show each document\'s status (true / false)', 'true: Insurance, PUC, Registration, Road tax (and Fitness, Permit for commercial) as Valid / Due soon / Expired, the pending challan count and the health score — no dates. false: make and model only. Dates, challan details, loan and blacklist stay in sign-in and the ₹19 report.'],
     ['free_check_show_rto', 'Free check before sign-in: show the RTO (true / false)', 'RTO code, office, district and state — worked out from the number, free.'],
     ['free_view_detail', 'Free check after sign-in: how much it shows', 'public = the whole public record like CarInfo (every validity date, age, norms, seats, weight, RC status, how many challans) — the ₹19 report keeps the loan, blacklist/NOC, challan amounts, owners, insurer, FASTag and the verdict; labels / count / none show less.'],
-    ['free_check_backup_per_day', 'Free check before sign-in: paid RC backup calls a day', 'When ULIP and eChallan.app cannot answer, a free check may use the paid RC backup (IDSPay) up to this many times a day; after that it stops at eChallan.app. 0 = never. Paid reports are not affected.'],
+    // 2026-10-25 (rcBackup.freeOpts): every free check - WhatsApp, website, before or after sign-in.
+    ['free_check_paid_lookups_per_day', 'Free checks: paid RC lookups a day, everyone together', '15. Past it, free checks use only the free sources (ULIP, eChallan.app) and saved records. Paid reports are never capped.'],
+    ['free_check_paid_lookups_per_person', 'Free checks: paid RC lookups a day, per person', '1. A person\'s later free checks that day use only the free sources and saved records.'],
+    ['free_check_backup_per_day', 'Free check before sign-in: paid RC backup calls a day','When ULIP and eChallan.app cannot answer, a free check may use the paid RC backup (IDSPay) up to this many times a day; after that it stops at eChallan.app. 0 = never. Paid reports are not affected.'],
     // The line before a vehicle check in the chat (user, 2026-10-07).
     ['check_notice_mode', 'Check notice: on / auto / off', 'Before a visitor’s first check, and when a check fails: “Government services may be down…”. auto = only while VAHAN is down.'],
     ['check_notice_en', 'Check notice: English text', 'Empty = the built-in wording.'],

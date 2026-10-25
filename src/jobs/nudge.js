@@ -165,17 +165,19 @@ async function tick() {
   /* THE PAYMENT REMINDER HAS ITS OWN SWITCH (user, 2026-10-25: 3 of 4 who tapped buy never opened the link).
      nudge_enabled (off since 2026-10-09) still governs the Terms and number reminders; nudge_payment_enabled
      (on) lets the one reminder about an unpaid link go - to someone who asked for it, inside their window. */
+  /* SAID HI, THEN QUIET (user, 2026-10-25: 29 said Hi, 14 never sent a vehicle number). The terms reminder -
+     "just send its number" - has its own switch too: nudge_hi_enabled (on), after nudge_hi_after_minutes (30).
+     Once per person, inside their window, never at night or after STOP. */
   const all = await settings.bool('nudge_enabled', true);
   const pay = await settings.bool('nudge_payment_enabled', true);
-  if (!all && !pay) return { sent: 0 };
+  const hi = await settings.bool('nudge_hi_enabled', true);
+  if (!all && !pay && !hi) return { sent: 0 };
   if (!await flags.on('whatsapp_flow')) return { sent: 0 };
   if (quiet(await settings.num('nudge_quiet_from_ist', 21), await settings.num('nudge_quiet_to_ist', 8))) return { sent: 0 };
   const mins = Math.max(15, await settings.num('nudge_after_minutes', 60));
   let sent = 0;
-  if (all) {
-    sent += await terms(mins);
-    sent += await number(mins);
-  }
+  if (all || hi) sent += await terms(all ? mins : Math.max(15, await settings.num('nudge_hi_after_minutes', 30)));
+  if (all) sent += await number(mins);
   if (pay && await flags.on('payments')) sent += await payments(mins);
   return { sent };
 }

@@ -168,7 +168,7 @@ async function anonCheck(req) {
   const started = Date.now();
   // A vehicle already held is not bought again (rcBackup.freeOpts, 2026-10-21: IDSPay once per vehicle).
   const data = await gateway.full(parsed.regNo, (backupsToday?.n || 0) >= backupCap
-    ? { backup: 0, rc_saved: 1 } : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo));
+    ? { backup: 0, rc_saved: 1 } : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo, { who: `ip:${hash(req.ip)}` }));
   const latency = Date.now() - started;
   // Kept like every other check, so the admin email and the Vehicle Explorer know the vehicle.
   if (data?.success) {

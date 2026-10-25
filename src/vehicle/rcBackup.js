@@ -387,9 +387,32 @@ async function hasSavedRc(regNo) {
   return Boolean(row);
 }
 
-async function freeOpts(extra = {}, regNo = null) {
+/*
+ * A DAILY CAP ON PAID LOOKUPS FOR FREE CHECKS (user, 2026-10-25: 30 paid lookups, ₹72, against one ₹11 sale).
+ * A customer's free check (`who` given: their user id, or a hashed IP before sign-in) may use the paid
+ * lookup at most free_check_paid_lookups_per_person times a day (1), and all free checks together
+ * free_check_paid_lookups_per_day times (15). Past either, the free sources (ULIP, eChallan.app) answer
+ * alone. Each allowance is an event_log 'free_paid_lookup' - counted when allowed, so a check ULIP
+ * answered for free still uses it up (the safe side). Background jobs pass no `who` and are not capped.
+ */
+const IST_TODAY = `date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'`;
+async function freeAllowance(who, regNo) {
+  const perDay = await settings.num('free_check_paid_lookups_per_day', 15);
+  const perPerson = await settings.num('free_check_paid_lookups_per_person', 1);
+  const row = await db.one(
+    `SELECT count(*)::int AS day, count(*) FILTER (WHERE detail->>'who' = $1)::int AS mine FROM event_log
+      WHERE kind = 'free_paid_lookup' AND created_at >= ${IST_TODAY}`, [who]);
+  if (row.day >= perDay || row.mine >= perPerson) return false;
+  await db.query(`INSERT INTO event_log (kind, detail) VALUES ('free_paid_lookup', $1)`,
+    [JSON.stringify({ who, reg_no: regNo })]);
+  return true;
+}
+
+async function freeOpts(extra = {}, regNo = null, { who = null } = {}) {
   if (await hasSavedRc(regNo)) return { ...extra, backup: 0, rc_saved: 1 };
-  return (await paidOnly()) ? { ...extra, backup: 0 } : extra;
+  if (await paidOnly()) return { ...extra, backup: 0 };
+  if (who && !(await freeAllowance(String(who), regNo).catch(() => false))) return { ...extra, backup: 0, rc_saved: 1 };
+  return extra;
 }
 
 module.exports = { lookup, enabled, configured, today, pausedUntil, paidOnly, freeOpts, hasSavedRc, PATH,

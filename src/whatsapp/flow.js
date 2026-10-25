@@ -1553,7 +1553,7 @@ async function startOwnerClaim(mobile, regNo, message) {
   let r = await owners.begin({ userId: user.id, mobile, regNo });
   if (!r.ok && r.reason === 'no_record') {
     // Never checked here before: the RC is what the answers are compared with.
-    const data = await gateway.full(regNo, await require('../vehicle/rcBackup').freeOpts({}, regNo)).catch(() => null);
+    const data = await gateway.full(regNo, await require('../vehicle/rcBackup').freeOpts({}, regNo, { who: `u:${user.id}` })).catch(() => null);
     if (data?.success === true) {
       await store.record(user.id, data).catch(() => {});
       r = await owners.begin({ userId: user.id, mobile, regNo });
@@ -1638,7 +1638,7 @@ async function deliverReport(mobile, regNo, message) {
   if (ownsReport) await require('../vehicle/rcConfirm').ownerRefresh({ regNo, userId: user.id, why: 'owner check · WhatsApp' });
   let data;
   try {
-    data = await gateway.full(regNo, ownsReport ? {} : await rcBackup.freeOpts({}, regNo));
+    data = await gateway.full(regNo, ownsReport ? {} : await rcBackup.freeOpts({}, regNo, { who: `u:${user.id}` }));
   } catch (e) {
     console.error('[wa] lookup failed for %s: %s', regNo, e.message);
     data = null;

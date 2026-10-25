@@ -773,7 +773,7 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
   const paid = await reports.validFor(req.user.id, parsed.regNo);
   // Their own vehicle: today's record first (vehicle/rcConfirm.ownerRefresh, once a day per vehicle).
   if (paid) await require('../vehicle/rcConfirm').ownerRefresh({ regNo: parsed.regNo, userId: req.user.id, why: 'owner view · website' });
-  const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' } : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo));
+  const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' } : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo, { who: `u:${req.user.id}` }));
   if (!data?.success) {
     return res.status(data?.error === 'vehicle_not_found' ? 404 : 503).json({
       error: data?.error || 'unavailable',
@@ -927,7 +927,7 @@ router.post('/check', safe(async (req, res) => {
   const paid = await reports.validFor(req.user.id, parsed.regNo);
   // Their own vehicle checked again: today's record first (vehicle/rcConfirm.ownerRefresh).
   if (paid) await require('../vehicle/rcConfirm').ownerRefresh({ regNo: parsed.regNo, userId: req.user.id, why: 'owner check · website' });
-  const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' } : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo));
+  const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' } : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo, { who: `u:${req.user.id}` }));
   await quota.record(req.user.id, parsed.regNo, { repeat: q.repeat, found: data?.success === true, channel: 'web' });
 
   if (!data?.success) {
