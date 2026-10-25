@@ -30,7 +30,11 @@ const ist = (d = new Date()) => {
 };
 
 /** "Shivakumar (…2415)" — a name if known, and the last four digits only. */
+/* The owner's own activity is left out of the log (user, 2026-10-25: "remove my logs when I do some activities"):
+   who() marks it, log() drops the line. */
+const OWN = '\u0000own';
 function who(name, mobile) {
+  if (require('./own').isOwn({ mobile })) return OWN;
   const m = String(mobile || '').replace(/\D/g, '');
   const tail = m.length >= 4 ? `…${m.slice(-4)}` : null;
   const n = String(name || '').trim();
@@ -85,6 +89,7 @@ function sweep() {
  * `detail` may be a string or a list; empty parts are left out.
  */
 function log(icon, text, { who: person = null, detail = null } = {}) {
+  if (person === OWN) return;
   try {
     const { day, time } = ist();
     const parts = [scrub(text)];

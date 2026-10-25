@@ -47,7 +47,8 @@ async function emit(e) {
        JSON.stringify(e.meta || {})]);
     /* EVERY EVENT, ONE READABLE LINE IN THE SERVER'S LOG (user, 2026-10-07) — and so in
        the web admin's Server log. Never a raw mobile: the last four digits only. */
-    if (rowCount > 0) {
+    // Not for the owner's own taps and checks (util/own.js, 2026-10-25) - the event itself is still recorded.
+    if (rowCount > 0 && !require('../util/own').isOwn({ userId: e.userId, mobile: e.mobile })) {
       const m = local10(e.mobile);
       console.log(`[event] ${e.channel || 'system'} ${e.name}${e.regNo ? ` ${e.regNo}` : ''}${m ? ` ••${m.slice(-4)}` : ''}`
         + `${e.page ? ` ${String(e.page).slice(0, 60)}` : ''}${e.meta?.label ? ` “${String(e.meta.label).slice(0, 60)}”` : ''}`
