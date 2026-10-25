@@ -593,13 +593,38 @@ async function emailMenu(mobile, { change = false } = {}) {
     return;
   }
   await setState(mobile, 'email_ask', 'asked for email');
+  await db.query(`UPDATE whatsapp_sessions SET context = context || '{"email_tries":0}'::jsonb WHERE mobile = $1`, [mobile]);
   await send.text(mobile, '📧 *Email for alerts*\n\nType your email address — I will send a *4-digit code* to confirm it.\n\n'
     + '_Your reports, receipts and vehicle alerts will go there too. Send *hi* to cancel._');
 }
 
+/* The email step's wrong tries (2026-10-25: never a loop). Counted in the session's context, reset when it
+   starts and when a code is sent; returns the count including this one. */
+async function emailTry(mobile) {
+  const { rows } = await db.query(
+    `UPDATE whatsapp_sessions SET context = context || jsonb_build_object('email_tries', coalesce((context->>'email_tries')::int, 0) + 1),
+            modified_at = now() WHERE mobile = $1 RETURNING (context->>'email_tries')::int AS n`, [mobile]);
+  return rows[0]?.n || 1;
+}
+async function emailGiveUp(mobile, why) {
+  await setState(mobile, 'owner_start', 'email step: too many tries');
+  await reply(mobile, `${why}\n\nNo problem — let us leave the email for now. You can add it any time from the menu.`,
+    [{ id: BTN.EMAIL_CHANGE, title: 'Try email again' }, 'check', 'menu']);
+}
+/* Not an email (or not a code): the email step ends quietly and the message is read as it would be anywhere
+   else — a vehicle number is checked, anything else gets the usual reply. */
+async function leaveEmailStep(session, message, mobile, said) {
+  await setState(mobile, 'owner_start', 'email step left');
+  if (/\d/.test(String(said || '')) && plate.parse(String(said)).ok) {
+    return handle({ ...session, state: 'owner_start' }, message, mobile);
+  }
+  await doors(mobile, 'No problem — I have left the email for now. You can add it any time from the menu.\n\n'
+    + 'To check a vehicle, just send its number, like *KA01XX1234*.');
+}
+
 async function emailCodeSent(mobile, email, out) {
   await db.query(`UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
-    [mobile, JSON.stringify({ email_pending: email })]);
+    [mobile, JSON.stringify({ email_pending: email, email_tries: 0 })]);
   await setState(mobile, 'email_code', 'email code sent');
   await send.text(mobile, `✉️ I have sent a *4-digit code* to *${email}*.\n\nType it here to confirm. It is valid for 10 minutes.`
     + (out.dev ? '\n\n_(Test server: the code is in the server log, not emailed.)_' : '')
@@ -3299,11 +3324,20 @@ async function handle(session, message, mobile) {
       return;
 
     // "Email for alerts" from the menu (2026-10-12): the address, then its 4-digit code.
+    /*
+     * NEVER A LOOP (user, 2026-10-25: a customer sent "44", "2", "E", "R", "1"… and got "That email address
+     * does not look right" to every one — stuck, pressing keys to get out). Text with no @ is not an email:
+     * the email step ends, a vehicle number is checked, anything else gets the menu. Two wrong tries at the
+     * address or the code end it too, with a button to try again.
+     */
     case 'email_ask': {
+      const said = String(intent.text || '').trim();
+      if (!said.includes('@')) return leaveEmailStep(session, message, mobile, said);
       const user = await store.upsertUser(mobile);
-      const email = String(intent.text || '').trim().toLowerCase();
+      const email = said.toLowerCase();
       const out = await require('../mail/emailCode').sendCode(user.id, email);
       if (out.ok) { await emailCodeSent(mobile, email, out); return; }
+      if (await emailTry(mobile) >= 2) return emailGiveUp(mobile, out.message);
       await send.text(mobile, `${out.message}${out.suggestion ? `\n\nDid you mean *${out.suggestion}*?` : ''}\n\n`
         + '_Type your email address again, or send *hi* to cancel._');
       return;
@@ -3312,6 +3346,9 @@ async function handle(session, message, mobile) {
     case 'email_code': {
       const code = String(intent.text || '').replace(/\s/g, '');
       if (!/^\d{4}$/.test(code)) {
+        // Not a code at all: a vehicle number is checked, anything else ends the step after one reminder.
+        if (!/^\d+$/.test(code) && plate.parse(intent.text || '').ok) return leaveEmailStep(session, message, mobile, intent.text);
+        if (await emailTry(mobile) >= 2) return emailGiveUp(mobile, 'That is not the 4-digit code.');
         await send.text(mobile, 'Please type the *4-digit code* from the email — or send *hi* to cancel.');
         return;
       }
@@ -3325,7 +3362,11 @@ async function handle(session, message, mobile) {
           ['check', { id: BTN.MY_MONITORING, title: 'My monitoring' }, 'menu']);
         return;
       }
-      if (out.error === 'wrong_code') { await send.text(mobile, `${out.message}\n\n_Type the code again, or send *hi* to cancel._`); return; }
+      if (out.error === 'wrong_code') {
+        if (await emailTry(mobile) >= 2) return emailGiveUp(mobile, out.message);
+        await send.text(mobile, `${out.message}\n\n_Type the code again, or send *hi* to cancel._`);
+        return;
+      }
       await setState(mobile, 'owner_start', `email code: ${out.error}`);
       await reply(mobile, out.message, [{ id: BTN.EMAIL_RESEND, title: 'Send new code' }, { id: BTN.EMAIL_CHANGE, title: 'Change email' }, 'menu']);
       return;
