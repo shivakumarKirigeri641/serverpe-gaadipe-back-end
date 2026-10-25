@@ -38,9 +38,13 @@ const AGREED = (col) => `EXISTS (SELECT 1 FROM event_log e WHERE e.kind = 'conse
   console.log(`\n── Payments, last ${hours} h`);
   const pays = await q(`
     SELECT to_char(coalesce(p.paid_at, p.created_at) AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:MI') AS at,
-           right(coalesce(u.archived_mobile, u.mobile), 4) AS last4, coalesce(p.raw->>'reg_no', '') AS vehicle,
-           '₹' || round(p.amount_paise / 100.0) AS amount, coalesce(p.raw->>'channel', 'whatsapp') AS channel
+           right(coalesce(u.archived_mobile, u.mobile), 4) AS last4,
+           -- Payments keep the vehicle's id, not its number (2026-10-25: the column was always blank).
+           coalesce(nullif(p.raw->>'reg_no', ''), v.reg_no, '') AS vehicle,
+           '₹' || round(p.amount_paise / 100.0) AS amount, coalesce(p.raw->>'channel', 'whatsapp') AS channel,
+           EXISTS (SELECT 1 FROM vehicle_reports r WHERE r.payment_id = p.id) AS report_made
       FROM payments p LEFT JOIN users u ON u.id = p.user_id
+      LEFT JOIN vehicles v ON v.id = CASE WHEN p.raw->>'vehicle_id' ~ '^[0-9]+$' THEN (p.raw->>'vehicle_id')::bigint END
      WHERE p.status = 'paid' AND p.amount_paise > 0 AND coalesce(p.paid_at, p.created_at) > ${since}
      ORDER BY 1`);
   if (pays.length) console.table(pays); else console.log('   no payments');
