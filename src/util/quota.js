@@ -53,7 +53,11 @@ const DAILY_KEY = {
   stranger: 'free_checks_per_day',
   trial: 'free_checks_per_day_trial',
   partner: 'free_checks_per_day_partner',
+  // A cap for subscription plans too (user, 2026-10-25: "otherwise it is a loss for me"; migration 211).
+  subscriber: 'free_checks_per_day_subscriber',
 };
+// Only GaadiPe's own numbers are unlimited.
+const UNLIMITED = new Set(['internal']);
 
 /**
  * May this person check this vehicle right now?
@@ -66,7 +70,7 @@ async function check(userId, regNo) {
   const enforced = await settings.bool('checks_enforce', false);
 
   // Unlimited tiers short-circuit: no counting, no queries, no surprises.
-  if (tier === 'subscriber' || tier === 'internal') {
+  if (UNLIMITED.has(tier)) {
     return { allowed: true, tier, used: 0, limit: null, repeat: false, enforced };
   }
 
@@ -150,7 +154,7 @@ async function monthOf(userId, tier) {
  */
 async function left(userId) {
   const tier = await tierOf(userId);
-  if (tier === 'subscriber' || tier === 'internal') return { unlimited: true, tier };
+  if (UNLIMITED.has(tier)) return { unlimited: true, tier };
   const dailyLimit = await settings.num(DAILY_KEY[tier] || DAILY_KEY.stranger, 20);
   const today = await db.one(
     `SELECT count(*)::int AS n FROM event_log

@@ -615,10 +615,9 @@ async function whatYouGet(mobile) {
      tightened so the page stays under WhatsApp's 1,024 characters and keeps its buttons. */
   const user = await store.upsertUser(mobile).catch(() => null);
   const q = user ? await quota.left(user.id).catch(() => null) : null;
-  const perDay = await settings.num('free_checks_per_day', 20);
   const checks = !q?.enforced ? ''
     : q.unlimited ? '🔢 *Free checks:* no limit for you.\n\n'
-      : `🔢 *Free checks:* ${perDay} a day${q.month ? `, ${q.month.base} a month (+${q.month.per_report} with every report you buy)` : ''}. `
+      : `🔢 *Free checks:* ${q.today.limit} a day${q.month ? `, ${q.month.base} a month (+${q.month.per_report} with every report you buy)` : ''}. `
         + `You have *${q.today.left} left today*${q.month ? ` · ${q.month.left} this month` : ''}.\n\n`;
   await reply(mobile, '💡 *What you get with GaadiPe*\n\n'
     + '✅ *Free check* — send any vehicle number: the vehicle, owner (masked), registration date and age, RC status, '

@@ -76,6 +76,7 @@ const GROUPS = [
     ['chat_anon_checks_per_day', 'Free checks before sign-in: per browser a day', '2 (migration 153): a visitor may check this many vehicles a day without signing in.'],
     ['chat_anon_checks_per_day_ip', 'Free checks before sign-in: per network a day', '2: the same limit per internet address, so clearing the browser does not reset it.'],
     ['free_checks_per_day', 'Checks after sign-in: per customer a day', '10.'],
+    ['free_checks_per_day_subscriber', 'Checks a day: fleet / subscription plans', '20 (migration 211). Only GaadiPe\'s own numbers have no limit.'],
     // Migration 154 (2026-10-10).
     ['free_checks_per_month', 'Checks after sign-in: per customer a month', '30 (0 = no monthly cap). Each report bought adds the bonus below.'],
     ['checks_per_report_bonus', 'Checks added per report bought (that month)', '5: every paid report — full report or renewal — adds this many checks to the month.'],
