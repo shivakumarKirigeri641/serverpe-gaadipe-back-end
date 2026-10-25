@@ -61,7 +61,21 @@ async function record(kind, req, { severity = 'warn', surface = null, detail = {
     console.error('[security] could not record %s: %s', kind, e.message);
   }
   console.warn('[security] %s from %s %s', kind, ip, JSON.stringify(detail).slice(0, 200));
+
+  /* DIRECT CALLS, SEEN THREE TIMES, ARE TOLD AND STOPPED (user, 2026-10-25: "prevent the console fetching data").
+     A copied key, a replayed request, a script's user agent or a plain hand-made call - each is already refused
+     on its own; three from one address in ten minutes also alert the admin and block that address for
+     temp_block_minutes (30). A real customer's page never produces these. */
+  if (ip && MISUSE.has(kind)) {
+    const tripped = require('../util/suspicious').note('api_misuse', ip,
+      { what: kind.replace(/_/g, ' '), path: String(req?.originalUrl || '').slice(0, 80), browser: String(req?.get?.('user-agent') || '').slice(0, 80) });
+    if (tripped) {
+      await blockIp(req).catch(() => {});
+      console.warn('[security] %s blocked for repeated direct calls', ip);
+    }
+  }
 }
+const MISUSE = new Set(['key_misuse', 'replay', 'bot', 'plain_request', 'bad_envelope']);
 
 async function blockIp(req, minutesSetting = 'temp_block_minutes') {
   const minutes = await settings.num(minutesSetting, 30);

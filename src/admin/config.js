@@ -106,6 +106,9 @@ const GROUPS = [
     ['free_check_show_variant', 'Free check before sign-in: show the variant (true / false)', 'true: the full model, e.g. "SPLENDOR PLUS"; false: only the first word, the rest hidden.'],
     // ONE toggle for the owner's name (user, 2026-10-21): signed-in customers always see it.
     ['free_check_show_owner', 'Owner name before sign-in (true / false)', 'false: the owner name (masked, like R****H K***R) is shown only after the customer signs in. true: shown before AND after sign-in.'],
+    // Developer tools on gaadipe.in (2026-10-25). Real protection is on the server; these deter the curious.
+    ['site_devtools_pause', 'Website: pause while developer tools are open (true / false)', 'true: someone who opens F12 / DevTools sees "Close developer tools to continue" and the page stops. Ordinary customers never open them, so they never see it.'],
+    ['site_devtools_block_keys', 'Website: block right-click and DevTools keys (true / false)', 'false by default: also blocks F12, Ctrl+Shift+I/J/C, Ctrl+U and right-click (not inside text boxes). It touches ordinary customers too, and anyone determined opens DevTools from the browser menu anyway.'],
     // Suspicious-activity guard (2026-10-25): sign-in codes for many different numbers from one address.
     ['site_otp_ip_numbers_per_hour', 'Sign-in codes: different numbers per device, per hour', '3: one internet address may ask for codes for at most this many different mobile numbers an hour (0 = no limit). The admin is alerted when it is hit.'],
     ['site_otp_ip_numbers_per_day', 'Sign-in codes: different numbers per device, per day', '5: the same, per day.'],

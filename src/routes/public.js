@@ -140,6 +140,13 @@ router.get('/notice', async (_req, res) => {
       /* The yellow "GaadiPe is now fully on the web" sign (user, 2026-10-23: "remove this") — shown only while
          site_moved_notice is true; scripts/wa-button.js web-only turns it (and the top bar) back on. */
       moved_notice: await settings.bool('site_moved_notice', false),
+      /* DEVELOPER-TOOLS DETERRENTS (user, 2026-10-25: "prevent the browser console fetching data … only tech people
+         will try, 99% just want the info"). The page pauses while DevTools is open (only the 1% ever see it) - on;
+         blocking right-click and the DevTools keys also touches ordinary customers, so it is off unless switched on. */
+      devtools: {
+        pause: await settings.bool('site_devtools_pause', true),
+        block_keys: await settings.bool('site_devtools_block_keys', false),
+      },
     });
   } catch {
     res.json({ on: false });

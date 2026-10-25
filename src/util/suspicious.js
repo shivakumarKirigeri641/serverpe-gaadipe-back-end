@@ -15,6 +15,7 @@ const alerted = new Map();       // `${kind}|${source}` -> time of the last aler
 const WORDS = {
   mobile_lookup: 'typed mobile numbers where a vehicle number goes (looking people up by phone?)',
   otp_ip_limit: 'asked for sign-in codes for several different mobile numbers from one device',
+  api_misuse: 'called GaadiPe\'s systems directly instead of through the website (a copied key, a replayed request, a script, or a hand-made call)',
 };
 
 function note(kind, source, detail = {}, { limit = 3, windowMinutes = 10 } = {}) {
@@ -26,9 +27,10 @@ function note(kind, source, detail = {}, { limit = 3, windowMinutes = 10 } = {})
   list.push(now);
   hits.set(key, list);
   if (hits.size > 5000) hits.delete(hits.keys().next().value);   // never grow without bound
-  if (list.length < limit) return;
-  // One alert per source and kind per window, however long they keep at it.
-  if (now - (alerted.get(key) || 0) < windowMinutes * 60e3) return;
+  if (list.length < limit) return false;
+  // One alert per source and kind per window, however long they keep at it. True once the limit is passed,
+  // so a caller can act (block) as well as tell.
+  if (now - (alerted.get(key) || 0) < windowMinutes * 60e3) return true;
   alerted.set(key, now);
   const lines = Object.entries(detail).filter(([, v]) => v !== null && v !== undefined && v !== '')
     .map(([k, v]) => `${k}: ${v}`);
@@ -41,6 +43,7 @@ function note(kind, source, detail = {}, { limit = 3, windowMinutes = 10 } = {})
       `From: ${source}`, ...lines,
       'Nothing was revealed. If it continues, block the number or the visitor from the admin.'].join('\n'),
   }).catch(() => {});
+  return true;
 }
 
 /** "98•••••415" — enough to recognise a pattern, not the number itself. */
