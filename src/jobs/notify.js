@@ -69,12 +69,39 @@ async function settle(id, out) {
   if (!out.ok) console.warn('[notify] email failed: %s', out.error);
 }
 
+/*
+ * NOT ABOUT MY OWN NUMBER (user, 2026-10-25: "ignore my number for any activities — I mean mailing me"). An email
+ * whose subject or body names one of GaadiPe's own numbers (users.is_internal) is not sent: the owner's own tests,
+ * checks and chats never fill the inbox. Summaries (daily, weekly, security) still go — they are not about one person.
+ */
+const SUMMARY_KINDS = new Set(['daily_summary', 'finance_weekly', 'security', 'whatsapp_summary', 'weekly_digest']);
+const PHONE = /(?:\+?91[\s-]?)?([6-9]\d{4})[\s-]?(\d{5})(?!\d)/g;
+let ownCache = { at: 0, set: new Set() };
+async function ownNumbers() {
+  if (Date.now() - ownCache.at < 60e3) return ownCache.set;
+  const { rows } = await db.query(
+    `SELECT right(regexp_replace(coalesce(archived_mobile, mobile), '\\D', '', 'g'), 10) AS m FROM users WHERE is_internal`).catch(() => ({ rows: [] }));
+  ownCache = { at: Date.now(), set: new Set(rows.map((r) => r.m).filter((m) => m && m.length === 10)) };
+  return ownCache.set;
+}
+async function aboutOwnNumber(mail) {
+  const own = await ownNumbers();
+  if (!own.size) return false;
+  const text = [mail.subject, mail.text, mail.html].filter(Boolean).join(' ');
+  for (const m of text.matchAll(PHONE)) if (own.has(m[1] + m[2])) return true;
+  return false;
+}
+
 async function deliver(kind, ref, build) {
   const row = await claim(kind, ref);
   if (!row) return false;
   let mail;
   try { mail = await build(); } catch (e) { await settle(row.id, { ok: false, error: `build: ${e.message}` }); return false; }
   if (!mail) { await settle(row.id, { ok: true, to: '(nothing to send)' }); return false; }
+  if (!SUMMARY_KINDS.has(kind) && await aboutOwnNumber(mail)) {
+    await settle(row.id, { ok: true, to: '(own number — not mailed)' });
+    return false;
+  }
   const out = await mailer.send(mail);
   await settle(row.id, out);
   return out.ok;
