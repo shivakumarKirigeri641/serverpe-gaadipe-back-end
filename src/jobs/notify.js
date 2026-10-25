@@ -801,10 +801,36 @@ async function waHi() {
       const isNew = !w?.first_seen || Math.abs(new Date(e.created_at) - new Date(w.first_seen)) < 60 * 1000;
       const d = await hiDetails(mobile, w?.user_id, e.created_at).catch(() => null);
       const where = d?.where.find(([k, v]) => v && k !== 'Where')?.[1];
+      /* NEW OR EXISTING, AT A GLANCE (user, 2026-10-25: "say if the user is new or existing; if existing, the first
+         Hi date and time, purchased or not"). Across every channel and number: their first message ever, when they
+         joined, the Terms, and what they have bought. */
+      const h = await db.one(
+        `SELECT u.created_at AS joined, u.signup_channel,
+                (SELECT min(m.created_at) FROM whatsapp_messages m WHERE m.mobile = $1 AND m.direction = 'in') AS first_hi,
+                (SELECT min(c.created_at) FROM event_log c WHERE c.kind = 'consent_accepted'
+                    AND right(regexp_replace(c.detail->>'mobile', '\\D', '', 'g'), 10) = right($1, 10)) AS agreed_at,
+                (SELECT count(*)::int FROM payments p WHERE p.user_id = u.id AND p.status = 'paid' AND p.amount_paise > 0) AS buys,
+                (SELECT coalesce(sum(p.amount_paise), 0)::int FROM payments p WHERE p.user_id = u.id AND p.status = 'paid' AND p.amount_paise > 0) AS spent,
+                (SELECT max(coalesce(p.paid_at, p.created_at)) FROM payments p WHERE p.user_id = u.id AND p.status = 'paid' AND p.amount_paise > 0) AS last_buy
+           FROM (SELECT $1::text AS mobile) x LEFT JOIN users u ON right(u.mobile, 10) = right(x.mobile, 10)`,
+        [mobile]).catch(() => null);
+      const before = (t) => t && new Date(t) < new Date(new Date(e.created_at).getTime() - 60e3);
+      const existing = before(h?.joined) || before(h?.first_hi);
+      const history = [
+        ['Customer', existing
+          ? `Existing — with GaadiPe since ${T.ist(h.joined && (!h.first_hi || new Date(h.joined) < new Date(h.first_hi)) ? h.joined : h.first_hi)}`
+            + (h.signup_channel ? ` (joined on ${h.signup_channel === 'web' ? 'the website' : h.signup_channel})` : '')
+          : 'New — first time ever'],
+        ['First Hi on WhatsApp', before(h?.first_hi) ? T.ist(h.first_hi) : 'This one'],
+        ['Agreed to Terms', h?.agreed_at ? `Yes — ${T.ist(h.agreed_at)}` : 'Not yet'],
+        ['Purchased', h?.buys ? `Yes — ${h.buys} time${h.buys === 1 ? '' : 's'}, ₹${Math.round(h.spent / 100)} in all, last on ${T.ist(h.last_buy)}` : 'No'],
+      ];
       return {
-        subject: `👋 ${isNew ? 'New on WhatsApp' : 'Said Hi'} · ${nameOf(w, mobile)}${where ? ` · ${where}` : ''}`,
+        // The subject says it too: new, existing, or an existing customer who has paid.
+        subject: `👋 ${!existing ? 'New customer' : h?.buys ? 'Paid customer said Hi' : 'Existing customer said Hi'} · ${nameOf(w, mobile)}${where ? ` · ${where}` : ''}`,
         ...T.layout({
-          badge: { text: isNew ? 'New contact' : 'Said Hi again', tone: isNew ? 'good' : 'info' },
+          badge: !existing ? { text: 'New customer', tone: 'good' }
+            : { text: h?.buys ? 'Existing · has paid' : 'Existing customer', tone: 'info' },
           title: `${nameOf(w, mobile)} said Hi on WhatsApp`,
           lead: `${T.ist(e.created_at)}. ${isNew ? 'First time they have written to GaadiPe.' : 'They have written before.'}`
             + (d && isNew ? ` New contact no. ${d.today.n} today (${d.today.before} by this time yesterday).` : ''),
@@ -813,8 +839,8 @@ async function waHi() {
               ['WhatsApp name', w?.profile_name || 'Not shown'],
               ['Mobile', T.mobile(mobile)],
               ['Email', d?.email],
+              ...history,
               ['Vehicles checked before', String(w?.vehicles ?? 0)],
-              ['Paid before', w?.paid ? `Yes (${w.paid})` : 'No'],
             ] },
             ...(d ? [
               { heading: 'Where', rows: d.where },
