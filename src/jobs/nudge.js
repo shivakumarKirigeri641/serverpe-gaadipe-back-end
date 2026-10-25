@@ -24,7 +24,13 @@ const send = require('../whatsapp/send');
 const settings = require('../util/settings');
 const flags = require('../util/flags');
 
+/* NEVER A BURST (user, 2026-10-25: the first run after the deploy sent ~15 identical reminders in seconds -
+   "please have some gap, otherwise this triggers a ban"). At most nudge_per_tick reminders a run (2, a run
+   every 5 minutes) with a random 30-90 s gap between them; the Hi reminder also only for a Hi in the last
+   nudge_hi_window_hours (3), so a backlog of old ones is never swept up in one go. */
 const PER_TICK = 20;
+const perTick = async () => Math.max(1, Math.min(PER_TICK, await settings.num('nudge_per_tick', 2)));
+const gap = () => new Promise((r) => setTimeout(r, 30000 + Math.floor(Math.random() * 60000)));
 const SITE = process.env.PUBLIC_SITE_URL || 'https://gaadipe.in';   // as flow.js links the policies
 const SITE_BASE = () => (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 
@@ -37,17 +43,18 @@ function mark(key, name, mobile, userId, meta) {
   require('../events/track').fire({ key, name, channel: 'whatsapp', mobile, userId: userId || null, status: 'ok', meta });
 }
 
-async function terms(mins) {
+async function terms(mins, windowHours = 23) {
   const due = (await db.query(
     `SELECT id, mobile, user_id FROM whatsapp_sessions
       WHERE state = 'owner_consent' AND terms_nudged_at IS NULL AND wa_opt_out_at IS NULL
         AND modified_at     <= now() - make_interval(mins => $1)
         AND last_inbound_at <= now() - make_interval(mins => $1)
-        AND last_inbound_at >  now() - interval '23 hours'
+        AND last_inbound_at >  now() - make_interval(hours => $2)
         AND ${NOT_HUSHED('whatsapp_sessions')}
-      ORDER BY last_inbound_at LIMIT ${PER_TICK}`, [mins])).rows;
+      ORDER BY last_inbound_at DESC LIMIT ${await perTick()}`, [mins, Math.min(23, windowHours)])).rows;
   let sent = 0;
   for (const s of due) {
+    if (sent) await gap();
     // Claim first: whoever gets the row sends; a reply that moved them on
     // since the SELECT means no reminder at all.
     const mine = await db.one(
@@ -96,9 +103,10 @@ async function number(mins) {
         AND NOT EXISTS (SELECT 1 FROM payments x JOIN users u ON u.id = x.user_id
                          WHERE u.mobile = whatsapp_sessions.mobile
                            AND x.status = 'paid' AND x.amount_paise > 0)
-      ORDER BY last_inbound_at LIMIT ${PER_TICK}`, [mins])).rows;
+      ORDER BY last_inbound_at LIMIT ${await perTick()}`, [mins])).rows;
   let sent = 0;
   for (const s of due) {
+    if (sent) await gap();
     const mine = await db.one(
       `UPDATE whatsapp_sessions SET number_nudged_at = now()
         WHERE id = $1 AND number_nudged_at IS NULL AND state = 'owner_start'
@@ -135,9 +143,10 @@ async function payments(mins) {
         -- and at most ONE payment reminder per person a day, whatever they tap (user, 2026-10-25): the number's
         -- quality matters more than one more sale, and a second reminder the same day reads as pushy.
         AND NOT EXISTS (SELECT 1 FROM payments r WHERE r.user_id = p.user_id AND r.nudged_at > now() - interval '24 hours')
-      ORDER BY p.created_at LIMIT ${PER_TICK}`, [mins])).rows;
+      ORDER BY p.created_at LIMIT ${await perTick()}`, [mins])).rows;
   let sent = 0;
   for (const p of due) {
+    if (sent) await gap();
     const mine = await db.one(
       `UPDATE payments SET nudged_at = now() WHERE id = $1 AND nudged_at IS NULL AND status = 'created' RETURNING id`, [p.id]);
     if (!mine) continue;
@@ -176,7 +185,10 @@ async function tick() {
   if (quiet(await settings.num('nudge_quiet_from_ist', 21), await settings.num('nudge_quiet_to_ist', 8))) return { sent: 0 };
   const mins = Math.max(15, await settings.num('nudge_after_minutes', 60));
   let sent = 0;
-  if (all || hi) sent += await terms(all ? mins : Math.max(15, await settings.num('nudge_hi_after_minutes', 30)));
+  if (all || hi) {
+    sent += all ? await terms(mins)
+      : await terms(Math.max(15, await settings.num('nudge_hi_after_minutes', 30)), await settings.num('nudge_hi_window_hours', 3));
+  }
   if (all) sent += await number(mins);
   if (pay && await flags.on('payments')) sent += await payments(mins);
   return { sent };

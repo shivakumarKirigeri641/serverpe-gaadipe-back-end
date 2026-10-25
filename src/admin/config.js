@@ -72,6 +72,8 @@ const GROUPS = [
     ['wa_junk_mute_minutes', 'WhatsApp: that pause lasts (minutes)', '60. STOP / START still work during it.'],
     ['nudge_hi_enabled','WhatsApp: one reminder to someone who said Hi but sent no vehicle number (true / false)', 'true (2026-10-25): "just send its number, like KA01AB1234" - once per person ever, inside their 24-hour window, never at night (9 pm - 8 am), never after STOP.'],
     ['nudge_hi_after_minutes', 'WhatsApp: that reminder after (minutes)', '30. At least 15.'],
+    ['nudge_hi_window_hours', 'WhatsApp: that reminder only for a Hi within (hours)', '3. Older ones are left alone, so no backlog is ever sent at once.'],
+    ['nudge_per_tick', 'WhatsApp reminders: at most this many every 5 minutes', '2, with a random 30–90 second gap between them. Never a burst.'],
     ['nudge_payment_enabled','WhatsApp: one reminder about an unpaid payment link (true / false)', 'true (2026-10-25): an hour after someone tapped Report and did not pay, one reminder with a Pay button - inside their 24-hour window, never at night, never after STOP, never twice.'],
     // The free check before sign-in (migrations 142–143).
     ['chat_anon_checks_per_day', 'Free check before sign-in: per browser, per day', 'How many vehicles one browser may check without signing in each day (1).'],
