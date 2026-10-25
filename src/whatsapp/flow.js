@@ -1332,6 +1332,20 @@ async function sendReports(mobile) {
   }
 }
 
+/*
+ * CHECKS LEFT, AS ON THE WEBSITE (user, 2026-10-25: "in WhatsApp, did you handle the 'checks left'?"). The site
+ * shows it under the typing box; WhatsApp only said so at the wall. Now under every free result, and on "checks":
+ * "🔢 Free checks left: 4 today · 25 this month (+5 with every report you buy)". Nothing while limits are not
+ * enforced (checks_enforce), or for subscribers and GaadiPe's own numbers (unlimited).
+ */
+async function checksLeftLine(userId) {
+  const q = await quota.left(userId).catch(() => null);
+  if (!q || q.unlimited || !q.enforced) return '';
+  const month = q.month ? ` · ${q.month.left} this month` : '';
+  const bonus = q.month?.per_report ? ` _(+${q.month.per_report} with every report you buy)_` : '';
+  return `🔢 *Free checks left:* ${q.today.left} today${month}${bonus}`;
+}
+
 /**
  * What to say when someone runs out of checks.
  *
@@ -1672,6 +1686,7 @@ async function deliverReport(mobile, regNo, message) {
   // 'public' (2026-10-14): the website's signed-in view — Agree is the sign-in on WhatsApp.
   const freeDetail = String(await settings.get('whatsapp_free_view_detail', 'count')).toLowerCase();
   const price = plan ? `₹${Math.round(plan.price_paise / 100)}` : undefined;
+  const left = await checksLeftLine(user.id);
   await send.text(mobile, badge + (watched ? `${watched}\n\n` : '') + (bought
     ? await report.buildFor(data, { detailed: true, mobile })
     : freeDetail === 'public' ? await report.publicText(data, price ? { price } : {})
@@ -1683,7 +1698,7 @@ async function deliverReport(mobile, regNo, message) {
       // Back to 'count' (user, 2026-09-30, migration 088): naming them gave the
       // answer away and people stopped paying.
       detail: String(await settings.get('whatsapp_free_view_detail', 'count')).toLowerCase(),
-    })));
+    })) + (left ? `\n\n${left}` : ''));
   await setState(mobile, 'owner_menu', 'basic details sent');
   await funnel(mobile, 'basic_shown', { reg_no: regNo, bought: Boolean(bought) });
   require('../owners/checkAlerts').noteCheck({ regNo, checker: mobile, channel: 'whatsapp' });
@@ -3143,6 +3158,14 @@ async function handle(session, message, mobile) {
   // Owner verification by word as well as from the menu — only while it is on.
   if (/^(verify|verify owner|i own (a|my|this) vehicle|owner verification)\s*$/i.test(intent.text) && await owners.enabled()) {
     await askOwnedVehicle(mobile);
+    return;
+  }
+
+  // "checks" / "checks left" typed (2026-10-25): how many free checks are left.
+  if (/^(checks?|checks? left|my checks|balance|limit)\s*\??$/i.test(intent.text || '') && await send.agreedTerms(mobile)) {
+    const u = await store.upsertUser(mobile);
+    const line = await checksLeftLine(u.id);
+    await reply(mobile, line || '✅ You can check vehicles without a limit right now — just send a number.', ['check', 'menu']);
     return;
   }
 
