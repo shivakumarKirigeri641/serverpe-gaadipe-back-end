@@ -2981,10 +2981,16 @@ async function handle(session, message, mobile) {
         await setState(mobile, 'awaiting_payment', `order ${row.order_id}`);
         await funnel(mobile, 'link_sent', { reg_no: vehicle.reg_no, payment_row: row.id });
         // The link stays the message; Support and Other vehicle sit under it (2026-10-12).
+        /* REASSURING, NOT JUST A LINK (user, 2026-10-25: 3 of 4 who tapped buy never opened the payment link).
+           People are rightly wary of payment links on WhatsApp, so the message says how they pay, who handles
+           it, and where the report arrives - before the button. */
         await linkButton(mobile,
-          `*${vehicle.reg_no}* — GaadiPe full report${oneTime ? ' (one time)' : ` + ${plan.duration_days} days of alerts`} · ₹${Math.round(row.amount_paise / 100)}\n\n`
-          + 'Tap below to pay on GaadiPe’s checkout (UPI, card, netbanking). '
-          + 'The report arrives in this chat the moment the payment goes through.',
+          `🔒 *Full report for ${vehicle.reg_no} — ₹${Math.round(row.amount_paise / 100)}*`
+          + (oneTime ? ' · one time' : ` · with ${plan.duration_days} days of alerts`) + '\n\n'
+          + '✅ Pay with *UPI* — GPay, PhonePe, Paytm — or card / netbanking\n'
+          + '✅ Secure checkout by *Razorpay* · GST invoice included\n'
+          + '✅ Your report arrives *here in this chat* in seconds\n\n'
+          + '_GaadiPe never asks for your PIN or OTP — you approve the payment in your own UPI app._',
         `${baseUrl()}/pay/${row.checkout_token}`, payButtonText(row.amount_paise), { footer: PAY_FOOTER, fallbackKeys: ['support', 'other'] });
         return;
       }

@@ -249,8 +249,9 @@ app.listen(config.port, () => {
   require('./jobs/reconDaily').start(Number(process.env.RECON_TICK_SECONDS) || 3600);
   // Scheduled backup (when switched on) and job-history trimming (operations module).
   require('./jobs/maintenance').start(Number(process.env.MAINTENANCE_TICK_SECONDS) || 3600);
-  // One free reminder inside the 24-hour window: terms not agreed, link not paid.
-  // (retired with WhatsApp) require('./jobs/nudge').start(Number(process.env.NUDGE_TICK_SECONDS) || 300);
+  // One free reminder inside the 24-hour window: terms not agreed, link not paid. Back on 2026-10-25 for the
+  // unpaid-link reminder (nudge_payment_enabled); the Terms and number reminders follow nudge_enabled (off).
+  require('./jobs/nudge').start(Number(process.env.NUDGE_TICK_SECONDS) || 300);
   // Fleets: daily checks, the 7 pm Excel email, renewal links and expiry.
   require('./jobs/fleet').start(Number(process.env.FLEET_TICK_SECONDS) || 300);
   // A paid report issued while e-Challan was down: completed when it answers.

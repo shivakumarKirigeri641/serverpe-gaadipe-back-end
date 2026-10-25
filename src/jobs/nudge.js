@@ -138,24 +138,37 @@ async function payments(mins) {
     const mine = await db.one(
       `UPDATE payments SET nudged_at = now() WHERE id = $1 AND nudged_at IS NULL AND status = 'created' RETURNING id`, [p.id]);
     if (!mine) continue;
-    const out = await send.text(p.mobile,
-      `${p.reg_no ? `*${p.reg_no}* — your` : 'Your'} full report is waiting.\n\n`
-      + `Pay ₹${Math.round(p.amount_paise / 100)} here (UPI, card, netbanking):\n${base}/pay/${p.checkout_token}\n\n`
-      + 'The report arrives in this chat the moment the payment goes through.\n'
-      + '🚫 RTO queue · 🚫 Fuel · 🚫 Follow-ups ✨');
+    /* One gentle reminder, the link as a BUTTON rather than a bare URL (2026-10-25: a bare payment link is the
+       e-challan scam's pattern, and people rightly do not tap them). */
+    const rupees = Math.round(p.amount_paise / 100);
+    const body = `${p.reg_no ? `Your full report for *${p.reg_no}*` : 'Your full report'} is ready to unlock — *₹${rupees}*.\n\n`
+      + '✅ UPI (GPay, PhonePe, Paytm), card or netbanking · secure checkout by Razorpay\n'
+      + '✅ It arrives in this chat the moment you pay\n\n'
+      + '_Tap below whenever you are ready. No reminder after this one._';
+    let out = await send.ctaUrl(p.mobile, body, { text: `Pay ₹${rupees} securely`, url: `${base}/pay/${p.checkout_token}` },
+      { footer: 'GaadiPe · secure checkout by Razorpay' }).catch(() => ({ ok: false }));
+    if (!out?.ok) out = await send.text(p.mobile, `${body}\n\n${base}/pay/${p.checkout_token}`);
     if (out?.ok) { sent += 1; mark(`nudge_pay:${p.id}`, 'whatsapp_reminder_sent', p.mobile, p.user_id, { kind: 'payment', payment_row: p.id }); }
   }
   return sent;
 }
 
 async function tick() {
-  if (!await settings.bool('nudge_enabled', true)) return { sent: 0 };
+  /* THE PAYMENT REMINDER HAS ITS OWN SWITCH (user, 2026-10-25: 3 of 4 who tapped buy never opened the link).
+     nudge_enabled (off since 2026-10-09) still governs the Terms and number reminders; nudge_payment_enabled
+     (on) lets the one reminder about an unpaid link go - to someone who asked for it, inside their window. */
+  const all = await settings.bool('nudge_enabled', true);
+  const pay = await settings.bool('nudge_payment_enabled', true);
+  if (!all && !pay) return { sent: 0 };
   if (!await flags.on('whatsapp_flow')) return { sent: 0 };
   if (quiet(await settings.num('nudge_quiet_from_ist', 21), await settings.num('nudge_quiet_to_ist', 8))) return { sent: 0 };
   const mins = Math.max(15, await settings.num('nudge_after_minutes', 60));
-  let sent = await terms(mins);
-  sent += await number(mins);
-  if (await flags.on('payments')) sent += await payments(mins);
+  let sent = 0;
+  if (all) {
+    sent += await terms(mins);
+    sent += await number(mins);
+  }
+  if (pay && await flags.on('payments')) sent += await payments(mins);
   return { sent };
 }
 

@@ -68,6 +68,7 @@ const GROUPS = [
     ['watch_daily_status_every_days', 'Monitoring: "today\'s update" every N days (retired)', 'Replaced on 10 Oct 2026 by the daily / every-other-day settings above.'],
     ['whatsapp_marketing_gap_days', 'WhatsApp: days between marketing to one person', 'No second marketing message to the same customer within this many days (7).'],
     ['nudge_enabled', 'WhatsApp: remind people who said Hi to agree (true / false)', 'Off since 2026-10-09: someone who only said Hi hears from GaadiPe again only if they write.'],
+    ['nudge_payment_enabled', 'WhatsApp: one reminder about an unpaid payment link (true / false)', 'true (2026-10-25): an hour after someone tapped Report and did not pay, one reminder with a Pay button - inside their 24-hour window, never at night, never after STOP, never twice.'],
     // The free check before sign-in (migrations 142–143).
     ['chat_anon_checks_per_day', 'Free check before sign-in: per browser, per day', 'How many vehicles one browser may check without signing in each day (1).'],
     ['chat_anon_checks_per_day_ip', 'Free check before sign-in: per network, per day', 'How many free checks one network address may make a day. Homes and offices share one address on Wi-Fi — 3 lets a family each try once.'],
