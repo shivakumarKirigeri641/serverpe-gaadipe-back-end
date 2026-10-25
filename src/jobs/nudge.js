@@ -141,15 +141,20 @@ async function payments(mins) {
     const mine = await db.one(
       `UPDATE payments SET nudged_at = now() WHERE id = $1 AND nudged_at IS NULL AND status = 'created' RETURNING id`, [p.id]);
     if (!mine) continue;
-    /* One gentle reminder, the link as a BUTTON rather than a bare URL (2026-10-25: a bare payment link is the
-       e-challan scam's pattern, and people rightly do not tap them). */
+    /* One gentle reminder with THREE REPLY BUTTONS (user, 2026-10-25: "so that reply quality increases") - Pay,
+       Check another, Not now. A tap is a reply Meta counts in the number's favour, and "Not now" is an easy way
+       out instead of Block. Pay sends this order's secure Pay button again (flow.js payReminderTap). No bare
+       link: that is the e-challan scam's pattern. */
     const rupees = Math.round(p.amount_paise / 100);
     const body = `${p.reg_no ? `Your full report for *${p.reg_no}*` : 'Your full report'} is ready to unlock — *₹${rupees}*.\n\n`
       + '✅ UPI (GPay, PhonePe, Paytm), card or netbanking · secure checkout by Razorpay\n'
       + '✅ It arrives in this chat the moment you pay\n\n'
-      + '_Tap below whenever you are ready. No reminder after this one._';
-    let out = await send.ctaUrl(p.mobile, body, { text: `Pay ₹${rupees} securely`, url: `${base}/pay/${p.checkout_token}` },
-      { footer: 'GaadiPe · secure checkout by Razorpay' }).catch(() => ({ ok: false }));
+      + '_No reminder after this one._';
+    let out = await send.buttons(p.mobile, body, [
+      { id: `pay|p|${p.id}`, title: `Pay ₹${rupees}` },
+      { id: `pay|c|${p.id}`, title: 'Check another' },
+      { id: `pay|n|${p.id}`, title: 'Not now' },
+    ], { footer: 'GaadiPe · secure checkout by Razorpay' }).catch(() => ({ ok: false }));
     if (!out?.ok) out = await send.text(p.mobile, `${body}\n\n${base}/pay/${p.checkout_token}`);
     if (out?.ok) { sent += 1; mark(`nudge_pay:${p.id}`, 'whatsapp_reminder_sent', p.mobile, p.user_id, { kind: 'payment', payment_row: p.id }); }
   }

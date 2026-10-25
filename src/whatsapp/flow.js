@@ -1963,6 +1963,63 @@ async function renewalTap(mobile, intent, message) {
 }
 
 /*
+ * THE PAYMENT LINK, SAID REASSURINGLY (2026-10-25: 3 of 4 who tapped buy never opened a bare link). How they pay,
+ * who handles it, where the report arrives - then the Pay button. Used when they tap Report and again from the
+ * reminder's "Pay" button, for the same order.
+ */
+async function sendPayLink(mobile, row, regNo) {
+  const plan = row.plan_id ? await db.one('SELECT monitoring, duration_days FROM plans WHERE id = $1', [row.plan_id]).catch(() => null) : null;
+  const oneTime = plan?.monitoring === false;
+  return linkButton(mobile,
+    `🔒 *Full report for ${regNo} — ₹${Math.round(row.amount_paise / 100)}*`
+    + (oneTime ? ' · one time' : ` · with ${plan?.duration_days || 28} days of alerts`) + '\n\n'
+    + '✅ Pay with *UPI* — GPay, PhonePe, Paytm — or card / netbanking\n'
+    + '✅ Secure checkout by *Razorpay* · GST invoice included\n'
+    + '✅ Your report arrives *here in this chat* in seconds\n\n'
+    + '_GaadiPe never asks for your PIN or OTP — you approve the payment in your own UPI app._',
+  `${baseUrl()}/pay/${row.checkout_token}`, payButtonText(row.amount_paise), { footer: PAY_FOOTER, fallbackKeys: ['support', 'other'] });
+}
+
+/*
+ * THE PAYMENT REMINDER'S BUTTONS (user, 2026-10-25: "put 3 buttons with the reminder, so that the reply quality
+ * increases"). jobs/nudge.js sets pay|<action>|<payment id>:
+ *   p  "Pay ₹11"        the same order's Pay button again (sendPayLink)
+ *   c  "Check another"  ready for another vehicle number
+ *   n  "Not now"        a thank-you, nothing charged - an easy way out instead of Block
+ * Only the person the order belongs to can reopen it.
+ */
+const PAY_STEP = { p: 'reminder_pay', c: 'reminder_check_another', n: 'reminder_not_now' };
+async function payReminderTap(mobile, intent) {
+  if (intent.kind !== 'button') return false;
+  const hit = /^pay\|([pcn])\|(\d+)$/.exec(String(intent.id || ''));
+  if (!hit) return false;
+  const [, action, id] = hit;
+  const row = await db.one(
+    `SELECT p.*, v.reg_no FROM payments p JOIN users u ON u.id = p.user_id
+       LEFT JOIN vehicles v ON v.id = (p.raw->>'vehicle_id')::bigint
+      WHERE p.id = $1 AND right(u.mobile, 10) = right($2, 10)`, [id, mobile]).catch(() => null);
+  await funnel(mobile, PAY_STEP[action], { payment_row: id, reg_no: row?.reg_no || null });
+  if (action === 'p') {
+    if (row?.status === 'paid') { await reply(mobile, '✅ That report is already paid — tap *My reports* to download it.', ['reports', 'menu']); return true; }
+    if (!row || row.status !== 'created' || !row.checkout_token) {
+      await reply(mobile, 'That payment link has expired. Send the vehicle number again and tap *Report* for a fresh one.', ['check', 'menu']);
+      return true;
+    }
+    await setState(mobile, 'awaiting_payment', `reminder: order ${row.order_id}`);
+    await sendPayLink(mobile, row, row.reg_no || 'your vehicle');
+    return true;
+  }
+  if (action === 'c') {
+    await setState(mobile, 'owner_start', 'reminder: check another');
+    await send.text(mobile, 'Sure — send me the vehicle number, like *KA01XX1234*.');
+    return true;
+  }
+  await setState(mobile, 'owner_start', 'reminder: not now');
+  await reply(mobile, '👍 No problem — nothing is charged.\n\nWhenever you need it, just send a vehicle number here.', ['check', 'menu']);
+  return true;
+}
+
+/*
  * ADD YOUR EMAIL, ASKED BY THE BOT (user, 2026-10-15: "instead of me manually asking them" —
  * 2 of 211 customers had a confirmed email, so a WhatsApp outage cut alerts off). Only as a
  * reply to something the customer just did, so inside their window, never a broadcast:
@@ -2323,6 +2380,7 @@ async function handle(session, message, mobile) {
   }
   // The renewal reminder's buttons — "Renew now", "My monitoring", "Not now" (2026-10-14).
   if (await renewalTap(mobile, intent, message)) return;
+  if (await payReminderTap(mobile, intent)) return;
   // The monitoring alert's buttons — "Thanks for remembering", "Check vehicle",
   // "Pause this alert" — and "Resume alerts" (2026-10-12, monitorAlert.js).
   const tapped =await require('./monitorAlert').handleTap(mobile, intent)
@@ -2981,17 +3039,8 @@ async function handle(session, message, mobile) {
         await setState(mobile, 'awaiting_payment', `order ${row.order_id}`);
         await funnel(mobile, 'link_sent', { reg_no: vehicle.reg_no, payment_row: row.id });
         // The link stays the message; Support and Other vehicle sit under it (2026-10-12).
-        /* REASSURING, NOT JUST A LINK (user, 2026-10-25: 3 of 4 who tapped buy never opened the payment link).
-           People are rightly wary of payment links on WhatsApp, so the message says how they pay, who handles
-           it, and where the report arrives - before the button. */
-        await linkButton(mobile,
-          `🔒 *Full report for ${vehicle.reg_no} — ₹${Math.round(row.amount_paise / 100)}*`
-          + (oneTime ? ' · one time' : ` · with ${plan.duration_days} days of alerts`) + '\n\n'
-          + '✅ Pay with *UPI* — GPay, PhonePe, Paytm — or card / netbanking\n'
-          + '✅ Secure checkout by *Razorpay* · GST invoice included\n'
-          + '✅ Your report arrives *here in this chat* in seconds\n\n'
-          + '_GaadiPe never asks for your PIN or OTP — you approve the payment in your own UPI app._',
-        `${baseUrl()}/pay/${row.checkout_token}`, payButtonText(row.amount_paise), { footer: PAY_FOOTER, fallbackKeys: ['support', 'other'] });
+        // Reassuring, not just a link (sendPayLink, 2026-10-25).
+        await sendPayLink(mobile, row, vehicle.reg_no);
         return;
       }
 
