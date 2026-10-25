@@ -324,15 +324,26 @@ async function feed(since, adminId = null) {
  * a celebration missed with the browser closed plays at the next login, on
  * any device, and once.
  */
+/*
+ * REAL CUSTOMERS ONLY (user, 2026-10-25: "I see a celebration of 600 customers — I think it's an issue"):
+ * every users row was counted — anyone who only said Hi, GaadiPe's own numbers. Now the website's rule
+ * (site/stats.js): agreed to the Terms on any channel, not internal, never said STOP. Marks written under
+ * the old count (no detail.rule) above today's real mark are cleared once, with their "seen" rows, so
+ * 500 and 600 are celebrated when they are truly reached.
+ */
 async function milestones(adminId) {
+  const { agreedSql } = require('./consented');
   const { n } = await db.one(
     `SELECT count(*)::int AS n FROM users u
-      WHERE NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE so.mobile = u.mobile AND so.wa_opt_out_at IS NOT NULL)`);
+      WHERE u.is_internal = false AND ${agreedSql('u.mobile', { whatsappOnly: false, webOnly: false })}`);
   const mark = Math.floor(n / 100) * 100;
+  await db.query(
+    `DELETE FROM event_log WHERE kind IN ('customer_milestone', 'milestone_seen')
+        AND detail->>'rule' IS NULL AND (detail->>'customers')::int > $1`, [mark]);
   if (mark >= 100) {
     await db.query(
       `INSERT INTO event_log (kind, detail)
-       SELECT 'customer_milestone', jsonb_build_object('customers', $1::int, 'at_count', $2::int)
+       SELECT 'customer_milestone', jsonb_build_object('customers', $1::int, 'at_count', $2::int, 'rule', 2)
         WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE kind = 'customer_milestone' AND (detail->>'customers')::int = $1)`,
       [mark, n]);
   }
@@ -373,7 +384,7 @@ async function seenMilestone(adminId, customers) {
   if (!adminId || !Number.isInteger(n) || n < 100) return false;
   await db.query(
     `INSERT INTO event_log (kind, detail)
-     SELECT 'milestone_seen', jsonb_build_object('admin_id', $1::text, 'customers', $2::int)
+     SELECT 'milestone_seen', jsonb_build_object('admin_id', $1::text, 'customers', $2::int, 'rule', 2)
       WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE kind = 'milestone_seen'
                           AND detail->>'admin_id' = $1::text AND (detail->>'customers')::int = $2)`,
     [String(adminId), n]);
