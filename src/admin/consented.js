@@ -164,6 +164,14 @@ const agreedSql = (col, { whatsappOnly = whatsappOnlyNow(), webOnly = webOnlyNow
            ${channelSql('ac', whatsappOnly, webOnly)})
   AND ${stopSql(`right(${col}, 10)`, webOnly)})`;
 
+/* WHERE A PERSON AGREED (user, 2026-10-25: "include web customers, but distinguish them"): 'whatsapp',
+   'web' or 'both', from their consent records — the same records agreedSql reads. NULL if never. */
+const agreedOnSql = (col) => `(SELECT CASE WHEN bool_or(ch = 'whatsapp') AND bool_or(ch = 'web') THEN 'both'
+                                         WHEN bool_or(ch = 'web') THEN 'web' WHEN bool_or(ch = 'whatsapp') THEN 'whatsapp' END
+    FROM (SELECT coalesce(ao.detail->>'channel', 'whatsapp') AS ch FROM event_log ao
+           WHERE ao.kind = 'consent_accepted'
+             AND right(regexp_replace(ao.detail->>'mobile', '\\D', '', 'g'), 10) = right(${col}, 10)) x)`;
+
 /*
  * THE PANEL'S CHANNEL FOR ANY NUMBER (user, 2026-10-16: "check the entire WhatsApp admin panel's
  * APIs — make sure all are WhatsApp and sync properly"). One rule for every count and chart, so
@@ -200,4 +208,4 @@ function chan() {
  */
 const allChannelsNow = () => view.getStore()?.allChannels === true;
 
-module.exports = { filter, hideMe, allowedOf, agreedSql, view, webOnlyNow, whatsappOnlyNow, allChannelsNow, chan };
+module.exports = { filter, hideMe, allowedOf, agreedSql, agreedOnSql, view, webOnlyNow, whatsappOnlyNow, allChannelsNow, chan };

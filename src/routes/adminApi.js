@@ -107,11 +107,15 @@ router.use(safe(async (req, res, next) => {
   /* WEB ONLY (user, 2026-10-10): the web admin sends X-View: web — website people and data only. */
   const consented = require('../admin/consented');
   const xView = String(req.get('x-view') || '').toLowerCase();
-  const whatsappOnly = xView === 'whatsapp';
   /* EVERY CUSTOMER IN THE WEB ADMIN (user, 2026-10-21: WhatsApp permanently disabled — "transfer all to
      the web platform"). Customers who came through WhatsApp are website customers now, so the web admin
      shows everyone who agreed, in either channel (migration 197). false = website-only, as before. */
-  const allChannels = xView === 'web' && await settings.bool('admin_web_shows_all', false);
+  /* AND IN THE WHATSAPP ADMIN (user, 2026-10-25: "352 here, 380+ in the web admin — include web customers,
+     but distinguish them"): every channel there too, each customer marked where they agreed
+     (consented.agreedOnSql). admin_whatsapp_shows_all = false brings back WhatsApp only. */
+  const allChannels = (xView === 'web' && await settings.bool('admin_web_shows_all', false))
+    || (xView === 'whatsapp' && await settings.bool('admin_whatsapp_shows_all', true));
+  const whatsappOnly = xView === 'whatsapp' && !allChannels;
   const webOnly = xView === 'web' && !allChannels;
   if (!CONSENT_SKIP.test(req.path)) {
     const inner = res.json.bind(res);

@@ -193,6 +193,8 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
                      CASE WHEN u.signup_channel = 'web' THEN 'website' ELSE 'whatsapp_direct' END) AS first_source,
             EXISTS (SELECT 1 FROM payments pf WHERE pf.user_id = u.id AND pf.status = 'created'
                       AND pf.created_at < now() - interval '30 minutes') AS pay_failed,
+            -- Where they agreed: whatsapp / web / both (2026-10-25).
+            ${require('./consented').agreedOnSql('u.mobile')}            AS agreed_on,
             count(*) OVER ()                                        AS total_rows
        FROM users u
        LEFT JOIN whatsapp_sessions ws ON ws.mobile = u.mobile
@@ -291,8 +293,16 @@ async function list({ q = '', sort = 'last_seen', limit = 50, offset = 0,
                            ORDER BY e.id DESC LIMIT 1) r ON true
       WHERE ws.wa_opt_out_at IS NOT NULL
       GROUP BY 1 ORDER BY 2 DESC`)).rows : null;
+  // Every customer, by where they agreed (2026-10-25: "include web customers, but distinguish them").
+  const { agreedSql, agreedOnSql } = require('./consented');
+  const byChannel = await db.one(
+    `SELECT count(*) FILTER (WHERE o = 'whatsapp')::int AS whatsapp, count(*) FILTER (WHERE o = 'web')::int AS web,
+            count(*) FILTER (WHERE o = 'both')::int AS both
+       FROM (SELECT ${agreedOnSql('u.mobile')} AS o FROM users u
+              WHERE NOT u.is_internal AND ${agreedSql('u.mobile')}) x`);
   return {
     total,
+    by_channel: byChannel,
     today,
     stop_reasons: stopReasons,
     rows: rows.map(({ total_rows, ...r }) => ({

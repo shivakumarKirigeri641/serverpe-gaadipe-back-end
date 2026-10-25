@@ -169,6 +169,11 @@ async function today() {
          WHERE s.is_active AND s.ends_on >= CURRENT_DATE AND ${NM.user('s.user_id')} AND ${ch.sub('s')})     AS monitoring,
        -- Only those who agreed, never STOP (2026-09-30, 2026-10-13), and not the owner (2026-10-10).
        (SELECT count(*)::int FROM users u WHERE NOT u.is_internal AND ${AGREED('u.mobile')}) AS customers,
+       -- Of them, where they agreed (2026-10-25: "include web customers, but distinguish them").
+       (SELECT json_build_object('whatsapp', count(*) FILTER (WHERE o = 'whatsapp'), 'web', count(*) FILTER (WHERE o = 'web'),
+                                 'both', count(*) FILTER (WHERE o = 'both'))
+          FROM (SELECT ${require('./consented').agreedOnSql('u.mobile')} AS o FROM users u
+                 WHERE NOT u.is_internal AND ${AGREED('u.mobile')}) x)                    AS customers_by_channel,
        (SELECT count(*)::int FROM whatsapp_sessions WHERE wa_opt_out_at IS NOT NULL)       AS customers_stopped,
        (SELECT count(*)::int FROM vehicles)                                               AS vehicles`);
 }

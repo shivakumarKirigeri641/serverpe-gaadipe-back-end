@@ -128,6 +128,8 @@ const GROUPS = [
     ['lookup_waitlist_enabled', 'Waiting list when vehicle records are down (true / false)', 'Saves the number and sends the check automatically once the service is back.'],
     ['admin_whatsapp_numbers', 'Daily summary to these WhatsApp numbers', 'Your own number(s), comma-separated. Sent only if that number messaged the bot in the last 24 hours.'],
     ['admin_whatsapp_summary_hour_ist', 'Daily summary time (IST, like 23:55)', 'A time, or just an hour: 21 = 9 pm.'],
+    // 2026-10-25: "you can also include web customers, but distinguish them".
+    ['admin_whatsapp_shows_all', 'WhatsApp admin: count website customers too (true / false)', 'true (default) = every customer who agreed, WhatsApp or website, each marked where they agreed. false = WhatsApp only, as before.'],
   ]],
   // The paid RC backup when ULIP's VAHAN fails (user, 2026-10-02; switch: Feature flags → RC backup).
   ['RC backup provider', [
