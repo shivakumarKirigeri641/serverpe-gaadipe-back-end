@@ -132,6 +132,9 @@ async function payments(mins) {
         AND ${NOT_HUSHED('s')}
         -- only their latest checkout: an older link they replaced stays quiet
         AND NOT EXISTS (SELECT 1 FROM payments q WHERE q.user_id = p.user_id AND q.id > p.id)
+        -- and at most ONE payment reminder per person a day, whatever they tap (user, 2026-10-25): the number's
+        -- quality matters more than one more sale, and a second reminder the same day reads as pushy.
+        AND NOT EXISTS (SELECT 1 FROM payments r WHERE r.user_id = p.user_id AND r.nudged_at > now() - interval '24 hours')
       ORDER BY p.created_at LIMIT ${PER_TICK}`, [mins])).rows;
   let sent = 0;
   for (const p of due) {
