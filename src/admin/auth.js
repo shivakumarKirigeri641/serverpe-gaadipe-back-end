@@ -57,8 +57,10 @@ const ROLES = {
   // Super admin.
   owner:      [...EVERYONE, 'tasks.manage','money', 'settings', 'block', 'lookup', 'admins', 'pii', ...V_ALL,
                'customers.view_sensitive', 'payments.view', 'payments.refund', 'finance.view', 'finance.export',
-               'api.view', 'api.manage', 'system.view', 'system.manage', 'settings.manage', 'audit.view'],
-  admin:      [...EVERYONE, 'tasks.manage','money', 'settings', 'block', 'lookup', 'pii', ...V_ALL,
+               'api.view', 'api.manage', 'system.view', 'system.manage', 'settings.manage', 'audit.view',
+               // Every vehicle with every RC detail, the owner alone (2026-10-25, admin/catalogue.js).
+               'vehicles.catalogue'],
+  admin:     [...EVERYONE, 'tasks.manage','money', 'settings', 'block', 'lookup', 'pii', ...V_ALL,
                'customers.view_sensitive', 'payments.view', 'finance.view', 'finance.export',
                'api.view', 'api.manage', 'system.view', 'system.manage', 'settings.manage', 'audit.view'],
   // Command center phase 7 (user, 2026-09-25): the day-to-day running of the

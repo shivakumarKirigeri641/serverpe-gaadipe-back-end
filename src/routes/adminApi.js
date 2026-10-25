@@ -1268,7 +1268,9 @@ router.get('/vehicles/meta', needs('vehicles.view'), safe(async (_req, res) => r
 router.get('/vehicles/intel', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleOps.intel(req.query))));
 router.get('/vehicles/signals', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleOps.signals(req.query))));
 router.get('/vehicles/live', needs('vehicles.view'), safe(async (req, res) => res.json(await vehicleOps.live({ since: req.query.since }))));
-router.get('/vehicles/api-logs', (req, res, next) => (auth.can(req.admin.role, 'vehicles.api_logs') || auth.can(req.admin.role, 'api.view') ? next() : needs('vehicles.api_logs')(req, res, next)), safe(async (req, res) => res.json(await vehicleOps.apiLogs(req.query))));
+// Every vehicle, every RC detail — the owner only (user, 2026-10-25; admin/catalogue.js).
+router.get('/vehicles/catalogue', needs('vehicles.catalogue'), safe(async (_req, res) => res.json(await require('../admin/catalogue').list())));
+router.get('/vehicles/api-logs',(req, res, next) => (auth.can(req.admin.role, 'vehicles.api_logs') || auth.can(req.admin.role, 'api.view') ? next() : needs('vehicles.api_logs')(req, res, next)), safe(async (req, res) => res.json(await vehicleOps.apiLogs(req.query))));
 
 // Preferences: the explorer's columns and saved filters, per admin.
 router.get('/prefs/:key', safe(async (req, res) => res.json(await vehicleOps.getPref(req.admin, req.params.key))));
