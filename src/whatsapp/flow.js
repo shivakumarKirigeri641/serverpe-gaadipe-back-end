@@ -1970,11 +1970,17 @@ async function start(mobile) {
   // Full report expecting it free called it "worst". Read from the plan.
   const plan = await billing.reportPlan().catch(() => null);
   const once = await billing.oneTimePlan().catch(() => null);
+  /* THE PLANS IN THE WELCOME (user, 2026-10-26: "mention it in the welcome as well, people don't see it"): only the
+     first check is free, then the packs - read from the plans, so the admin's prices are what they read. */
+  const packs = await quota.packsOn().catch(() => false) ? await packList() : [];
+  const first = packs.length
+    ? `✅ 1st vehicle check — *FREE* _(only the first)_\n🔢 More checks: *${packs.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}*\n`
+    : '✅ Basic check — *FREE*\n';
   const price = plan
     // "Full report @ just ₹19" (user, 2026-10-24: "something attractive"); from ₹11 one time (2026-10-25, REPORT11).
     ? (once
-      ? `✅ Basic check — *FREE*\n📋 Full report @ just *₹${Math.round(once.price_paise / 100)}/-* 🔥 · with ${plan.duration_days} days of alerts *₹${Math.round(plan.price_paise / 100)}/-* _(only if you want it)_\n\n`
-      : `✅ Basic check — *FREE*\n📋 Full report @ just ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}/-* 🔥 _(only if you want it)_\n\n`)
+      ? `${first}📋 Full report @ just *₹${Math.round(once.price_paise / 100)}/-* 🔥 · with ${plan.duration_days} days of alerts *₹${Math.round(plan.price_paise / 100)}/-* _(only if you want it)_\n\n`
+      : `${first}📋 Full report @ just ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}/-* 🔥 _(only if you want it)_\n\n`)
     : '';
   /* ONCE, NOT ON EVERY HI (user, 2026-10-23: "accept the Terms one time, and ask again when the policies
      change"). Someone who already agreed to the policies in force goes straight to the start; anyone else —
