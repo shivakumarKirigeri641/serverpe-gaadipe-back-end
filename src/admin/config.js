@@ -123,8 +123,8 @@ const GROUPS = [
     ['free_check_show_status', 'Free check before sign-in: show each document\'s status (true / false)', 'true: Insurance, PUC, Registration, Road tax (and Fitness, Permit for commercial) as Valid / Due soon / Expired, the pending challan count and the health score — no dates. false: make and model only. Dates, challan details, loan and blacklist stay in sign-in and the ₹19 report.'],
     ['free_check_show_rto', 'Free check before sign-in: show the RTO (true / false)', 'RTO code, office, district and state — worked out from the number, free.'],
     ['free_view_detail', 'Free check after sign-in: how much it shows', 'public = the whole public record like CarInfo (every validity date, age, norms, seats, weight, RC status, how many challans) — the ₹19 report keeps the loan, blacklist/NOC, challan amounts, owners, insurer, FASTag and the verdict; labels / count / none show less.'],
-    // Check packs (2026-10-26, migration 213, util/quota.js): one free check, then ₹20 for 5.
-    ['check_packs_enabled', 'Check packs: one free check, then a ₹20 pack (true / false)', 'true. false = back to the daily / monthly free allowance below. The pack price is the CHECKS5 plan.'],
+    // Check packs (2026-10-26, migrations 213-214, util/quota.js): one free check, then ₹25 for 5.
+    ['check_packs_enabled', 'Check packs: one free check, then a ₹25 pack (true / false)', 'true. false = back to the daily / monthly free allowance below. The pack price is the CHECKS5 plan.'],
     ['free_checks_lifetime', 'Check packs: free checks per customer (ever)', '1. A repeat of the same vehicle within an hour, and a vehicle they bought a report for, never count.'],
     ['check_pack_checks', 'Check packs: checks in one pack', '5.'],
     ['check_credit_days', 'Check packs: checks from a report last (days)', '30. Each full report (₹11 or ₹19) adds checks_per_report_bonus (5) checks.'],

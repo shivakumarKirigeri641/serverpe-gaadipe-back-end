@@ -928,7 +928,7 @@ router.post('/check', safe(async (req, res) => {
     const n = await settings.num('check_pack_checks', 5);
     return res.status(402).json({
       error: 'checks_needed', reason: 'no_credits',
-      message: `Your free check is used. Get ${n} vehicle checks for ₹${p ? Math.round(p.price_paise / 100) : 20} (GST included), valid ${p?.duration_days || 30} days — every full report you buy adds ${n} more.`,
+      message: `Your free check is used. Get ${n} vehicle checks for ₹${p ? Math.round(p.price_paise / 100) : 25} (GST included), valid ${p?.duration_days || 30} days — every full report you buy adds ${n} more.`,
       pack: p ? { checks: n, price_paise: Number(p.price_paise), days: p.duration_days || 30 } : null,
       quota: await quota.left(req.user.id).catch(() => null),
     });
@@ -1085,7 +1085,7 @@ const DECLARATIONS = {
 const langOf = (v) => (v === 'hi' ? 'hi' : 'en');
 const DECLARATION = DECLARATIONS.en;
 
-/* A CHECK PACK (user, 2026-10-26; migration 213, pay/packs.js): ₹20 for 5 checks, no vehicle. The checkout page
+/* A CHECK PACK (user, 2026-10-26; migrations 213-214, pay/packs.js): ₹25 for 5 checks, no vehicle. The checkout page
    asks for the invoice's name and state; the policies are agreed there by paying, as on WhatsApp. */
 router.post('/checks/buy', safe(async (req, res) => {
   let row;

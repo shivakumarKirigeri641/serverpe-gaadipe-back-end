@@ -127,7 +127,7 @@ async function check(userId, regNo) {
 /*
  * ONE FREE CHECK, THEN CHECK CREDITS (user, 2026-10-26: "1 customer, 1 vehicle check free ... it is becoming a
  * loss"; migration 213). For a customer (stranger / trial): the first free_checks_lifetime (1) found checks are
- * free; after that each new check needs a credit from check_credits - a ₹20 pack of 5, or the 5 that come with
+ * free; after that each new check needs a credit from check_credits - a ₹25 pack of 5 (migration 214), or the 5 that come with
  * every report - used when the check is recorded. Never counted: a repeat of the same vehicle inside the repeat
  * window, a vehicle they hold a valid report for, and a vehicle that was not found (no provider charges for it).
  * Fleet / partner plans keep their daily caps; GaadiPe's own numbers stay unlimited.

@@ -75,7 +75,7 @@ const BTN = {
   BUY_REPORT: 'buy_report',
   // The ₹11 one-time report, no monitoring (2026-10-25, REPORT11).
   BUY_ONETIME: 'buy_report_once',
-  BUY_CHECKS: 'buy_checks',       // a ₹20 pack of 5 checks (migration 213, pay/packs.js)
+  BUY_CHECKS: 'buy_checks',       // a ₹25 pack of 5 checks (migrations 213-214, pay/packs.js)
   DOWNLOAD_REPORT: 'download_report',
   FEEDBACK: 'feedback',
   REFER: 'refer',
@@ -1146,7 +1146,7 @@ async function savePendingReg(mobile, regNo) {
 }
 async function packPrice() {
   const p = await require('../pay/packs').packPlan().catch(() => null);
-  return { rupees: p ? Math.round(Number(p.price_paise) / 100) : 20, days: p?.duration_days || 30,
+  return { rupees: p ? Math.round(Number(p.price_paise) / 100) : 25, days: p?.duration_days || 30,
     checks: await settings.num('check_pack_checks', 5) };
 }
 async function packButton() {
@@ -1674,7 +1674,7 @@ async function deliverReport(mobile, regNo, message) {
 
   // Asked before the call, not after: the point is to not spend the lookup.
   const q = await quota.check(user.id, regNo);
-  // One free check, then a pack (migration 213): the wall is a door - 5 checks for ₹20, or the reports they have.
+  // One free check, then a pack (migration 213): the wall is a door - 5 checks for ₹25, or the reports they have.
   if (!q.allowed && q.reason === 'no_credits') {
     await setState(mobile, 'owner_menu', 'no check credits');
     await funnel(mobile, 'checks_needed', { reg_no: regNo });

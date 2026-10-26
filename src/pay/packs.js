@@ -1,6 +1,6 @@
 /**
  * src/pay/packs.js — A CHECK PACK ORDER (user, 2026-10-26: "1 vehicle check free ... then pay for checks";
- * migration 213). CHECKS5: ₹20 including GST for 5 vehicle checks, valid 30 days. No vehicle is involved.
+ * migration 213; ₹25 since migration 214). CHECKS5: ₹25 including GST for 5 vehicle checks, valid 30 days. No vehicle is involved.
  *
  *   startOrder({ user, channel }) -> the payment row, with its checkout_token for /pay/<token>
  *
@@ -13,7 +13,14 @@ const billing = require('./billing');
 const razorpay = require('./razorpay');
 const settings = require('../util/settings');
 
-const packPlan = () => db.one(`SELECT * FROM plans WHERE code = 'CHECKS5' AND is_active LIMIT 1`);
+/* The plan as the admin set it (Settings → Plans: price, days, discount, on/off; user, 2026-10-26: "configurable in
+   admin panel"). price_paise is what is charged: the price less any discount, never under ₹1. */
+async function packPlan() {
+  const p = await db.one(`SELECT * FROM plans WHERE code = 'CHECKS5' AND is_active LIMIT 1`);
+  if (!p) return null;
+  const off = Math.max(0, Number(p.discount_paise) || 0);
+  return { ...p, list_price_paise: Number(p.price_paise), price_paise: Math.max(100, Number(p.price_paise) - off) };
+}
 
 class PackError extends Error {
   constructor(code, message) { super(message); this.code = code; }
