@@ -37,6 +37,12 @@ const limit = Math.min(Math.max(parseInt(process.argv.find((a) => /^\d+$/.test(a
     : 'u.promo_consent_at IS NOT NULL AND u.promo_consent_withdrawn_at IS NULL'}
       ORDER BY ${latest ? 'u.created_at DESC, u.id DESC' : 'u.created_at, u.id'}
       LIMIT $1`, [limit]);
+  /* --numbers (2026-10-26: "give me proper ones"): only the numbers, comma-separated, to paste into Fast2SMS. */
+  if (process.argv.includes('--numbers')) {
+    console.log(rows.map((r) => r.mobile).join(','));
+    console.error(`(${rows.length} numbers, ${latest ? 'newest' : 'oldest'} first — delete any copy after use)`);
+    process.exit(0);
+  }
   rows.forEach((r, i) => console.log(
     `${String(i + 1).padStart(3)}. ${r.mobile}  ${r.joined.padEnd(11)}  ${r.paid ? 'paid' : '    '}  `
     + `${r.last_promo ? `last promo ${r.last_promo}` : ''.padEnd(16)}  ${String(r.name).slice(0, 20)}`));
