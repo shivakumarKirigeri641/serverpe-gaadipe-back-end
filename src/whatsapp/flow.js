@@ -648,8 +648,8 @@ async function whatYouGet(mobile) {
   const checks = !q?.enforced ? ''
     : q.unlimited ? '🔢 *Free checks:* no limit for you.\n\n'
     // Check packs (migration 213): one free, then a pack; reports add checks.
-    : q.packs ? `🔢 *Checks:* your first is free, then *${pk.checks} for ₹${pk.rupees}* (${pk.days} days); every report adds ${pk.checks}. `
-        + `You have *${q.today.left}* left.\n\n`
+    : q.packs ? `🔢 *Checks:* 1st free, then *${pk.checks} for ₹${pk.rupees}* (${pk.days} days); each report adds ${pk.checks}; `
+        + `vehicles you checked before stay free. *${q.today.left}* left.\n\n`
       : `🔢 *Free checks:* ${q.today.limit} a day${q.month ? `, ${q.month.base} a month (+${q.month.per_report} with every report you buy)` : ''}. `
         + `You have *${q.today.left} left today*${q.month ? ` · ${q.month.left} this month` : ''}.\n\n`;
   await reply(mobile, '💡 *What you get with GaadiPe*\n\n'
