@@ -144,7 +144,13 @@ router.get('/vehicle/:regNo', async (req, res) => {
     // RC first and alone: if the vehicle does not exist there is no point
     // spending calls on challans and FASTag for it.
     let rc = await load('rc', regNo, refresh, debug, noBackup, ulipOnly);
-    if (rc.notFound) return notFound(res, regNo, rc.error);
+    /* FAILED LOOKUPS ARE RECORDED TOO (user, 2026-10-26: a failed free check of TS08HD7023 left no trace in
+       api_calls - only successes were written, by store.record). Each source asked, its answer and any cost. */
+    const noteFailed = (r) => {
+      if (r?.calls?.length) require('../vehicle/store').recordCalls(null, null, { vehicle_number: regNo, calls: r.calls })
+        .catch((e) => console.error('[vehicle] could not record the failed calls for %s: %s', regNo, e.message));
+    };
+    if (rc.notFound) { noteFailed(rc); return notFound(res, regNo, rc.error); }
     // Monitoring (user, 2026-10-02): VAHAN down is no reason to stop checking
     // challans — the RC saved at the last lookup stands in, marked rc_saved.
     if (rc.failed && rcSaved) {
@@ -156,6 +162,7 @@ router.get('/vehicle/:regNo', async (req, res) => {
       }
     }
     if (rc.failed) {
+      noteFailed(rc);
       return res.status(503).json({ success: false, error: 'upstream_unavailable',
         vehicle_number: regNo, message: rc.error, calls: rc.calls });
     }
