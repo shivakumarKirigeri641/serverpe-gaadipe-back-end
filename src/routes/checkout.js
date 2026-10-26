@@ -347,7 +347,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   const where = web ? 'in your GaadiPe account' : 'on WhatsApp';
   const benefits = isChecks
     ? [`${packSize} vehicle checks — make, model, insurance, PUC, tax, fitness and challan status of any vehicle`,
-       `Valid for ${pay.duration_days || 30} days; checking the same vehicle again within an hour is free`,
+       `Valid for ${pay.duration_days || 30} days; a vehicle you already checked is free to check again, any time`,
        'Use them on WhatsApp or on gaadipe.in',
        'Unused checks expire and are not refunded',
        `GST invoice ${where}`]

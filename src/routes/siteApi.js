@@ -959,7 +959,8 @@ router.post('/check', safe(async (req, res) => {
   if (paid) await require('../vehicle/rcConfirm').ownerRefresh({ regNo: parsed.regNo, userId: req.user.id, why: 'owner check · website' });
   // A check on a paid credit gets the full lookup (migration 213); the free one stays under the daily cap.
   const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' }
-    : q.credit ? {} : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo, { who: `u:${req.user.id}` }));
+    : q.credit ? {} : q.seen ? { backup: 0, rc_saved: 1 }
+    : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo, { who: `u:${req.user.id}` }));
   await quota.record(req.user.id, parsed.regNo, { repeat: q.repeat, found: data?.success === true, channel: 'web', q });
 
   if (!data?.success) {

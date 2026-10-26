@@ -532,7 +532,7 @@ async function notifyChecks(result, user) {
   await db.query(`UPDATE whatsapp_sessions SET state = 'owner_start', modified_at = now() WHERE mobile = $1`, [user.mobile]).catch(() => {});
   const body = `✅ *${result.checks} vehicle checks added*\n\n`
     + `You now have *${c.left}* check${c.left === 1 ? '' : 's'}${result.endsOn ? ` — this pack is valid till *${day(result.endsOn)}*` : ''}.\n\n`
-    + 'Send any vehicle number, like *KA01AB1234*, to use one. Checking the same vehicle again within an hour is free.\n\n'
+    + 'Send any vehicle number, like *KA01AB1234*, to use one. Vehicles you already checked are free to check again, any time.\n\n'
     + `₹${amount} paid — your GST invoice follows.`;
   const tapped = await send.buttons(user.mobile, body, [{ id: 'check_another', title: 'Check vehicle' }, { id: 'menu', title: 'Menu' }])
     .catch(() => ({ ok: false }));

@@ -1159,7 +1159,7 @@ async function packOffer() {
     + `Get *${p.checks} vehicle checks for ₹${p.rupees}* (GST included), valid ${p.days} days — make, model, `
     + 'insurance, PUC, tax, fitness and challan status of any vehicle.\n\n'
     + `_Every full report you buy also adds ${await settings.num('checks_per_report_bonus', 5)} checks. `
-    + 'Checking the same vehicle again within an hour is free._';
+    + 'Vehicles you already checked are free to check again, any time._';
 }
 async function buyChecks(mobile) {
   const user = await store.upsertUser(mobile);
@@ -1704,7 +1704,9 @@ async function deliverReport(mobile, regNo, message) {
   let data;
   try {
     // A check made on a paid credit gets the full lookup, like a report (the customer paid for it).
-    data = await gateway.full(regNo, ownsReport || q.credit ? {} : await rcBackup.freeOpts({}, regNo, { who: `u:${user.id}` }));
+    // A vehicle already on their list (q.seen): the saved record and the free sources, never a paid lookup.
+    data = await gateway.full(regNo, ownsReport || q.credit ? {} : q.seen ? { backup: 0, rc_saved: 1 }
+      : await rcBackup.freeOpts({}, regNo, { who: `u:${user.id}` }));
   } catch (e) {
     console.error('[wa] lookup failed for %s: %s', regNo, e.message);
     data = null;

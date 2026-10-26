@@ -165,6 +165,13 @@ async function packCheck(userId, regNo, tier) {
         AND created_at > now() - ($3 || ' minutes')::interval LIMIT 1`, [userId, regNo, String(repeatWindow)]);
   if (recentSame) return { ...base, allowed: true, repeat: true, used: 0 };
   if (await ownsValidReport(userId, regNo)) return { ...base, allowed: true, repeat: false, owned: true, used: 0 };
+  /* ALREADY ON THEIR LIST (user, 2026-10-26: "already checked vehicle, full report vehicle - they don't count,
+     can be checked any time?"): only a NEW vehicle uses a check. One they checked before (and did not remove -
+     removing never gives a check back) is free any time, shown from the saved record: no new paid lookup. */
+  const seen = await db.one(
+    `SELECT 1 AS yes FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
+      WHERE uv.user_id = $1 AND v.reg_no = $2 AND uv.hidden_at IS NULL LIMIT 1`, [userId, regNo]).catch(() => null);
+  if (seen) return { ...base, allowed: true, repeat: false, owned: true, seen: true, used: 0 };
 
   const burstLimit = await settings.num('checks_burst_per_minute', 5);
   const burst = await db.one(
