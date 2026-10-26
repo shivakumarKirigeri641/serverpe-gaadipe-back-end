@@ -73,7 +73,8 @@ async function lookupNew(userId, mobile, toReg) {
   }
   const quota = require('../util/quota');
   const q = await quota.check(userId, toReg);
-  if (!q.allowed) return { ok: false, message: 'You have reached your checks for now. Please try again later.' };
+  // Replacing is part of what they paid for: never stopped for want of a check credit (migration 213).
+  if (!q.allowed && q.reason !== 'no_credits') return { ok: false, message: 'You have reached your checks for now. Please try again later.' };
   let data;
   try { data = await require('../vehicle/gateway').full(toReg, await require('../vehicle/rcBackup').freeOpts({}, toReg)); }
   catch (e) { data = null; }

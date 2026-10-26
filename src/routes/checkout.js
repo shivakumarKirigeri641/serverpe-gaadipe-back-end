@@ -120,7 +120,8 @@ const sentTo = () => (WA_ON() ? 'in your WhatsApp chat' : 'in your email');
 /* The checkout's pre-fills (user, 2026-09-26). */
 // Email can be skipped only when the report is delivered in the WhatsApp chat;
 // a website purchase is delivered by email, so there it stays required.
-const emailIsOptional = (pay) => WA_ON() && pay.raw?.channel !== 'web';
+// A check pack (raw.checks, migration 213) delivers nothing by email, so an address is never required for it.
+const emailIsOptional = (pay) => Boolean(pay.raw?.checks) || (WA_ON() && pay.raw?.channel !== 'web');
 // A WhatsApp profile name as an invoice name: emoji and symbols dropped, and
 // nothing at all if what is left is not a name.
 const cleanName = (n) => {
@@ -250,6 +251,13 @@ router.get('/pay/:token', safe(async (req, res) => {
     });
   }
 
+  if (pay.status === 'paid' && pay.plan_kind === 'checks') {
+    return res.send(page('Already paid', `<div class="card">
+      <h1>This payment is already complete ✅</h1>
+      <p class="muted">Your ${Number(pay.raw?.checks) || 5} vehicle checks are ready to use. Send any vehicle number to check it.</p>
+      ${web ? `<button onclick="location.href=${esc(JSON.stringify(`${site}/chat`))}">Check a vehicle</button>`
+        : wayOut(`${site}/chat`, { wa: 'Back to WhatsApp', web: 'Check a vehicle' })}</div>`));
+  }
   if (pay.status === 'paid') {
     return res.send(page('Already paid', web ? `<div class="card">
       <h1>This payment is already complete ✅</h1>
@@ -302,6 +310,9 @@ router.get('/pay/:token', safe(async (req, res) => {
   const isReport = pay.plan_kind === 'report';
   // Replace vehicle (2026-10-13; pay/replace.js): monitoring moves from the old vehicle to this one.
   const isReplace = pay.plan_kind === 'replace';
+  // A check pack (migration 213): no vehicle - checks, and how long they last.
+  const isChecks = pay.plan_kind === 'checks';
+  const packSize = Number(pay.raw?.checks) || 5;
   const rep = pay.raw?.replace || {};
   /* A payment started on the website must end on the website: sending a web
      customer to WhatsApp would hand them to a different product than the one
@@ -318,19 +329,29 @@ router.get('/pay/:token', safe(async (req, res) => {
   // &amt= the rupees paid, for the website's Meta Pixel Purchase (user, 2026-10-22) — the amount only.
   const amt = Math.round(Number(pay.amount_paise) || 0) / 100;
   const backUrl = web
-    ? (isReplace ? `${site}/chat?open=subs&amt=${amt}` : `${site}/chat?paid=${encodeURIComponent(pay.reg_no || '1')}&amt=${amt}`)
+    ? (isReplace ? `${site}/chat?open=subs&amt=${amt}`
+      : isChecks ? `${site}/chat?checks=${packSize}&amt=${amt}`
+      : `${site}/chat?paid=${encodeURIComponent(pay.reg_no || '1')}&amt=${amt}`)
     : null;
   void WA_ON;
   const chatText = web ? 'Report' : '';
   const validDays = await settings.num('report_valid_days', 7);
-  const planLine = isReplace
+  const planLine = isChecks
+    ? `${packSize} vehicle checks · valid ${pay.duration_days || 30} days`
+    : isReplace
     ? `Replace vehicle · ${rep.from_reg || ''} → ${rep.to_reg || pay.reg_no || ''}`
     : isReport
     // The one-time report (REPORT11, 2026-10-25) says so; the ₹19 names its alerts.
     ? (pay.plan_monitoring === false ? 'Full vehicle report · one time' : `Full vehicle report + ${pay.duration_days || 28} days of alerts`)
     : `GaadiPe Watch · ${pay.duration_days || 28} days`;
   const where = web ? 'in your GaadiPe account' : 'on WhatsApp';
-  const benefits = isReplace
+  const benefits = isChecks
+    ? [`${packSize} vehicle checks — make, model, insurance, PUC, tax, fitness and challan status of any vehicle`,
+       `Valid for ${pay.duration_days || 30} days; checking the same vehicle again within an hour is free`,
+       'Use them on WhatsApp or on gaadipe.in',
+       'Unused checks expire and are not refunded',
+       `GST invoice ${where}`]
+    : isReplace
     ? [`Your running monitoring moves from ${rep.from_reg || 'the old vehicle'} to ${rep.to_reg || pay.reg_no || 'this vehicle'} — same end date`,
        'New challans watched, and a warning before insurance, PUC, road tax, fitness or permit expires',
        `${rep.from_reg || 'The old vehicle'} comes off your list and its alerts stop; its report and invoice stay`,
@@ -358,7 +379,9 @@ router.get('/pay/:token', safe(async (req, res) => {
 </div>` : ''}
 <div id="done" class="card" style="display:none">
   <h1>Payment successful ✅</h1>
-  <p class="muted" style="margin:0 0 14px">${isReplace
+  <p class="muted" style="margin:0 0 14px">${isChecks
+    ? `${packSize} vehicle checks have been added. ${web ? 'Send any vehicle number in the chat to use one.' : 'The confirmation and GST invoice are on their way to your WhatsApp chat.'}`
+    : isReplace
     ? `Monitoring has moved from <b>${esc(rep.from_reg || '')}</b> to <b>${esc(rep.to_reg || pay.reg_no || '')}</b>. ${web ? 'It shows under My subscriptions.' : 'The confirmation and GST invoice are on their way to your WhatsApp chat.'}`
     : backUrl
     ? `Your full report for <b>${esc(pay.reg_no || '')}</b> is ready — it opens in your GaadiPe chat with a Download PDF button.`
@@ -370,7 +393,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   <p class="muted" id="mailedTo" style="margin:0 0 14px"></p>
   <p class="muted" style="margin:0 0 14px">${backUrl ? 'Taking you back to the chat…' : 'Opening WhatsApp…'}</p>
   ${backUrl
-    ? `<button onclick="location.href=${JSON.stringify(backUrl)}">${isReplace ? 'Open My subscriptions' : 'Open my report in the chat'}</button>`
+    ? `<button onclick="location.href=${JSON.stringify(backUrl)}">${isReplace ? 'Open My subscriptions' : isChecks ? 'Check a vehicle' : 'Open my report in the chat'}</button>`
     : waButton('Open WhatsApp', chatText)}
 </div>
 
@@ -383,7 +406,7 @@ router.get('/pay/:token', safe(async (req, res) => {
 -->
 <div id="main" style="padding-bottom:84px">
 <div class="card">
-  <div class="veh">${esc(pay.reg_no || '')}</div>
+  <div class="veh">${isChecks ? `🔢 ${packSize} checks` : esc(pay.reg_no || '')}</div>
   ${vehicleName ? `<div class="muted">${esc(vehicleName)}</div>` : ''}
   <div style="margin-top:8px;font-weight:700">${esc(planLine)}</div>
   ${pay.raw?.referral_credit_id && pay.plan_price_paise > grossPaise ? `<div class="muted">Referral reward (QuizPe): ₹${(pay.plan_price_paise / 100).toFixed(2)} → ₹${gross.toFixed(2)}</div>` : ''}
@@ -530,7 +553,7 @@ router.get('/pay/:token', safe(async (req, res) => {
       amount: ${pay.amount_paise},
       currency: 'INR',
       name: 'GaadiPe',
-      description: ${JSON.stringify(`${isReport ? 'Full report' : 'Watch'} — ${pay.reg_no || ''}`)},
+      description: ${JSON.stringify(isChecks ? `${packSize} vehicle checks` : `${isReport ? 'Full report' : 'Watch'} — ${pay.reg_no || ''}`)},
       prefill: { contact: ${JSON.stringify('+91' + String(pay.mobile).slice(-10))},
                  name: bname.value.trim(),
                  email: bemail.value.trim() },
@@ -650,7 +673,8 @@ router.post('/pay/:token/verify', express.json(), safe(async (req, res) => {
 
   if (result.activated) {
     console.log('[checkout] activated %s from the browser callback',
-      result.oneTime ? `one-time report (payment ${result.payment.id})` : `subscription ${result.subscription.id}`);
+      result.oneTime ? `one-time report (payment ${result.payment.id})`
+        : result.checks ? `${result.checks} checks (payment ${result.payment.id})` : `subscription ${result.subscription.id}`);
     const { notifyPaid } = require('./payments');
     notifyPaid(result).catch(e => console.error('[checkout] notify:', e.message));
   } else {

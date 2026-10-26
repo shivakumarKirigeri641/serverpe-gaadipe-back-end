@@ -82,12 +82,14 @@ async function nextNumber(c) {
  */
 /** The payment an invoice was for, with what it bought. */
 const PAY_SQL = `SELECT p.*, u.mobile, u.wa_profile_name, u.display_name, u.state_code, u.email,
-        v.reg_no, s.ends_on, s.starts_on, pl.kind AS plan_kind
+        v.reg_no, s.ends_on, s.starts_on, pl.kind AS plan_kind, pl.monitoring AS plan_monitoring, pl.duration_days AS plan_days
    FROM payments p
    JOIN users u ON u.id = p.user_id
    LEFT JOIN plans pl ON pl.id = p.plan_id
    LEFT JOIN subscriptions s ON s.id = p.subscription_id
-   LEFT JOIN vehicles v ON v.id = s.vehicle_id
+   -- The vehicle from the payment itself when there is no subscription (the ₹11 one-time report, 2026-10-26).
+   LEFT JOIN vehicles v ON v.id = coalesce(s.vehicle_id,
+     CASE WHEN p.raw->>'vehicle_id' ~ '^[0-9]+$' THEN (p.raw->>'vehicle_id')::bigint END)
   WHERE p.id = $1`;
 
 /**
@@ -141,9 +143,16 @@ function pdfInput(row, pay, business) {
         `GaadiPe Replace Vehicle — ${pay.raw?.replace?.from_reg || 'old vehicle'} to ${pay.raw?.replace?.to_reg || pay.reg_no || 'new vehicle'}`,
         pay.ends_on ? `Monitoring moved; alerts until ${fmtDate(pay.ends_on)}` : 'Monitoring moved to the new vehicle',
         'One-time fee, no renewal',
+      ].join('\n') : pay.plan_kind === 'checks' ? [
+        // A check pack (migration 213): checks, how long they last - no vehicle.
+        `GaadiPe Vehicle Checks — ${Number(pay.raw?.checks) || 5} checks`,
+        `Valid for ${pay.plan_days || 30} days from purchase`,
+        'One-time purchase, no renewal',
       ].join('\n') : pay.plan_kind === 'report' ? [
         pay.reg_no ? `GaadiPe Full Vehicle Report — ${pay.reg_no}` : 'GaadiPe Full Vehicle Report',
-        pay.starts_on && pay.ends_on
+        // The ₹11 one-time report has no alerts (2026-10-26: its invoice said "28 days of alerts").
+        pay.plan_monitoring === false ? 'One-time report, no monitoring'
+          : pay.starts_on && pay.ends_on
           ? `Alerts from ${fmtDate(pay.starts_on)} to ${fmtDate(pay.ends_on)}`
           : '28 days of alerts',
         'One-time purchase, no renewal',

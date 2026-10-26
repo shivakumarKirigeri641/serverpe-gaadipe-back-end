@@ -67,6 +67,7 @@ const UNLIMITED = new Set(['internal']);
  */
 async function check(userId, regNo) {
   const tier = await tierOf(userId);
+  if (PACK_TIERS.has(tier) && await packsOn()) return packCheck(userId, regNo, tier);
   const enforced = await settings.bool('checks_enforce', false);
 
   // Unlimited tiers short-circuit: no counting, no queries, no surprises.
@@ -123,6 +124,82 @@ async function check(userId, regNo) {
   return { allowed: true, tier, used: today.n, limit: dailyLimit, repeat: false, enforced };
 }
 
+/*
+ * ONE FREE CHECK, THEN CHECK CREDITS (user, 2026-10-26: "1 customer, 1 vehicle check free ... it is becoming a
+ * loss"; migration 213). For a customer (stranger / trial): the first free_checks_lifetime (1) found checks are
+ * free; after that each new check needs a credit from check_credits - a ₹20 pack of 5, or the 5 that come with
+ * every report - used when the check is recorded. Never counted: a repeat of the same vehicle inside the repeat
+ * window, a vehicle they hold a valid report for, and a vehicle that was not found (no provider charges for it).
+ * Fleet / partner plans keep their daily caps; GaadiPe's own numbers stay unlimited.
+ */
+const PACK_TIERS = new Set(['stranger', 'trial']);
+const packsOn = () => settings.bool('check_packs_enabled', true);
+
+async function ownsValidReport(userId, regNo) {
+  const r = await db.one(
+    `SELECT 1 AS yes FROM vehicle_reports WHERE user_id = $1 AND reg_no = $2 AND valid_until > now() LIMIT 1`,
+    [userId, regNo]).catch(() => null);
+  return Boolean(r);
+}
+
+async function freeUsed(userId) {
+  const r = await db.one(
+    `SELECT count(*)::int AS n FROM event_log WHERE kind = 'vehicle_check' AND user_id = $1
+        AND coalesce(detail->>'found', 'true') <> 'false' AND coalesce(detail->>'credit', '') = ''`, [userId]);
+  return r.n;
+}
+
+/** Credits left, and when the soonest of them expires. */
+async function creditsOf(userId) {
+  const r = await db.one(
+    `SELECT coalesce(sum(credits - used), 0)::int AS left, min(expires_at) AS next_expiry, max(expires_at) AS last_expiry
+       FROM check_credits WHERE user_id = $1 AND expires_at > now() AND used < credits`, [userId]);
+  return { left: r.left, nextExpiry: r.next_expiry, lastExpiry: r.last_expiry };
+}
+
+async function packCheck(userId, regNo, tier) {
+  const base = { tier, packs: true, enforced: true, limit: null };
+  const repeatWindow = await settings.num('checks_repeat_window_minutes', 60);
+  const recentSame = await db.one(
+    `SELECT 1 FROM event_log WHERE kind = 'vehicle_check' AND user_id = $1 AND detail->>'reg_no' = $2
+        AND created_at > now() - ($3 || ' minutes')::interval LIMIT 1`, [userId, regNo, String(repeatWindow)]);
+  if (recentSame) return { ...base, allowed: true, repeat: true, used: 0 };
+  if (await ownsValidReport(userId, regNo)) return { ...base, allowed: true, repeat: false, owned: true, used: 0 };
+
+  const burstLimit = await settings.num('checks_burst_per_minute', 5);
+  const burst = await db.one(
+    `SELECT count(*)::int AS n FROM event_log WHERE kind = 'vehicle_check' AND user_id = $1
+        AND created_at > now() - interval '1 minute'`, [userId]);
+  if (burst.n >= burstLimit) return { ...base, allowed: false, reason: 'burst', repeat: false, used: burst.n, limit: burstLimit };
+
+  const freeLimit = await settings.num('free_checks_lifetime', 1);
+  const used = await freeUsed(userId);
+  if (used < freeLimit) return { ...base, allowed: true, repeat: false, free: true, used, limit: freeLimit };
+  const c = await creditsOf(userId);
+  if (c.left > 0) return { ...base, allowed: true, repeat: false, credit: true, used, creditsLeft: c.left };
+  return { ...base, allowed: false, reason: 'no_credits', repeat: false, used, limit: freeLimit };
+}
+
+/** Use one credit, the soonest to expire. Returns true if one was there. */
+async function consume(userId) {
+  const r = await db.one(
+    `UPDATE check_credits SET used = used + 1
+      WHERE id = (SELECT id FROM check_credits WHERE user_id = $1 AND expires_at > now() AND used < credits
+                   ORDER BY expires_at, id LIMIT 1 FOR UPDATE SKIP LOCKED)
+      RETURNING id`, [userId]);
+  return Boolean(r);
+}
+
+/** Add credits for a payment (pay/billing.activate) - once per payment. */
+async function grant(client, { userId, paymentId = null, source, credits, days }) {
+  const q = client || db;
+  await q.query(
+    `INSERT INTO check_credits (user_id, payment_id, source, credits, expires_at)
+     VALUES ($1, $2, $3, $4, now() + make_interval(days => $5))
+     ON CONFLICT (payment_id) WHERE payment_id IS NOT NULL DO NOTHING`,
+    [userId, paymentId, source, credits, days]);
+}
+
 /** The calendar month in IST, as SQL. */
 const MONTH = `date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata'`;
 
@@ -155,6 +232,17 @@ async function monthOf(userId, tier) {
 async function left(userId) {
   const tier = await tierOf(userId);
   if (UNLIMITED.has(tier)) return { unlimited: true, tier };
+  /* Pack mode (migration 213): { packs, free_left, credits: { left, expires } } - and today/month kept in the old
+     shape (left = everything they can still check) so older screens still read a number. */
+  if (PACK_TIERS.has(tier) && await packsOn()) {
+    const freeLimit = await settings.num('free_checks_lifetime', 1);
+    const freeLeft = Math.max(0, freeLimit - await freeUsed(userId));
+    const c = await creditsOf(userId);
+    const all = freeLeft + c.left;
+    return { tier, enforced: true, packs: true, free_left: freeLeft,
+      credits: { left: c.left, expires: c.nextExpiry, last_expiry: c.lastExpiry },
+      today: { used: 0, limit: all, left: all }, month: null };
+  }
   const dailyLimit = await settings.num(DAILY_KEY[tier] || DAILY_KEY.stranger, 20);
   const today = await db.one(
     `SELECT count(*)::int AS n FROM event_log
@@ -176,11 +264,16 @@ async function left(userId) {
  * check, distinct or repeated"), so it never counts towards a limit — every
  * limit above reads vehicle_check only.
  */
-async function record(userId, regNo, { repeat = false, found = true, channel = null } = {}) {
+async function record(userId, regNo, { repeat = false, found = true, channel = null, q = null } = {}) {
+  /* Pack mode: a check made on a credit uses it now - only when the vehicle was found (a "not found" costs no
+     provider anything) - and is marked, so it is not mistaken for the free one. */
+  let credit = false;
+  if (q?.packs && q.credit && !repeat && found) credit = await consume(userId).catch(() => false);
   // channel 'web' marks a website check, so the website admin can count its own (2026-10-07).
   await db.query(
     `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, $2, $3)`,
-    [userId, repeat ? 'vehicle_check_repeat' : 'vehicle_check', JSON.stringify({ reg_no: regNo, found, ...(channel ? { channel } : {}) })]);
+    [userId, repeat || q?.owned ? 'vehicle_check_repeat' : 'vehicle_check',
+     JSON.stringify({ reg_no: regNo, found, ...(channel ? { channel } : {}), ...(credit ? { credit: 'used' } : {}), ...(q?.owned ? { owned: true } : {}) })]);
   // The plain-words activity log (2026-10-08).
   try {
     const u = userId ? await db.one(`SELECT coalesce(display_name, wa_profile_name) AS name, mobile FROM users WHERE id = $1`, [userId]) : null;
@@ -189,4 +282,4 @@ async function record(userId, regNo, { repeat = false, found = true, channel = n
   } catch { /* the log never stops a check */ }
 }
 
-module.exports = { check, record, tierOf, left };
+module.exports = { check, record, tierOf, left, grant, creditsOf, packsOn };

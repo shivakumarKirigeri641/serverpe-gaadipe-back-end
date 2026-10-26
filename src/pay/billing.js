@@ -169,6 +169,32 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
       return { activated: true, subscription: moved.sub, endsOn: moved.endsOn, payment: pay, vehicleId, plan, replaced: pay.raw?.replace || null };
     }
 
+    /* CHECK CREDITS (migration 213, util/quota.js): every report adds checks_per_report_bonus (5) for
+       check_credit_days (30); a pack (CHECKS5) is nothing but its checks. Granted once per payment. */
+    const creditDays = await settings.num('check_credit_days', 30);
+    if (plan?.kind === 'report' && await settings.bool('check_packs_enabled', true)) {
+      await require('../util/quota').grant(c, { userId: pay.user_id, paymentId: pay.id, source: 'report',
+        credits: await settings.num('checks_per_report_bonus', 5), days: creditDays });
+    }
+    if (plan?.kind === 'checks') {
+      await c.query(
+        `UPDATE payments SET status = 'paid', payment_id = $2, order_id = $3, paid_at = now(),
+                amount_paise = CASE WHEN $5 THEN 0 ELSE amount_paise END,
+                raw = COALESCE(raw, '{}'::jsonb) || $4::jsonb
+                      || CASE WHEN $5 THEN jsonb_build_object('test_amount_paise', amount_paise) ELSE '{}'::jsonb END
+          WHERE id = $1`,
+        [pay.id, razorpayPaymentId, orderId || null, JSON.stringify({ gateway: raw || {} }), test]);
+      const credits = Number(pay.raw?.checks) || 5;
+      await require('../util/quota').grant(c, { userId: pay.user_id, paymentId: pay.id, source: 'pack',
+        credits, days: plan.duration_days || creditDays });
+      await c.query(
+        `INSERT INTO event_log (user_id, kind, detail) VALUES ($1, 'payment_paid', $2)`,
+        [pay.user_id, JSON.stringify({ payment_id: razorpayPaymentId, amount_paise: pay.amount_paise,
+          checks: credits, plan: plan.code })]);
+      const expires = new Date(Date.now() + (plan.duration_days || creditDays) * DAY);
+      return { activated: true, subscription: null, endsOn: expires, checks: credits, payment: pay, vehicleId: null, plan };
+    }
+
     /* THE ONE-TIME REPORT (REPORT11, migration 212): paid, and nothing more — no subscription, no watch, no
        renewal. The report itself is issued by the delivery (routes/payments.js), as for the ₹19. */
     if (plan?.kind === 'report' && plan.monitoring === false) {

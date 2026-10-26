@@ -158,6 +158,7 @@ async function handle(body) {
     return;
   }
   if (result.oneTime) console.log('[pay] one-time report paid (payment %d)', result.payment.id);
+  else if (result.checks) console.log('[pay] check pack paid: %d checks (payment %d)', result.checks, result.payment.id);
   else console.log('[pay] activated subscription %d until %s',
     result.subscription.id, result.endsOn.toISOString().slice(0, 10));
 
@@ -183,6 +184,11 @@ async function notifyPaid(result) {
   // Replace vehicle (2026-10-13): its own confirmation — no report, so not the purchase email.
   if (result.plan?.kind === 'replace') {
     await notifyReplaced(result, user).catch((e) => console.error('[pay] replace confirmation failed:', e.message));
+    return;
+  }
+  // A check pack (migration 213): the checks, until when, and the GST invoice — no report, so not the purchase email.
+  if (result.plan?.kind === 'checks') {
+    await notifyChecks(result, user).catch((e) => console.error('[pay] checks confirmation failed:', e.message));
     return;
   }
 
@@ -513,6 +519,28 @@ async function notifyReplaced(result, user) {
   await require('../site/push').toCustomer(result.payment.user_id, {
     title: `✅ ${r.to_reg} replaces ${r.from_reg}`, body: `Monitoring moved — alerts until ${ends}.`,
     url: '/chat?open=subs', tag: `replace-${result.payment.id}`,
+  }).catch(() => 0);
+}
+
+/* A CHECK PACK PAID (user, 2026-10-26; migration 213): how many checks they now have, until when, and the GST
+   invoice. Ready for a vehicle number straight away. */
+async function notifyChecks(result, user) {
+  const send = require('../whatsapp/send');
+  const c = await require('../util/quota').creditsOf(result.payment.user_id);
+  const day = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+  const amount = (Number(result.payment.amount_paise) / 100).toFixed(Number(result.payment.amount_paise) % 100 ? 2 : 0);
+  await db.query(`UPDATE whatsapp_sessions SET state = 'owner_start', modified_at = now() WHERE mobile = $1`, [user.mobile]).catch(() => {});
+  const body = `✅ *${result.checks} vehicle checks added*\n\n`
+    + `You now have *${c.left}* check${c.left === 1 ? '' : 's'}${result.endsOn ? ` — this pack is valid till *${day(result.endsOn)}*` : ''}.\n\n`
+    + 'Send any vehicle number, like *KA01AB1234*, to use one. Checking the same vehicle again within an hour is free.\n\n'
+    + `₹${amount} paid — your GST invoice follows.`;
+  const tapped = await send.buttons(user.mobile, body, [{ id: 'check_another', title: 'Check vehicle' }, { id: 'menu', title: 'Menu' }])
+    .catch(() => ({ ok: false }));
+  if (!tapped.ok) await send.text(user.mobile, body).catch(() => {});
+  await sendInvoice(user, result.payment.id);
+  await require('../site/push').toCustomer(result.payment.user_id, {
+    title: `✅ ${result.checks} vehicle checks added`, body: `You have ${c.left} checks${result.endsOn ? `, valid till ${day(result.endsOn)}` : ''}.`,
+    url: '/chat', tag: `checks-${result.payment.id}`,
   }).catch(() => 0);
 }
 

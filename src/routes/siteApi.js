@@ -102,6 +102,14 @@ router.get('/pricing', safe(async (_req, res) => {
     price_paise: plan?.price_paise ?? null,
     // The one-time report, no monitoring (2026-10-25, REPORT11) — null when it is off.
     one_time_paise: (await billing.oneTimePlan().catch(() => null))?.price_paise ?? null,
+    // Check packs (migration 213): one free check, then this pack — null while packs are off.
+    check_pack: await (async () => {
+      if (!(await settings.bool('check_packs_enabled', true))) return null;
+      const p = await require('../pay/packs').packPlan().catch(() => null);
+      return p ? { price_paise: Number(p.price_paise), checks: await settings.num('check_pack_checks', 5),
+        days: p.duration_days || 30, per_report: await settings.num('checks_per_report_bonus', 5),
+        free: await settings.num('free_checks_lifetime', 1) } : null;
+    })(),
     // The renewal price, as set in admin (2026-10-14) — the site's "₹11 to renew" reads it.
     renewal_paise: plan?.renewal_paise ?? null,
     // Replace vehicle (2026-10-20: "update marketing site that we give renewal & replace"):
@@ -771,9 +779,20 @@ router.get('/vehicles/:regNo', safe(async (req, res) => {
   if (!parsed.ok) return badPlate(req, res, parsed);
 
   const paid = await reports.validFor(req.user.id, parsed.regNo);
+  /* ONLY A VEHICLE OF THEIR OWN LIST (2026-10-26, check packs): this opens "My vehicles"; a number never checked
+     here would otherwise be a free check outside the count. Anything new goes through POST /check. */
+  if (!paid) {
+    const mine = await db.one(
+      `SELECT 1 AS yes FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
+        WHERE uv.user_id = $1 AND v.reg_no = $2 AND uv.hidden_at IS NULL LIMIT 1`, [req.user.id, parsed.regNo]).catch(() => null);
+    if (!mine) {
+      return res.status(409).json({ error: 'check_first', message: 'Check this vehicle first — type its number in the chat.' });
+    }
+  }
   // Their own vehicle: today's record first (vehicle/rcConfirm.ownerRefresh, once a day per vehicle).
   if (paid) await require('../vehicle/rcConfirm').ownerRefresh({ regNo: parsed.regNo, userId: req.user.id, why: 'owner view · website' });
-  const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' } : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo, { who: `u:${req.user.id}` }));
+  // A vehicle already on their list: from the saved record, never a new paid lookup.
+  const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' } : { backup: 0, rc_saved: 1 });
   if (!data?.success) {
     return res.status(data?.error === 'vehicle_not_found' ? 404 : 503).json({
       error: data?.error || 'unavailable',
@@ -903,6 +922,17 @@ router.post('/check', safe(async (req, res) => {
                             AND created_at >= date_trunc('month', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata')`,
       [req.user.id, JSON.stringify({ limit: q.limit, used: q.used, bonus: q.bonus || 0, reg_no: parsed.regNo })]).catch(() => {});
   }
+  // One free check, then a pack (migration 213): the offer, with its price, for the site to show a Buy button.
+  if (!q.allowed && q.reason === 'no_credits') {
+    const p = await require('../pay/packs').packPlan().catch(() => null);
+    const n = await settings.num('check_pack_checks', 5);
+    return res.status(402).json({
+      error: 'checks_needed', reason: 'no_credits',
+      message: `Your free check is used. Get ${n} vehicle checks for ₹${p ? Math.round(p.price_paise / 100) : 20} (GST included), valid ${p?.duration_days || 30} days — every full report you buy adds ${n} more.`,
+      pack: p ? { checks: n, price_paise: Number(p.price_paise), days: p.duration_days || 30 } : null,
+      quota: await quota.left(req.user.id).catch(() => null),
+    });
+  }
   if (!q.allowed) {
     return res.status(429).json({
       error: 'quota',
@@ -927,8 +957,10 @@ router.post('/check', safe(async (req, res) => {
   const paid = await reports.validFor(req.user.id, parsed.regNo);
   // Their own vehicle checked again: today's record first (vehicle/rcConfirm.ownerRefresh).
   if (paid) await require('../vehicle/rcConfirm').ownerRefresh({ regNo: parsed.regNo, userId: req.user.id, why: 'owner check · website' });
-  const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' } : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo, { who: `u:${req.user.id}` }));
-  await quota.record(req.user.id, parsed.regNo, { repeat: q.repeat, found: data?.success === true, channel: 'web' });
+  // A check on a paid credit gets the full lookup (migration 213); the free one stays under the daily cap.
+  const data = await gateway.full(parsed.regNo, paid ? { challans: 'all' }
+    : q.credit ? {} : await require('../vehicle/rcBackup').freeOpts({}, parsed.regNo, { who: `u:${req.user.id}` }));
+  await quota.record(req.user.id, parsed.regNo, { repeat: q.repeat, found: data?.success === true, channel: 'web', q });
 
   if (!data?.success) {
     return res.status(data?.error === 'vehicle_not_found' ? 404 : 503).json({
@@ -1052,6 +1084,21 @@ const DECLARATIONS = {
 };
 const langOf = (v) => (v === 'hi' ? 'hi' : 'en');
 const DECLARATION = DECLARATIONS.en;
+
+/* A CHECK PACK (user, 2026-10-26; migration 213, pay/packs.js): ₹20 for 5 checks, no vehicle. The checkout page
+   asks for the invoice's name and state; the policies are agreed there by paying, as on WhatsApp. */
+router.post('/checks/buy', safe(async (req, res) => {
+  let row;
+  try {
+    row = await require('../pay/packs').startOrder({ user: req.user, channel: 'web' });
+  } catch (e) {
+    return res.status(e.code === 'gateway' ? 502 : 503).json({ error: e.code || 'unavailable', message: e.message });
+  }
+  await activity.record(req, { action: 'pay_start', detail: { payment_row: String(row.id), amount_paise: row.amount_paise, checks: row.raw?.checks } });
+  const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+  res.json({ ok: true, pay_path: `/pay/${row.checkout_token}`, pay_url: base ? `${base}/pay/${row.checkout_token}` : null,
+    amount_paise: row.amount_paise });
+}));
 
 router.post('/buy', safe(async (req, res) => {
   const parsed = plate.parse(req.body?.reg_no);
