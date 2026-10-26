@@ -412,6 +412,9 @@ router.get('/pay/:token', safe(async (req, res) => {
   ${pay.raw?.referral_credit_id && pay.plan_price_paise > grossPaise ? `<div class="muted">Referral reward (QuizPe): ₹${(pay.plan_price_paise / 100).toFixed(2)} → ₹${gross.toFixed(2)}</div>` : ''}
   <div style="margin:10px 0 2px;font-size:34px;font-weight:900;letter-spacing:-.5px">₹${grossPaise % 100 ? gross.toFixed(2) : gross.toFixed(0)}
     <span style="font-size:14px;font-weight:600;color:#5d6b67">· GST included</span></div>
+  <!-- THE GST BREAKUP IN SIGHT (user, 2026-10-26: "in checkout, show at least the GST breakup"): taxable value + GST,
+       split as CGST + SGST or IGST by the state chosen below (renderTax). -->
+  <div id="gstLine" style="font-size:13px;color:#41514e">₹${taxable.toFixed(2)} + GST ₹${(taxPaise / 100).toFixed(2)} (18%)</div>
   <button id="pay" style="margin-top:10px">Pay ₹${grossPaise % 100 ? gross.toFixed(2) : gross.toFixed(0)} securely</button>
   <div id="err" class="err"></div>
   <p style="margin:10px 0 0;text-align:center;font-size:13px;color:#41514e">🔒 Secured by <b>Razorpay</b> · UPI, cards, netbanking</p>
@@ -485,7 +488,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   var pay2 = document.getElementById('pay2'), billedTo = document.getElementById('billedTo'),
       billed = document.getElementById('billed'), ready = false;
   var EMAIL_RE = /^[^@\\s]+@[^@\\s]+\\.[^@\\s]{2,}$/;
-  var HOME = ${JSON.stringify(home)}, TAX = ${taxPaise}, CGST = ${cgstPaise}, EMAIL_OPTIONAL = ${emailOptional};
+  var HOME = ${JSON.stringify(home)}, TAX = ${taxPaise}, CGST = ${cgstPaise}, TAXABLE = ${basePaise}, EMAIL_OPTIONAL = ${emailOptional};
   function rs(p) { return '₹' + (p / 100).toFixed(2); }
   // The tax lines follow the state: CGST + SGST at home, IGST anywhere else.
   function renderTax() {
@@ -496,6 +499,9 @@ router.get('/pay/:token', safe(async (req, res) => {
       ? '<div class="row"><span>CGST @ 9%</span><b>' + rs(CGST) + '</b></div>'
         + '<div class="row"><span>SGST @ 9%</span><b>' + rs(TAX - CGST) + '</b></div>'
       : '<div class="row"><span>IGST @ 18%</span><b>' + rs(TAX) + '</b></div>';
+    // The line under the price says the same split.
+    document.getElementById('gstLine').textContent = rs(TAXABLE) + ' + GST ' + rs(TAX)
+      + (!s ? ' (18%)' : s === HOME ? ' (CGST ' + rs(CGST) + ' + SGST ' + rs(TAX - CGST) + ')' : ' (IGST 18%)');
     var mail = bemail.value.trim();
     // Ready to pay? The buttons stay tappable either way: a tap with something missing opens the details and
     // says what (a disabled button cannot be tapped, and so cannot explain itself).
