@@ -3,8 +3,9 @@
  * is disabled, you need a quick script to hide the button"; "remove 'GaadiPe is now fully on the web'").
  * The site reads these from /notice (cached up to a minute) — no build, no upload, no restart.
  *
- *   node scripts/wa-button.js off        hide "Try in WhatsApp"
- *   node scripts/wa-button.js on         show "Try in WhatsApp"
+ *   node scripts/wa-button.js off        "Check a vehicle" opens the web chat
+ *   node scripts/wa-button.js on         "Check a vehicle" opens WhatsApp (since 2026-10-26; was a separate
+ *                                        "Try in WhatsApp" button)
  *   node scripts/wa-button.js web-only   WhatsApp disabled: hide the button AND show "GaadiPe is now fully
  *                                        on the web" (the yellow sign and the green top bar)
  *   node scripts/wa-button.js whatsapp   WhatsApp live: show the button, hide the "fully on the web" notices
@@ -29,7 +30,8 @@ const cmd = (process.argv[2] || 'status').toLowerCase();
   if (PLAN[cmd]) for (const [k, v] of Object.entries(PLAN[cmd])) await set(k, v);
   const { rows } = await db.query(`SELECT key, value FROM app_settings WHERE key IN ('site_whatsapp_try', 'site_moved_notice', 'site_notice_on')`);
   const v = (k, d) => { const r = rows.find((x) => x.key === k); return r ? /^(1|true|yes|on)$/i.test(String(r.value)) : d; };
-  console.log(`"Try in WhatsApp" button            ${v('site_whatsapp_try', true) ? 'SHOWN' : 'hidden'}`);
+  // Since 2026-10-26 this switch sends every "Check a vehicle" on gaadipe.in to WhatsApp (no separate button).
+  console.log(`"Check a vehicle" opens             ${v('site_whatsapp_try', true) ? 'WHATSAPP (+91 79960 83415)' : 'the web chat'}`);
   console.log(`"Fully on the web" yellow sign      ${v('site_moved_notice', false) ? 'SHOWN' : 'hidden'}`);
   console.log(`Green top bar (site notice)         ${v('site_notice_on', false) ? 'SHOWN' : 'hidden'}`);
   if (PLAN[cmd]) console.log('\nVisitors see the change within a minute (refresh once).');
