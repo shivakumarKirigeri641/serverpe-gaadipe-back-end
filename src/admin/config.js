@@ -162,7 +162,6 @@ const GROUPS = [
     ['free_check_backup_per_day', 'Website checks before sign-in: IDSPay calls per day', 'The first free checks on gaadipe.in, before sign-in. 100 by default; past it they stop at eChallan.app.'],
     ['rc_owner_refresh_hours', 'Paying customer’s own vehicle: refresh at most every (hours)', 'Re-checked or its report opened: a fresh RC at most this often. 24 by default.'],
     ['rc_confirm_days', 'Before an expiry alert: refresh at most every (days)', 'So a renewed PUC or insurance is seen before warning. 3 by default.'],
-    ['ulip_vahan_second_format', 'Also try ULIP VAHAN/01 when VAHAN/04 has no data (true / false)', 'false = one ULIP call, then eChallan.app and IDSPay.'],
   ]],
   // The free second source (2026-10-05); may start charging ₹1 a call (2026-10-08).
   ['eChallan.app (second RC source)', [

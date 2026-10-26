@@ -3,23 +3,14 @@
  * ---------------------------------------------------------------------------
  * Registration certificate (RC).
  *
- * ULIP exposes the same vehicle through six datasets — 01/02/03 return XML
- * keyed on vehicle number, chassis and engine; 04/05/06 return the same in
- * JSON. We use the two keyed on the vehicle number:
+ * ULIP exposed the same vehicle through six datasets; since the ministry's notice of 2026-10-26 only VAHAN/04
+ * (JSON, keyed on the vehicle number) and /05 remain, and VAHAN/04 answers GOODS VEHICLES ONLY, with limited
+ * fields. We use VAHAN/04 alone:
  *
- *   VAHAN/04 — JSON, richer. Primary.
- *   VAHAN/01 — flat XML.     Fallback.
- *
- * THE FALLBACK RULE, which is the point of this file:
- *
- *   /04 returns data                    -> done
- *   /04 says code 231 (not found)       -> STOP. Do not call /01.
- *   /04 fails any other way             -> try /01
- *
- * The previous implementation could not tell those apart — it collapsed
- * "mapping error" and "no such vehicle" into the same null and always fell
- * back — so every mistyped plate cost two API calls instead of one. Free while
- * ULIP is free; a permanent tax on the free-check funnel once it is not.
+ *   /04 returns data with its dates     -> done
+ *   /04 returns data without the dates  -> a paid lookup asks the full source (Way2API / IDSPay) for them
+ *   /04 says not found, or fails        -> eChallan.app, then (paid lookups) Way2API / IDSPay — ULIP's
+ *                                          "not found" is not final: it means "not a goods vehicle" too
  *
  * ON PII: ULIP masks at source. Owner name arrives as "S********R V K******I",
  * chassis and engine partly starred, address as district + pincode, mobile
@@ -29,7 +20,6 @@
  */
 
 const { post, OUTCOME } = require('./client');
-const { config } = require('../config');
 
 const blank = (v) => {
   const s = v == null ? '' : String(v).trim();
@@ -288,37 +278,50 @@ async function tryV4(regNo) {
   return { ...r, data: null, source: 'VAHAN/04' };
 }
 
-async function tryV1(regNo) {
-  const r = await post('VAHAN/01', { vehiclenumber: regNo });
-  if (r.outcome === OUTCOME.FOUND) {
-    const data = mapAny(regNo, r.payload);
-    if (usable(data)) { noteGaps('VAHAN/01', regNo, data); return { ...r, data, source: 'VAHAN/01' }; }
-    console.warn(`[vahan] VAHAN/01 ${regNo}: "found" but unreadable or empty — ${shapeOf(r.payload)}`);
-    return { ...r, outcome: OUTCOME.RETRY, code: 'EMPTY_RECORD', message: 'VAHAN/01 returned no usable record', data: null, source: 'VAHAN/01' };
-  }
-  return { ...r, data: null, source: 'VAHAN/01' };
-}
+// VAHAN/01 (flat XML) was discontinued by the ministry (ULIP notice, 2026-10-26): no tryV1 any more, so it can
+// never be called. Its XML reader (mapXml) stays for answers that still arrive as XML.
 
 /**
  * Fetch RC, with the fallback rule described at the top of this file.
  * `calls` lists every physical request made, so cost stays measurable.
  */
+/*
+ * ULIP'S NOTICE OF 2026-10-26: "VAHAN/04 will provide responses for goods vehicles only", "the responses currently
+ * contain limited data fields", and "VAHAN/01, /02, /03 and /06 have been discontinued".
+ *   - VAHAN/01 is never called again, whatever ULIP_VAHAN_PRIMARY or ulip_vahan_second_format say.
+ *   - ULIP's "not found" is no longer final: for any vehicle that is not a goods vehicle it says so about a
+ *     vehicle that exists. The free source (eChallan.app) and, for a paid lookup, Way2API / IDSPay decide.
+ *   - A goods vehicle's ULIP answer without its key dates (insurance, fitness, tax) is "limited": a paid lookup
+ *     goes on to the full source for the dates; a free one keeps what ULIP gave.
+ */
+const KEY_DATES = ['insurance_upto', 'fitness_upto', 'tax_upto'];
+const limited = (d) => KEY_DATES.every((k) => d?.[k] == null || d[k] === '');
+
 async function fetchRc(regNo, opts = {}) {
   const calls = [];
-  const primaryIsXml = config.ulip.vahanPrimary === '01';
-
-  const first = primaryIsXml ? await tryV1(regNo) : await tryV4(regNo);
+  // Always VAHAN/04: VAHAN/01 is discontinued (2026-10-26), so ULIP_VAHAN_PRIMARY no longer matters.
+  const first = await tryV4(regNo);
   calls.push({ path: first.path, outcome: first.outcome, code: first.code, ms: first.durationMs });
 
   if (first.outcome === OUTCOME.FOUND) {
+    if (limited(first.data) && !opts.noBackup && !opts.ulipOnly) {
+      console.warn(`[vahan] ${regNo}: VAHAN/04 answered without insurance / fitness / tax dates — asking the full source`);
+      // eChallan.app is skipped here: it has make and model only, never the dates that are missing.
+      const fuller = await backup(regNo, calls, { ...opts, skipFreeSource: true }, { ok: true, data: first.data, source: first.source, calls });
+      // The full source answered: use it. It did not: what ULIP gave still stands.
+      if (fuller?.ok && fuller.data && !limited(fuller.data)) return fuller;
+      return { ok: true, data: first.data, source: first.source, calls };
+    }
     return { ok: true, data: first.data, source: first.source, calls };
   }
 
-  // The vehicle genuinely is not in VAHAN. No other dataset will find it, so
-  // stop here rather than paying for a second lookup to be told the same thing.
+  // ULIP's "not found" is not final any more (goods vehicles only): the other sources are asked. The VAHAN
+  // watchdog (ulipOnly) still hears it as it is.
   if (first.outcome === OUTCOME.NOT_FOUND) {
-    return { ok: false, notFound: true, data: null, source: first.source,
-             code: first.code, error: first.message || 'Vehicle not found in the vehicle records', calls };
+    const notFound = { ok: false, notFound: true, data: null, source: first.source,
+      code: first.code, error: first.message || 'Vehicle not found in the vehicle records', calls };
+    if (opts.ulipOnly) return notFound;
+    return backup(regNo, calls, opts, notFound);
   }
 
   /* ULIP'S OWN DAILY LIMIT (2026-10-07): "Daily API limit exceeded for your
@@ -338,30 +341,9 @@ async function fetchRc(regNo, opts = {}) {
   }
 
   /* ONE ULIP CALL — VAHAN/04 ONLY (user, 2026-10-20: "ULIP is asked twice -> call once only, that's
-     VAHAN/04"). ULIP's VAHAN answers yellow-plate (commercial) vehicles only; for a private one both
-     formats come back empty, so the second only added a second or two before eChallan.app and IDSPay.
-     Straight to them now. ulip_vahan_second_format = true brings the VAHAN/01 retry back. */
-  if (!(await require('../util/settings').bool('ulip_vahan_second_format', false))) {
-    return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null, code: first.code,
-             error: 'The vehicle records source is not responding. Please try again in a few minutes.', calls });
-  }
-
-  // Anything else — mapping error, timeout, 5xx — is worth a second try on the
-  // other format, which fails independently.
-  const second = primaryIsXml ? await tryV4(regNo) : await tryV1(regNo);
-  calls.push({ path: second.path, outcome: second.outcome, code: second.code, ms: second.durationMs });
-
-  if (second.outcome === OUTCOME.FOUND) {
-    console.warn(`[vahan] ${regNo} served by ${second.source} after ${first.source} failed (${first.code})`);
-    return { ok: true, data: second.data, source: second.source, fallback: true, calls };
-  }
-  if (second.outcome === OUTCOME.NOT_FOUND) {
-    return { ok: false, notFound: true, data: null, source: second.source,
-             code: second.code, error: second.message || 'Vehicle not found in the vehicle records', calls };
-  }
-
-  return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null,
-           code: second.code || first.code,
+     VAHAN/04"; ULIP 2026-10-26: VAHAN/01 discontinued, so there is no second format any more). Straight to
+     eChallan.app, then Way2API / IDSPay. */
+  return backup(regNo, calls, opts, { ok: false, notFound: false, data: null, source: null, code: first.code,
            error: 'The vehicle records source is not responding. Please try again in a few minutes.', calls });
 }
 
@@ -382,7 +364,8 @@ async function backup(regNo, calls, opts, failure) {
      sponsored for now). echallan_app_paid_only (off) keeps it for paid reports
      too — free checks and background jobs (noBackup) then stop at ULIP. Their
      "pending verification" answers cost nothing either way. */
-  const skipFree = opts.noBackup && await require('../util/settings').bool('echallan_app_paid_only', false);
+  const skipFree = opts.skipFreeSource
+    || (opts.noBackup && await require('../util/settings').bool('echallan_app_paid_only', false));
   const free = skipFree ? null : await require('../vehicle/echallanApp').rc(regNo).catch((e) => {
     console.error('[vahan] eChallan.app threw:', e.message);
     return null;
