@@ -38,11 +38,19 @@ function needsConfirm(rc, days = 30) {
   });
 }
 
+/* NOT PAID FOR TWICE (user, 2026-10-26: "it's creating loss"). A free check fetched the full RC (Way2API,
+   IDSPay, ULIP) minutes before the customer paid, and the paid report's refresh bought the same record again.
+   A full RC stored within the window counts as confirmed too - only eChallan.app's four fields do not. */
 async function recentlyConfirmed(vehicleId, hours = null) {
-  const h = hours ?? Math.max(1, await settings.num('rc_confirm_days', 3)) * 24;
+  const h = Math.max(1, Math.round(hours ?? Math.max(1, await settings.num('rc_confirm_days', 3)) * 24));
   const row = await db.one(
     `SELECT 1 AS yes FROM event_log WHERE kind = 'rc_confirm' AND (detail->>'vehicle_id')::bigint = $1
-        AND created_at > now() - make_interval(hours => $2::int) LIMIT 1`, [vehicleId, Math.max(1, Math.round(h))]).catch(() => null);
+        AND created_at > now() - make_interval(hours => $2::int)
+     UNION ALL
+     SELECT 1 FROM vehicle_snapshots WHERE vehicle_id = $1 AND dataset = 'rc'
+        AND coalesce(source, '') <> 'ECHALLANAPP' AND data ? 'insurance_upto'
+        AND fetched_at > now() - make_interval(hours => $2::int)
+     LIMIT 1`, [vehicleId, h]).catch(() => null);
   return Boolean(row);
 }
 

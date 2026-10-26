@@ -177,6 +177,8 @@ router.get('/vehicle/:regNo', async (req, res) => {
       latency_ms: Date.now() - started,
       rc: rc.data,
       ...(rc.rcSaved ? { rc_saved: true } : {}),
+      // The RC's own age (2026-10-26), so store.record keeps its real fetch time and an old record never looks fresh.
+      rc_cached: Boolean(rc.cached), rc_age_minutes: rc.age_minutes ?? 0,
       // A dataset that failed is reported as null with a reason, rather than
       // failing the whole document — an RC with no challan data is still useful.
       challans: challan.failed ? null

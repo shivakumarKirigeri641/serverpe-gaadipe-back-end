@@ -120,14 +120,19 @@ async function learnRto(regNo, registeredAt) {
 }
 
 /** Keep the whole response so a wrong mapping can be re-derived for free. */
-async function saveSnapshot(vehicleId, dataset, data, { source, ttlMinutes = 60 * 24 } = {}) {
+/* `ageMinutes` (2026-10-26): how old the data really is - an answer from the cache was fetched that long ago.
+   `keepFetchedAt`: the saved RC standing in (rc_saved) - its fetch time stays as it was. Either way an old
+   record never looks freshly fetched, which vehicle/rcConfirm relies on to decide whether to pay again. */
+async function saveSnapshot(vehicleId, dataset, data, { source, ttlMinutes = 60 * 24, ageMinutes = 0, keepFetchedAt = false } = {}) {
   await db.query(
-    `INSERT INTO vehicle_snapshots (vehicle_id, dataset, data, raw, source, expires_at)
-          VALUES ($1, $2, $3, $3, $4, now() + ($5 || ' minutes')::interval)
+    `INSERT INTO vehicle_snapshots (vehicle_id, dataset, data, raw, source, fetched_at, expires_at)
+          VALUES ($1, $2, $3, $3, $4, now() - ($6 || ' minutes')::interval, now() + ($5 || ' minutes')::interval)
      ON CONFLICT (vehicle_id, dataset) DO UPDATE
             SET data = EXCLUDED.data, raw = EXCLUDED.raw, source = EXCLUDED.source,
-                fetched_at = now(), expires_at = EXCLUDED.expires_at`,
-    [vehicleId, dataset, JSON.stringify(data ?? {}), source || null, String(ttlMinutes)]);
+                fetched_at = CASE WHEN $7 THEN vehicle_snapshots.fetched_at ELSE EXCLUDED.fetched_at END,
+                expires_at = EXCLUDED.expires_at`,
+    [vehicleId, dataset, JSON.stringify(data ?? {}), source || null, String(ttlMinutes),
+     String(Math.max(0, Math.round(Number(ageMinutes) || 0))), Boolean(keepFetchedAt)]);
 }
 
 /** Link a person to a vehicle they looked at, and count the look. */
@@ -321,7 +326,8 @@ async function record(userId, data, { link = true, calls = true } = {}) {
   data = { ...data, rc: guardRc(data.rc, data.vehicle_number) };
   const vehicle = await upsertVehicle(data.vehicle_number, data.rc || {});
   await saveSnapshot(vehicle.id, 'rc', data.rc || {},
-    { source: data.source, ttlMinutes: 60 * 24 * 7 });
+    { source: data.source, ttlMinutes: 60 * 24 * 7,
+      keepFetchedAt: Boolean(data.rc_saved), ageMinutes: data.rc_cached ? data.rc_age_minutes : 0 });
   learnRto(data.vehicle_number, data.rc?.registered_at).catch(() => {});
   if (data.challans) {
     await saveSnapshot(vehicle.id, 'challan', data.challans, { ttlMinutes: 60 * 12 });
