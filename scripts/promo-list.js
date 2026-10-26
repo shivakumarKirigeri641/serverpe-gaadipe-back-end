@@ -14,7 +14,12 @@ const db = require('../src/db');
 
 /* --agreed (user, 2026-10-24: "agreed mobile numbers, oldest to newest"): everyone who agreed to the Terms
    (consent_accepted, on WhatsApp or the website), opted in to offers or not. */
-const agreed = process.argv.includes('--agreed');
+/* --service (user, 2026-10-26: "send to 400+ people that I am on WhatsApp now"): for a SERVICE SMS - everyone who
+   agreed to the Terms, except anyone who said STOP on WhatsApp, anyone texted in the last 7 days, and the promo
+   opt-ins (they got the plans SMS with gaadipe.in/wa from Fast2SMS directly on 26 Oct, which GaadiPe has no
+   record of). Never for offers or prices: those go only to the opt-ins. */
+const service = process.argv.includes('--service');
+const agreed = service || process.argv.includes('--agreed');
 /* --latest (user, 2026-10-26: the plans SMS goes to the warmest first): newest customer first. */
 const latest = process.argv.includes('--latest');
 const limit = Math.min(Math.max(parseInt(process.argv.find((a) => /^\d+$/.test(a)), 10) || (agreed ? 1000 : 30), 1), 5000);
@@ -35,6 +40,11 @@ const limit = Math.min(Math.max(parseInt(process.argv.find((a) => /^\d+$/.test(a
     ? `EXISTS (SELECT 1 FROM event_log ac WHERE ac.kind = 'consent_accepted'
                  AND right(regexp_replace(ac.detail->>'mobile', '\\D', '', 'g'), 10) = right(regexp_replace(u.mobile, '\\D', '', 'g'), 10))`
     : 'u.promo_consent_at IS NOT NULL AND u.promo_consent_withdrawn_at IS NULL'}
+        ${service ? `AND NOT EXISTS (SELECT 1 FROM whatsapp_sessions so WHERE right(so.mobile, 10) = right(u.mobile, 10)
+                                         AND so.wa_opt_out_at IS NOT NULL)
+                     AND NOT (u.promo_consent_at IS NOT NULL AND u.promo_consent_withdrawn_at IS NULL)
+                     AND NOT EXISTS (SELECT 1 FROM notify_log nl WHERE nl.user_id = u.id AND nl.channel = 'sms'
+                                       AND nl.status IN ('sent', 'simulated') AND nl.created_at > now() - interval '7 days')` : ''}
       ORDER BY ${latest ? 'u.created_at DESC, u.id DESC' : 'u.created_at, u.id'}
       LIMIT $1`, [limit]);
   /* --numbers (2026-10-26: "give me proper ones", "line by line"): only the numbers, one per line, to paste into
@@ -55,7 +65,8 @@ const limit = Math.min(Math.max(parseInt(process.argv.find((a) => /^\d+$/.test(a
         AND NOT coalesce(u.is_internal, false)
         AND EXISTS (SELECT 1 FROM event_log ac WHERE ac.kind = 'consent_accepted'
                       AND right(regexp_replace(ac.detail->>'mobile', '\\D', '', 'g'), 10) = right(regexp_replace(u.mobile, '\\D', '', 'g'), 10))`);
-  console.log(`\n${rows.length} ${agreed ? 'agreed' : 'opted-in'} customer(s) listed, ${latest ? 'newest' : 'oldest'} first.`);
+  console.log(`\n${rows.length} ${service ? 'service-SMS' : agreed ? 'agreed' : 'opted-in'} customer(s) listed, ${latest ? 'newest' : 'oldest'} first.`
+    + (service ? ' (No STOP, no promo opt-ins, nobody texted in the last 7 days.)' : ''));
   console.log(`Of ${pool.customers} customers who agreed to the Terms, ${pool.opted_in} opted in to offers — only they may get a promotional SMS.`);
   process.exit(0);
 })().catch((e) => { console.error(e.message); process.exit(1); });
