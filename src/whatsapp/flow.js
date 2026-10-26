@@ -3438,6 +3438,15 @@ async function handle(session, message, mobile) {
         await quietNudges(mobile);
         const plan = await billing.reportPlan().catch(() => null);
         const price = plan ? ` at ₹${Math.round(plan.price_paise / 100)}` : '';
+        /* "RC book", "RC details", "registration card" (user, 2026-10-26): what GaadiPe can show, and the one
+           thing it cannot - the RC book itself. No naming of official sites on WhatsApp (send.js safeWords). */
+        if (/\b(r\.?\s?c|registration)\b(\s*(book|card|details?|copy|smart\s*card|download|status))?/i.test(said)) {
+          await doors(mobile,
+            '📄 *RC details*\n\nSend the vehicle number, like *KA01AB1234*, and I will show its RC details — '
+            + 'owner (masked), registration date, insurance, PUC, tax, fitness and challans. The basic check is free.\n\n'
+            + '_GaadiPe shows the details only. For a new or duplicate RC book, please contact your RTO._');
+          return;
+        }
         if (UNHAPPY_RE.test(said)) {
           await send.buttons(mobile,
             'Sorry this was not what you expected 🙏\n\n'
