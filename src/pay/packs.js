@@ -1,8 +1,10 @@
 /**
- * src/pay/packs.js — A CHECK PACK ORDER (user, 2026-10-26: "1 vehicle check free ... then pay for checks";
- * migration 213; ₹25 since migration 214). CHECKS5: ₹25 including GST for 5 vehicle checks, valid 30 days. No vehicle is involved.
+ * src/pay/packs.js — CHECK PACK ORDERS (user, 2026-10-26: "1 vehicle check free ... then pay for checks";
+ * migrations 213-215). Three packs, GST included: ₹25 = 5 checks / 30 days (CHECKS5), ₹49 = 12 / 60 days
+ * (CHECKS12), ₹99 = 25 / 90 days (CHECKS25). No vehicle is involved.
  *
- *   startOrder({ user, channel }) -> the payment row, with its checkout_token for /pay/<token>
+ *   packPlans()                          -> every active pack, cheapest first, the best value marked
+ *   startOrder({ user, channel, code })  -> the payment row, with its checkout_token for /pay/<token>
  *
  * Shared by WhatsApp (flow.js) and the website (siteApi.js). The checkout page asks for the invoice's name and
  * state; an email is optional (nothing is delivered by email). An unpaid pack order from the last hour is reused,
@@ -11,28 +13,43 @@
 const db = require('../db');
 const billing = require('./billing');
 const razorpay = require('./razorpay');
-const settings = require('../util/settings');
 
-/* The plan as the admin set it (Settings → Plans: price, days, discount, on/off; user, 2026-10-26: "configurable in
-   admin panel"). price_paise is what is charged: the price less any discount, never under ₹1. */
-async function packPlan() {
-  const p = await db.one(`SELECT * FROM plans WHERE code = 'CHECKS5' AND is_active LIMIT 1`);
-  if (!p) return null;
+/* The plans as the admin set them (Settings → Plans: price, checks, days, discount, on/off; user, 2026-10-26:
+   "configurable in admin panel"). price_paise is what is charged: the price less any discount, never under ₹1.
+   THREE PACKS (migration 215): ₹25 / 5 / 30 days, ₹49 / 12 / 60 days, ₹99 / 25 / 90 days - every active
+   'checks' plan, cheapest first; the dearest is marked best value (lowest price per check). */
+const shape = (p) => {
   const off = Math.max(0, Number(p.discount_paise) || 0);
-  return { ...p, list_price_paise: Number(p.price_paise), price_paise: Math.max(100, Number(p.price_paise) - off) };
+  const price = Math.max(100, Number(p.price_paise) - off);
+  const checks = Number(p.check_credits) || 5;
+  return { ...p, list_price_paise: Number(p.price_paise), price_paise: price, checks,
+    days: Number(p.duration_days) || 30, rupees: Math.round(price / 100), per_check_paise: Math.round(price / checks) };
+};
+async function packPlans() {
+  const { rows } = await db.query(`SELECT * FROM plans WHERE kind = 'checks' AND is_active ORDER BY price_paise, id`);
+  const out = rows.map(shape);
+  const best = out.length > 1 ? out.reduce((a, b) => (b.per_check_paise < a.per_check_paise ? b : a)) : null;
+  return out.map((p) => ({ ...p, best: Boolean(best && p.code === best.code) }));
 }
+/** One pack by its code, or the cheapest when none is named. */
+async function packPlan(code = null) {
+  const all = await packPlans();
+  return (code ? all.find((p) => p.code === String(code).toUpperCase()) : all[0]) || null;
+}
+/** For the customer-facing lists: code, checks, rupees, days, best. */
+const brief = (p) => ({ code: p.code, checks: p.checks, price_paise: p.price_paise, rupees: p.rupees, days: p.days, best: p.best });
 
 class PackError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 
-async function startOrder({ user, channel = 'whatsapp' }) {
-  const plan = await packPlan();
+async function startOrder({ user, channel = 'whatsapp', code = null }) {
+  const plan = await packPlan(code);
   if (!plan || !razorpay.configured() || !(await require('../util/flags').on('payments'))) {
-    console.error('[pack] cannot sell a pack: plan=%s razorpay=%s', Boolean(plan), razorpay.configured());
+    console.error('[pack] cannot sell a pack %s: plan=%s razorpay=%s', code || '(cheapest)', Boolean(plan), razorpay.configured());
     throw new PackError('unavailable', 'Payment is not available right now. Please try again shortly.');
   }
-  const checks = await settings.num('check_pack_checks', 5);
+  const checks = plan.checks;
   // The owner's own test purchases (razorpay.isTestBuyer): Razorpay TEST keys, ₹0 in the books.
   const test = await razorpay.isTestBuyer(user).catch(() => false);
 
@@ -40,8 +57,10 @@ async function startOrder({ user, channel = 'whatsapp' }) {
     `SELECT * FROM payments
       WHERE user_id = $1 AND plan_id = $2 AND status = 'created' AND checkout_token IS NOT NULL
         AND coalesce((raw->>'test_mode')::boolean, false) = $3
+        -- The same price and checks: a pack the admin has changed since is a new order.
+        AND amount_paise = $4 AND (raw->>'checks')::int = $5
         AND created_at > now() - interval '1 hour'
-      ORDER BY id DESC LIMIT 1`, [user.id, plan.id, test]);
+      ORDER BY id DESC LIMIT 1`, [user.id, plan.id, test, plan.price_paise, checks]);
 
   if (!row) {
     const pending = await billing.createPending({ userId: user.id, planId: plan.id, amountPaise: plan.price_paise,
@@ -77,4 +96,4 @@ async function startOrder({ user, channel = 'whatsapp' }) {
   return row;
 }
 
-module.exports = { startOrder, packPlan, PackError };
+module.exports = { startOrder, packPlan, packPlans, brief, PackError };

@@ -184,7 +184,8 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
                       || CASE WHEN $5 THEN jsonb_build_object('test_amount_paise', amount_paise) ELSE '{}'::jsonb END
           WHERE id = $1`,
         [pay.id, razorpayPaymentId, orderId || null, JSON.stringify({ gateway: raw || {} }), test]);
-      const credits = Number(pay.raw?.checks) || 5;
+      // The checks this order was sold with (raw.checks), else the plan's own count (migration 215).
+      const credits = Number(pay.raw?.checks) || Number(plan.check_credits) || 5;
       await require('../util/quota').grant(c, { userId: pay.user_id, paymentId: pay.id, source: 'pack',
         credits, days: plan.duration_days || creditDays });
       await c.query(

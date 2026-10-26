@@ -416,7 +416,7 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
       ownerRow || { id: BTN.SO_FAR, title: 'GaadiPe so far', description: 'People served, vehicles checked, challans found' },
       { id: BTN.EMAIL,           title: 'Email for alerts',
         description: user?.email_verified_at ? `✓ ${user.email}` : 'Add and confirm your email for reports & alerts' },
-      { id: BTN.WHAT_GET,        title: 'What do I get?',   description: 'Free check, full report, monitoring, fleets' },
+      { id: BTN.WHAT_GET,        title: 'What do I get?',   description: 'Free check, check packs, full report, monitoring' },
       { id: BTN.SUPPORT,         title: 'Help & support',   description: 'Ask us anything · terms, privacy and refunds' },
       // In Terms & privacy's place (user, 2026-10-13: "one more option in menu: current offers").
       { id: BTN.OFFERS_NOW,      title: 'Current offers',   description: 'Prices, renewals — and get our offers here' },
@@ -644,11 +644,12 @@ async function whatYouGet(mobile) {
      tightened so the page stays under WhatsApp's 1,024 characters and keeps its buttons. */
   const user = await store.upsertUser(mobile).catch(() => null);
   const q = user ? await quota.left(user.id).catch(() => null) : null;
-  const pk = q?.packs ? await packPrice() : null;
+  const pk = q?.packs ? await packList() : null;
+  const bonus = pk ? await settings.num('checks_per_report_bonus', 5) : 0;
   const checks = !q?.enforced ? ''
     : q.unlimited ? '🔢 *Free checks:* no limit for you.\n\n'
-    // Check packs (migration 213): one free, then a pack; reports add checks.
-    : q.packs ? `🔢 *Checks:* 1st free, then *${pk.checks} for ₹${pk.rupees}* (${pk.days} days); each report adds ${pk.checks}; `
+    // Check packs (migrations 213-215): one free, then the packs; reports add checks.
+    : q.packs ? `🔢 *Checks:* 1st free, then ${pk.map((p) => `*${p.checks} = ₹${p.rupees}*`).join(' · ')}; each report adds ${bonus}; `
         + `vehicles you checked before stay free. *${q.today.left}* left.\n\n`
       : `🔢 *Free checks:* ${q.today.limit} a day${q.month ? `, ${q.month.base} a month (+${q.month.per_report} with every report you buy)` : ''}. `
         + `You have *${q.today.left} left today*${q.month ? ` · ${q.month.left} this month` : ''}.\n\n`;
@@ -662,13 +663,13 @@ async function whatYouGet(mobile) {
       ? `🔔 *Full report + ${days} days of alerts — ${price}* — expiry warnings and new-challan alerts.\n\n`
       : `🔔 *${days} days of monitoring included* — a message before any document expires, and when a new challan appears.\n\n`)
     + (renew ? `🔄 *Renew for ${renew}* — another ${days} days.\n\n` : '')
-    + '🚛 *Fleets (5+)* — an Excel report of every vehicle, emailed every evening.\n\n'
+    // The fleet offer is hidden (user, 2026-10-26: "hide the fleet") - the ₹99 pack is for many vehicles now.
     // Said upfront (2026-10-15): people rated 1★ expecting the owner's phone number.
     + '🔒 *Never shared:* an owner\'s mobile number or address — private by law; we don\'t receive them.\n\n'
     + NOT_A_DOCUMENT_SHORT + '\n\n'
     + `Sample report: ${require('../mail/customer').SITE()}/sample-report.pdf`,
-  // With check packs the middle button sells one (the fleet line above still says how to ask).
-  ['check', pk ? { id: BTN.BUY_CHECKS, title: await packButton() } : { id: BTN.FLEET, title: 'Fleet (5+ vehicles)' }, 'menu']);
+  // The middle button shows the packs (fleet hidden, 2026-10-26).
+  ['check', { id: BTN.BUY_CHECKS, title: 'Buy vehicle checks' }, 'menu']);
 }
 
 /*
@@ -1139,42 +1140,39 @@ async function startTrial(userId, regNo) {
 }
 
 /** The number the person last sent, held on the session until confirmed. */
-/* ─── Check packs (user, 2026-10-26; migration 213, pay/packs.js) ─────────────────────────────────────────── */
+/* ─── Check packs (user, 2026-10-26; migrations 213-215, pay/packs.js) ───────────────────────────────────────
+   Three packs from the admin's plans - ₹25 = 5 / 30 days, ₹49 = 12 / 60 days, ₹99 = 25 / 90 days - each a
+   button "pack|<CODE>" (WhatsApp allows three). */
 async function savePendingReg(mobile, regNo) {
   await db.query(`UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
     [mobile, JSON.stringify({ pending_reg: regNo })]).catch(() => {});
 }
-async function packPrice() {
-  const p = await require('../pay/packs').packPlan().catch(() => null);
-  return { rupees: p ? Math.round(Number(p.price_paise) / 100) : 25, days: p?.duration_days || 30,
-    checks: await settings.num('check_pack_checks', 5) };
-}
-async function packButton() {
-  const p = await packPrice();
-  return `${p.checks} checks · ₹${p.rupees}`;
-}
-async function packOffer() {
-  const p = await packPrice();
-  return '🔢 *Your free check is used*\n\n'
-    + `Get *${p.checks} vehicle checks for ₹${p.rupees}* (GST included), valid ${p.days} days — make, model, `
-    + 'insurance, PUC, tax, fitness and challan status of any vehicle.\n\n'
-    + `_Every full report you buy also adds ${await settings.num('checks_per_report_bonus', 5)} checks. `
+const packList = () => require('../pay/packs').packPlans().catch(() => []);
+const packTitle = (p) => `${p.checks} checks · ₹${p.rupees}`;          // under WhatsApp's 20 characters
+const packButtons = (packs) => packs.slice(0, 3).map((p) => ({ id: `pack|${p.code}`, title: packTitle(p) }));
+async function packOffer(packs, { used = false } = {}) {
+  const lines = packs.map((p) => `• *${p.checks} checks — ₹${p.rupees}* · valid ${p.days} days`
+    + ` _(₹${(p.per_check_paise / 100).toFixed(2).replace(/\.00$/, '')} a check)_${p.best ? ' ⭐ *best value*' : ''}`);
+  return (used ? '🔢 *Your free check is used*\n\n' : '🔢 *Vehicle check packs*\n\n')
+    + 'Check more vehicles — make, model, insurance, PUC, tax, fitness and challan status of any vehicle:\n\n'
+    + `${lines.join('\n')}\n\n_GST included. Every full report you buy also adds ${await settings.num('checks_per_report_bonus', 5)} checks. `
     + 'Vehicles you already checked are free to check again, any time._';
 }
-async function buyChecks(mobile) {
+async function buyChecks(mobile, code = null) {
   const user = await store.upsertUser(mobile);
-  await funnel(mobile, 'pack_tapped');
+  await funnel(mobile, 'pack_tapped', { pack: code });
   let row;
   try {
-    row = await require('../pay/packs').startOrder({ user, channel: 'whatsapp' });
+    row = await require('../pay/packs').startOrder({ user, channel: 'whatsapp', code });
   } catch (e) {
     await reply(mobile, e.message || 'Payment is not available right now. Please try again shortly.', ['support', 'menu']);
     return;
   }
-  const p = await packPrice();
+  const p = await require('../pay/packs').packPlan(code).catch(() => null);
+  const checks = Number(row.raw?.checks) || p?.checks || 5;
   await setState(mobile, 'awaiting_payment', `pack order ${row.order_id}`);
   await linkButton(mobile,
-    `🔒 *${p.checks} vehicle checks — ₹${Math.round(row.amount_paise / 100)}* · valid ${p.days} days\n\n`
+    `🔒 *${checks} vehicle checks — ₹${Math.round(row.amount_paise / 100)}* · valid ${p?.days || 30} days\n\n`
     + '✅ Pay with *UPI* — GPay, PhonePe, Paytm — or card / netbanking\n'
     + '✅ Secure checkout by *Razorpay* · GST invoice included\n'
     + '✅ Your checks are ready *here in this chat* the moment you pay\n\n'
@@ -1434,8 +1432,11 @@ async function checksLeftLine(userId) {
   if (!q || q.unlimited || !q.enforced) return '';
   // Check packs (migration 213): what is left, and until when; at none, the pack in one line.
   if (q.packs) {
-    const pk = await packPrice();
-    if (q.today.left <= 0) return `🔢 *No checks left* — get ${pk.checks} for ₹${pk.rupees}: send another number and tap *${pk.checks} checks · ₹${pk.rupees}*.`;
+    if (q.today.left <= 0) {
+      const pk = await packList();
+      return `🔢 *No checks left for new vehicles* — ${pk.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}. `
+        + 'Type *buy checks* any time. Vehicles you checked before stay free.';
+    }
     const till = q.credits?.last_expiry ? ` (valid till ${new Date(q.credits.last_expiry).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })})` : '';
     return `🔢 *Checks left:* ${q.today.left}${q.credits?.left ? till : ''}`;
   }
@@ -1679,8 +1680,8 @@ async function deliverReport(mobile, regNo, message) {
     await setState(mobile, 'owner_menu', 'no check credits');
     await funnel(mobile, 'checks_needed', { reg_no: regNo });
     await savePendingReg(mobile, regNo);
-    await send.buttons(mobile, await packOffer(), [{ id: BTN.BUY_CHECKS, title: await packButton() },
-      { id: BTN.WHAT_GET, title: 'What do I get?' }]);
+    const packs = await packList();
+    await send.buttons(mobile, await packOffer(packs, { used: true }), packs.length ? packButtons(packs) : [{ id: BTN.WHAT_GET, title: 'What do I get?' }]);
     return;
   }
   if (!q.allowed) {
@@ -2533,6 +2534,11 @@ async function handle(session, message, mobile) {
   // The renewal reminder's buttons — "Renew now", "My monitoring", "Not now" (2026-10-14).
   if (await renewalTap(mobile, intent, message)) return;
   if (await payReminderTap(mobile, intent)) return;
+  // A check pack chosen (pack|CHECKS12, migration 215).
+  if (intent.kind === 'button' && /^pack\|CHECKS\d+$/.test(String(intent.id || ''))) {
+    await buyChecks(mobile, String(intent.id).split('|')[1]);
+    return;
+  }
   // The monitoring alert's buttons — "Thanks for remembering", "Check vehicle",
   // "Pause this alert" — and "Resume alerts" (2026-10-12, monitorAlert.js).
   const tapped =await require('./monitorAlert').handleTap(mobile, intent)
@@ -3283,7 +3289,11 @@ async function handle(session, message, mobile) {
         return;
 
       case BTN.BUY_CHECKS:
-        await buyChecks(mobile);
+        // The packs, to choose one (from What do I get? / the menu).
+        {
+          const packs = await packList();
+          await send.buttons(mobile, await packOffer(packs), packs.length ? packButtons(packs) : [{ id: BTN.WHAT_GET, title: 'What do I get?' }]);
+        }
         return;
 
       case BTN.SO_FAR:
@@ -3417,6 +3427,11 @@ async function handle(session, message, mobile) {
   }
 
   // "checks" / "checks left" typed (2026-10-25): how many free checks are left.
+  // "buy checks" / "packs" typed (2026-10-26): the three check packs, one tap each.
+  if (/^(buy( vehicle)? checks?|check packs?|packs?|recharge)\s*\??$/i.test(intent.text || '') && await send.agreedTerms(mobile)) {
+    const packs = await packList();
+    if (packs.length) { await send.buttons(mobile, await packOffer(packs), packButtons(packs)); return; }
+  }
   if (/^(checks?|checks? left|my checks|balance|limit)\s*\??$/i.test(intent.text || '') && await send.agreedTerms(mobile)) {
     const u = await store.upsertUser(mobile);
     const line = await checksLeftLine(u.id);

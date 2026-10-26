@@ -126,7 +126,6 @@ const GROUPS = [
     // Check packs (2026-10-26, migrations 213-214, util/quota.js): one free check, then ₹25 for 5.
     ['check_packs_enabled', 'Check packs: one free check, then a ₹25 pack (true / false)', 'true. false = back to the daily / monthly free allowance below. The pack price is the CHECKS5 plan.'],
     ['free_checks_lifetime', 'Check packs: free checks per customer (ever)', '1. A repeat of the same vehicle within an hour, and a vehicle they bought a report for, never count.'],
-    ['check_pack_checks', 'Check packs: checks in one pack', '5.'],
     ['check_credit_days', 'Check packs: checks from a report last (days)', '30. Each full report (₹11 or ₹19) adds checks_per_report_bonus (5) checks.'],
     // 2026-10-25 (rcBackup.freeOpts): every free check - WhatsApp, website, before or after sign-in.
     ['free_check_paid_lookups_per_day', 'Free checks: paid RC lookups a day, everyone together', '15. Past it, free checks use only the free sources (ULIP, eChallan.app) and saved records. Paid reports are never capped.'],

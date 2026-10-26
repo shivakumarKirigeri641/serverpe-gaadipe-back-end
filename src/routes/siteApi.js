@@ -102,14 +102,15 @@ router.get('/pricing', safe(async (_req, res) => {
     price_paise: plan?.price_paise ?? null,
     // The one-time report, no monitoring (2026-10-25, REPORT11) — null when it is off.
     one_time_paise: (await billing.oneTimePlan().catch(() => null))?.price_paise ?? null,
-    // Check packs (migration 213): one free check, then this pack — null while packs are off.
-    check_pack: await (async () => {
-      if (!(await settings.bool('check_packs_enabled', true))) return null;
-      const p = await require('../pay/packs').packPlan().catch(() => null);
-      return p ? { price_paise: Number(p.price_paise), checks: await settings.num('check_pack_checks', 5),
-        days: p.duration_days || 30, per_report: await settings.num('checks_per_report_bonus', 5),
-        free: await settings.num('free_checks_lifetime', 1) } : null;
-    })(),
+    // Check packs (migrations 213-215): one free check, then these packs (cheapest first; check_pack = the
+    // cheapest, as older pages read it) — null / [] while packs are off.
+    ...(await (async () => {
+      if (!(await settings.bool('check_packs_enabled', true))) return { check_pack: null, check_packs: [] };
+      const packs = await require('../pay/packs').packPlans().catch(() => []);
+      const extra = { per_report: await settings.num('checks_per_report_bonus', 5), free: await settings.num('free_checks_lifetime', 1) };
+      const list = packs.map((p) => ({ ...require('../pay/packs').brief(p), ...extra }));
+      return { check_pack: list[0] || null, check_packs: list };
+    })()),
     // The renewal price, as set in admin (2026-10-14) — the site's "₹11 to renew" reads it.
     renewal_paise: plan?.renewal_paise ?? null,
     // Replace vehicle (2026-10-20: "update marketing site that we give renewal & replace"):
@@ -924,12 +925,17 @@ router.post('/check', safe(async (req, res) => {
   }
   // One free check, then a pack (migration 213): the offer, with its price, for the site to show a Buy button.
   if (!q.allowed && q.reason === 'no_credits') {
-    const p = await require('../pay/packs').packPlan().catch(() => null);
-    const n = await settings.num('check_pack_checks', 5);
+    const P = require('../pay/packs');
+    const packs = (await P.packPlans().catch(() => [])).map(P.brief);
+    const bonus = await settings.num('checks_per_report_bonus', 5);
+    const hi = langOf(req.body?.language) === 'hi';
+    const list = packs.map((p) => (hi ? `${p.checks} जाँच ₹${p.rupees} (${p.days} दिन)` : `${p.checks} checks ₹${p.rupees} (${p.days} days)`)).join(' · ');
     return res.status(402).json({
       error: 'checks_needed', reason: 'no_credits',
-      message: `Your free check is used. Get ${n} vehicle checks for ₹${p ? Math.round(p.price_paise / 100) : 25} (GST included), valid ${p?.duration_days || 30} days — every full report you buy adds ${n} more.`,
-      pack: p ? { checks: n, price_paise: Number(p.price_paise), days: p.duration_days || 30 } : null,
+      message: hi
+        ? `आपकी मुफ़्त जाँच हो चुकी है। और गाड़ियाँ जाँचें: ${list} — GST सहित। हर रिपोर्ट के साथ ${bonus} जाँच और; पहले जाँची हुई गाड़ी दोबारा मुफ़्त।`
+        : `Your free check is used. Check more vehicles: ${list} — GST included. Every report adds ${bonus} more; vehicles you already checked stay free.`,
+      pack: packs[0] || null, packs,
       quota: await quota.left(req.user.id).catch(() => null),
     });
   }
@@ -1091,7 +1097,9 @@ const DECLARATION = DECLARATIONS.en;
 router.post('/checks/buy', safe(async (req, res) => {
   let row;
   try {
-    row = await require('../pay/packs').startOrder({ user: req.user, channel: 'web' });
+    // Which pack (CHECKS5 / CHECKS12 / CHECKS25, migration 215); the cheapest when none is named.
+    const code = /^CHECKS\d+$/i.test(String(req.body?.code || '')) ? String(req.body.code).toUpperCase() : null;
+    row = await require('../pay/packs').startOrder({ user: req.user, channel: 'web', code });
   } catch (e) {
     return res.status(e.code === 'gateway' ? 502 : 503).json({ error: e.code || 'unavailable', message: e.message });
   }
