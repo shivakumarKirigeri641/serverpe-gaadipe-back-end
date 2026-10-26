@@ -419,6 +419,43 @@ async function checksMonthUsed() {
   return n;
 }
 
+/* FREE CHECK USED, SHOWN THE PACKS (user, 2026-10-26: "update the mail trigger to me accordingly"; util/quota
+   noteOut, once a day per customer): who, what they tried to check, where, and whether they bought a pack before -
+   the likeliest buyer of the day. Same switch as the monthly one (notify_checks_month). */
+async function checksOut() {
+  if (!(await on('notify_checks_month'))) return 0;
+  const { rows } = await db.query(
+    `SELECT e.id, e.user_id, e.created_at, e.detail FROM event_log e
+      WHERE e.kind = 'checks_out' AND e.created_at > now() - interval '1 day'
+        AND ${notDone('checks_out', 'e.id::text')} ORDER BY e.id LIMIT 20`).catch(() => ({ rows: [] }));
+  let n = 0;
+  for (const e of rows) {
+    n += await deliver('checks_out', e.id, async () => {
+      // (The owner's own number is skipped by deliver(), aboutOwnNumber.)
+      const u = await db.one(`SELECT mobile, coalesce(display_name, wa_profile_name) AS name FROM users WHERE id = $1`, [e.user_id]);
+      const who = u?.name || T.mobile(u?.mobile);
+      const d = e.detail || {};
+      const packs = (await require('../pay/packs').packPlans().catch(() => [])).map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ');
+      const before = Number(d.packs_before || 0);
+      return {
+        subject: `🔢 Free check used — shown the packs · ${who} · ${d.channel === 'web' ? 'Website' : 'WhatsApp'}`,
+        ...T.layout({
+          badge: { text: before ? 'Out of checks again' : 'Free check used', tone: 'watch' },
+          title: `${who} wants to check ${d.reg_no || 'another vehicle'}`,
+          lead: `${T.ist(e.created_at)}. Their ${before ? 'checks have run out' : 'one free check is used'}, so they were shown the packs (${packs}). A likely buyer.`,
+          sections: [{ heading: 'Who', rows: [
+            ['Name', u?.name || 'Not given'], ['Mobile', T.mobile(u?.mobile)],
+            ['Tried to check', d.reg_no], ['Where', d.channel === 'web' ? 'Website' : 'WhatsApp'],
+            ['Packs bought before', before ? String(before) : 'none'], ['Came from', await sourceOfUser(e.user_id)],
+          ] }],
+          cta: { label: 'Open the customer', url: `${WEBADMIN()}/web/customers/${e.user_id}` },
+        }),
+      };
+    }) ? 1 : 0;
+  }
+  return n;
+}
+
 async function reachDone() {
   if (!(await on('notify_reach_done'))) return 0;
   // A send is the rows queued together (same channel, kind, admin and minute); mailed once none is left to go.
@@ -551,7 +588,12 @@ async function payments() {
           WHERE x.user_id = $1 AND x.status = 'paid' AND x.id < $2 AND x.amount_paise > 0
             AND x.raw->>'vehicle_id' = $3 AND coalesce(xp.kind, '') <> 'replace' LIMIT 1`,
         [p.user_id, p.id, String(p.raw.vehicle_id)]);
-      const what = p.plan_kind === 'replace' ? '🔁 Replace vehicle'
+      // A check pack (2026-10-26, migrations 213-215): checks, not a report - its own type and section.
+      const isPack = p.plan_kind === 'checks';
+      const packChecks = isPack ? Number(p.raw?.checks) || null : null;
+      const balance = isPack ? await require('../util/quota').creditsOf(p.user_id).catch(() => null) : null;
+      const what = isPack ? `🔢 Check pack · ${packChecks || ''} checks`.trim()
+        : p.plan_kind === 'replace' ? '🔁 Replace vehicle'
         : prior ? '🔄 Renewal' : '📄 New full report';
 
       const attachments = [];
@@ -581,16 +623,23 @@ async function payments() {
               [`Razorpay fee (${split.fee_percent}%) + GST`, T.rupees(split.gateway_fee_paise + split.gateway_fee_gst_paise)],
               ['Take-home (before messaging)', T.rupees(split.take_home_paise)],
             ] },
-            { heading: 'Vehicle', rows: veh ? [
-              ['Registration', veh.reg_no], ['RTO', await rtoLine(veh.reg_no)],
-              ['Make · model', [veh.maker, veh.model].filter(Boolean).join(' · ')],
-              ['Fuel · class', [veh.fuel, veh.vehicle_class].filter(Boolean).join(' · ')],
-            ] : [['Registration', 'Not recorded']] },
+            isPack
+              ? { heading: 'Checks', rows: [
+                ['Pack', `${packChecks || '?'} vehicle checks · valid ${p.duration_days || 30} days`],
+                ['Per check', packChecks ? T.rupees(Math.round(p.amount_paise / packChecks)) : null],
+                ['Customer now has', balance ? `${balance.left} check${balance.left === 1 ? '' : 's'}${balance.lastExpiry ? ` · last valid till ${T.ist(balance.lastExpiry)}` : ''}` : null],
+              ] }
+              : { heading: 'Vehicle', rows: veh ? [
+                ['Registration', veh.reg_no], ['RTO', await rtoLine(veh.reg_no)],
+                ['Make · model', [veh.maker, veh.model].filter(Boolean).join(' · ')],
+                ['Fuel · class', [veh.fuel, veh.vehicle_class].filter(Boolean).join(' · ')],
+              ] : [['Registration', 'Not recorded']] },
             { heading: 'Documents issued', rows: [
               ['Invoice', inv ? `${inv.invoice_number} · ${T.rupees(inv.total_paise)} (CGST ${T.rupees(inv.cgst_paise)} · SGST ${T.rupees(inv.sgst_paise)}${Number(inv.igst_paise) ? ` · IGST ${T.rupees(inv.igst_paise)}` : ''})` : 'Not issued yet — the reconciler will retry'],
               ['Place of supply', inv?.place_of_supply],
-              ['Report', rep ? `${rep.report_number}${rep.valid_until ? ` · downloadable until ${T.ist(rep.valid_until)}` : ''}` : 'Not issued yet'],
-              ['Monitoring', p.duration_days ? `${p.duration_days} days of document and challan alerts` : null],
+              ['Report', isPack ? 'None — a check pack' : rep ? `${rep.report_number}${rep.valid_until ? ` · downloadable until ${T.ist(rep.valid_until)}` : ''}` : 'Not issued yet'],
+              // Alerts only with a monitoring plan (the ₹11 one-time report and the packs have none).
+              ['Monitoring', !isPack && p.duration_days ? `${p.duration_days} days of document and challan alerts` : null],
             ] },
             { heading: 'Customer', rows: [
               ['Name', p.shown_name || 'Not given'], ['Mobile', T.mobile(p.mobile)], ['Email', p.email],
@@ -1478,7 +1527,7 @@ async function runOnce() {
      were stopped 7 Oct). Said Hi, agreed (and to offers), vehicle checked, STOP and
      its reason, left at the payment link; payments mail both channels again. Each
      has its own switch in Settings → Emails to you. */
-  for (const [k, fn] of Object.entries({ visits, signIns, webChecks, chatChecks, pushOn, freeMonitorStarted, checksMonthUsed, reachDone, payments, contacts, feedback,
+  for (const [k, fn] of Object.entries({ visits, signIns, webChecks, chatChecks, pushOn, freeMonitorStarted, checksMonthUsed, checksOut, reachDone, payments, contacts, feedback,
                                             waHi, waAgreed, waChecks, waOptOut, leftAtPayment, vehicleChanges, emailConfirmations,
                                             alertMails, security, dailySummary, weeklyMoney, weeklyDigest })) {
     try { out[k] = await fn(); } catch (e) { console.error('[notify] %s: %s', k, e.message); }

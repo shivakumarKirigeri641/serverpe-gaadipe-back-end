@@ -187,6 +187,17 @@ async function packCheck(userId, regNo, tier) {
   return { ...base, allowed: false, reason: 'no_credits', repeat: false, used, limit: freeLimit };
 }
 
+/* Out of checks, shown the packs (2026-10-26): recorded once a day per customer, so the admin is emailed about
+   a likely buyer (jobs/notify.js checksOut). Whether they had bought a pack before is said too. */
+async function noteOut(userId, regNo, channel) {
+  await db.query(
+    `INSERT INTO event_log (user_id, kind, detail)
+     SELECT $1, 'checks_out', jsonb_build_object('reg_no', $2::text, 'channel', $3::text,
+              'packs_before', (SELECT count(*) FROM check_credits WHERE user_id = $1 AND source = 'pack'))
+      WHERE NOT EXISTS (SELECT 1 FROM event_log WHERE user_id = $1 AND kind = 'checks_out'
+                          AND created_at > now() - interval '24 hours')`, [userId, regNo, channel]).catch(() => {});
+}
+
 /** Use one credit, the soonest to expire. Returns true if one was there. */
 async function consume(userId) {
   const r = await db.one(
@@ -289,4 +300,4 @@ async function record(userId, regNo, { repeat = false, found = true, channel = n
   } catch { /* the log never stops a check */ }
 }
 
-module.exports = { check, record, tierOf, left, grant, creditsOf, packsOn };
+module.exports = { check, record, tierOf, left, grant, creditsOf, packsOn, noteOut };

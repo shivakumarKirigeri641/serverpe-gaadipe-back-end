@@ -925,6 +925,7 @@ router.post('/check', safe(async (req, res) => {
   }
   // One free check, then a pack (migration 213): the offer, with its price, for the site to show a Buy button.
   if (!q.allowed && q.reason === 'no_credits') {
+    await quota.noteOut(req.user.id, parsed.regNo, 'web');
     const P = require('../pay/packs');
     const packs = (await P.packPlans().catch(() => [])).map(P.brief);
     const bonus = await settings.num('checks_per_report_bonus', 5);
@@ -933,8 +934,8 @@ router.post('/check', safe(async (req, res) => {
     return res.status(402).json({
       error: 'checks_needed', reason: 'no_credits',
       message: hi
-        ? `आपकी मुफ़्त जाँच हो चुकी है। और गाड़ियाँ जाँचें: ${list} — GST सहित। हर रिपोर्ट के साथ ${bonus} जाँच और; पहले जाँची हुई गाड़ी दोबारा मुफ़्त।`
-        : `Your free check is used. Check more vehicles: ${list} — GST included. Every report adds ${bonus} more; vehicles you already checked stay free.`,
+        ? `आपकी मुफ़्त जाँच हो चुकी है — सिर्फ़ पहली गाड़ी जाँच मुफ़्त है। और गाड़ियाँ जाँचने के लिए एक पैक चुनें: ${list} — GST सहित। हर रिपोर्ट के साथ ${bonus} जाँच और; पहले जाँची हुई गाड़ी दोबारा मुफ़्त।`
+        : `Your free check has been used — only the first vehicle check is free. To check more vehicles, please choose a pack: ${list} — GST included. Every report adds ${bonus} more; vehicles you already checked stay free.`,
       pack: packs[0] || null, packs,
       quota: await quota.left(req.user.id).catch(() => null),
     });

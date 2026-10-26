@@ -1153,9 +1153,14 @@ const packButtons = (packs) => packs.slice(0, 3).map((p) => ({ id: `pack|${p.cod
 async function packOffer(packs, { used = false } = {}) {
   const lines = packs.map((p) => `• *${p.checks} checks — ₹${p.rupees}* · valid ${p.days} days`
     + ` _(₹${(p.per_check_paise / 100).toFixed(2).replace(/\.00$/, '')} a check)_${p.best ? ' ⭐ *best value*' : ''}`);
-  return (used ? '🔢 *Your free check is used*\n\n' : '🔢 *Vehicle check packs*\n\n')
-    + 'Check more vehicles — make, model, insurance, PUC, tax, fitness and challan status of any vehicle:\n\n'
-    + `${lines.join('\n')}\n\n_GST included. Every full report you buy also adds ${await settings.num('checks_per_report_bonus', 5)} checks. `
+  /* Said plainly (user, 2026-10-26: "professionally ... 'Only first check free', then 25, 49, 99"). */
+  return (used
+    ? '🔢 *Your free check has been used*\n\nOnly the *first vehicle check is free*. To check more vehicles, please choose a pack:\n\n'
+    : '🔢 *Vehicle check packs*\n\nYour first vehicle check is free; after that, choose a pack:\n\n')
+    + `${lines.join('\n')}\n\n`
+    + 'Each check shows the vehicle, the owner (masked), registration date, RC status, RTO, every validity date '
+    + '(insurance, PUC, tax, fitness, permit) and pending challans. The full report is separate.\n\n'
+    + `_GST included. Every full report you buy also adds ${await settings.num('checks_per_report_bonus', 5)} checks. `
     + 'Vehicles you already checked are free to check again, any time._';
 }
 async function buyChecks(mobile, code = null) {
@@ -1427,11 +1432,26 @@ async function sendReports(mobile) {
  * "🔢 Free checks left: 4 today · 25 this month (+5 with every report you buy)". Nothing while limits are not
  * enforced (checks_enforce), or for subscribers and GaadiPe's own numbers (unlimited).
  */
-async function checksLeftLine(userId) {
+async function checksLeftLine(userId, thisCheck = null) {
   const q = await quota.left(userId).catch(() => null);
   if (!q || q.unlimited || !q.enforced) return '';
-  // Check packs (migration 213): what is left, and until when; at none, the pack in one line.
+  // Check packs (migration 213): what this check cost, what is left and until when; at none, the packs in one line.
   if (q.packs) {
+    // After every check (user, 2026-10-26: "keep showing them the check count for each check").
+    const cost = !thisCheck ? ''
+      : thisCheck.credit ? '1 check used. '
+      : thisCheck.free ? 'That was your free check. '
+      : thisCheck.seen || thisCheck.owned || thisCheck.repeat ? 'No check used — you checked this vehicle before. ' : '';
+    if (cost && q.today.left > 0) {
+      const till = q.credits?.left && q.credits.last_expiry
+        ? ` (valid till ${new Date(q.credits.last_expiry).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })})` : '';
+      return `🔢 ${cost}*Checks left: ${q.today.left}*${till}`;
+    }
+    if (cost && q.today.left <= 0) {
+      const pk = await packList();
+      return `🔢 ${cost}*No checks left for new vehicles* — only the first check is free; packs: ${pk.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}. `
+        + 'Type *buy checks* any time. Vehicles you checked before stay free.';
+    }
     if (q.today.left <= 0) {
       const pk = await packList();
       return `🔢 *No checks left for new vehicles* — ${pk.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}. `
@@ -1679,6 +1699,7 @@ async function deliverReport(mobile, regNo, message) {
   if (!q.allowed && q.reason === 'no_credits') {
     await setState(mobile, 'owner_menu', 'no check credits');
     await funnel(mobile, 'checks_needed', { reg_no: regNo });
+    await quota.noteOut(user.id, regNo, 'whatsapp');
     await savePendingReg(mobile, regNo);
     const packs = await packList();
     await send.buttons(mobile, await packOffer(packs, { used: true }), packs.length ? packButtons(packs) : [{ id: BTN.WHAT_GET, title: 'What do I get?' }]);
@@ -1797,7 +1818,7 @@ async function deliverReport(mobile, regNo, message) {
   // 'public' (2026-10-14): the website's signed-in view — Agree is the sign-in on WhatsApp.
   const freeDetail = String(await settings.get('whatsapp_free_view_detail', 'count')).toLowerCase();
   const price = plan ? `₹${Math.round(plan.price_paise / 100)}` : undefined;
-  const left = await checksLeftLine(user.id);
+  const left = await checksLeftLine(user.id, q);
   await send.text(mobile, badge + (watched ? `${watched}\n\n` : '') + (bought
     ? await report.buildFor(data, { detailed: true, mobile })
     : freeDetail === 'public' ? await report.publicText(data, price ? { price } : {})
@@ -3750,4 +3771,4 @@ async function handle(session, message, mobile) {
 const checkFromWaitlist = (mobile, regNo) => openVehicle(mobile, regNo, { type: 'system' }, 'waitlist: records service back');
 
 module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN, emailNudge, feedbackAsk, _sendValidReport: (m, r) => sendValidReport(m, r),
-  _test: { topicReply, askForNumber } };
+  _test: { topicReply, askForNumber, checksLeftLine, packOffer, packList } };
