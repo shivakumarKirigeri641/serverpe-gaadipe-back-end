@@ -1973,8 +1973,19 @@ async function start(mobile) {
   /* THE PLANS IN THE WELCOME (user, 2026-10-26: "mention it in the welcome as well, people don't see it"): only the
      first check is free, then the packs - read from the plans, so the admin's prices are what they read. */
   const packs = await quota.packsOn().catch(() => false) ? await packList() : [];
+  /* THEIR OWN CHECKS (user, 2026-10-26: "if already consumed, show it's consumed"): a new person, or one who has
+     not used the free check, reads "1st vehicle check FREE"; one who has, reads that it is used - or how many
+     checks they have left, and till when. */
+  const me = await db.one(`SELECT id FROM users WHERE right(mobile, 10) = right($1, 10) LIMIT 1`, [mobile]).catch(() => null);
+  const left = me && packs.length ? await quota.left(me.id).catch(() => null) : null;
+  const tillOf = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
+  const mine = !left?.packs ? '✅ 1st vehicle check — *FREE* _(only the first)_\n'
+    : left.free_left > 0 ? '✅ 1st vehicle check — *FREE* _(only the first)_\n'
+    : left.credits?.left > 0 ? `🔢 *You have ${left.credits.left} check${left.credits.left === 1 ? '' : 's'} left*`
+      + `${left.credits.last_expiry ? ` _(valid till ${tillOf(left.credits.last_expiry)})_` : ''}\n`
+    : '✅ Your free check — _already used_\n';
   const first = packs.length
-    ? `✅ 1st vehicle check — *FREE* _(only the first)_\n🔢 More checks: *${packs.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}*\n`
+    ? `${mine}🔢 More checks: *${packs.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}*\n`
     : '✅ Basic check — *FREE*\n';
   const price = plan
     // "Full report @ just ₹19" (user, 2026-10-24: "something attractive"); from ₹11 one time (2026-10-25, REPORT11).
