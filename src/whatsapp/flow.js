@@ -2306,6 +2306,65 @@ async function alertChoice(mobile, text, message) {
   return true;
 }
 
+/*
+ * WHAT THEY ASKED FOR, WHEN IT IS NOT A VEHICLE CHECK (user, 2026-10-26: "Licence banana hai bhai" got "Just send
+ * your vehicle number" four times). A driving licence or an RC book is the RTO's; GaadiPe shows details only.
+ * Hindi when they wrote in Hindi or Hinglish. Never an official site's name (send.js safeWords).
+ * Only for text with no vehicle number in it - the callers check that first ("DL" is also Delhi's code).
+ */
+const HINGLISH = /[ऀ-ॿ]|\b(hai|bhai|banana|banwana|chahiye|kaise|kya|karna|mujhe|mera|apna|bolo|batao)\b/i;
+function topicReply(said) {
+  const t = String(said || '');
+  const hi = HINGLISH.test(t);
+  if (/\b(d\.?\s?l|driving\s*li[cs]en[cs]e?|li[cs]en[cs]e?|lisen[cs]e?|lycence)\b|लाइसेंस|लायसेंस|लाइसेन्स/i.test(t)) {
+    return hi
+      ? '🪪 *ड्राइविंग लाइसेंस*\n\nGaadiPe ड्राइविंग लाइसेंस नहीं बनाता। नया लाइसेंस या उसका नवीनीकरण के लिए कृपया अपने नज़दीकी RTO से संपर्क करें।\n\n'
+        + 'हम *गाड़ी* की जानकारी दिखाते हैं — बीमा, PUC, टैक्स और चालान। गाड़ी का नंबर भेजें, जैसे *KA01AB1234* — पहली जाँच मुफ़्त है।'
+      : '🪪 *Driving licence*\n\nGaadiPe does not issue driving licences. For a new licence or a renewal, please contact your nearest RTO.\n\n'
+        + 'What we do: show a *vehicle\'s* insurance, PUC, tax and challans. Send a vehicle number, like *KA01AB1234* — the first check is free.';
+  }
+  if (/\b(r\.?\s?c|registration)\b/i.test(t) || /आरसी/.test(t)) {
+    return hi
+      ? '📄 *RC की जानकारी*\n\nगाड़ी का नंबर भेजें, जैसे *KA01AB1234* — मैं उसकी RC की जानकारी दिखाऊँगा: मालिक (छुपा हुआ), रजिस्ट्रेशन तारीख, बीमा, PUC, टैक्स, फिटनेस और चालान।\n\n'
+        + '_GaadiPe सिर्फ़ जानकारी दिखाता है। नई या डुप्लीकेट RC बुक के लिए अपने RTO से संपर्क करें।_'
+      : '📄 *RC details*\n\nSend the vehicle number, like *KA01AB1234*, and I will show its RC details — '
+        + 'owner (masked), registration date, insurance, PUC, tax, fitness and challans. The basic check is free.\n\n'
+        + '_GaadiPe shows the details only. For a new or duplicate RC book, please contact your RTO._';
+  }
+  return null;
+}
+
+/* A new person who has not sent a number yet, again and again (2026-10-26): never the same line twice in a row.
+   First the usual line; then other words and a "What do I get?" button; after that at most once in 10 minutes. */
+async function askForNumber(mobile, said) {
+  const terms = `_By sending it, you agree to our Terms, Privacy & Refund policies (${SITE}/terms)._`;
+  const topic = topicReply(said);
+  const ctx = await sessionContext(mobile);
+  const n = Number(ctx.ask_number_n || 0);
+  const last = ctx.ask_number_at ? Date.parse(ctx.ask_number_at) : 0;
+  const recent = Date.now() - last < 10 * 60 * 1000;
+  const topicKey = topic ? topic.slice(0, 12) : null;
+  // The same answer twice within 10 minutes is no answer: quiet instead (an RTO topic once, then the usual rule).
+  if (recent && ((topic && ctx.ask_topic === topicKey) || (!topic && n >= 2))) {
+    console.log('[wa] %s: not a vehicle number again — quiet for now', mobile);
+    return;
+  }
+  await db.query(`UPDATE whatsapp_sessions SET context = context || $2::jsonb, modified_at = now() WHERE mobile = $1`,
+    [mobile, JSON.stringify({ ask_number_n: n + 1, ask_number_at: new Date().toISOString(), ask_topic: topicKey })]);
+  if (topic) { await send.text(mobile, `${topic}\n\n${terms}`); return; }
+  if (n === 0) {
+    await send.text(mobile, `Just send your *vehicle number* to start — like *KA01AB1234*.\n\n${terms}`);
+    return;
+  }
+  const hi = HINGLISH.test(String(said || ''));
+  await send.buttons(mobile,
+    (hi
+      ? 'मैं गाड़ी को उसकी *नंबर प्लेट* से जाँचता हूँ — बस नंबर टाइप करके भेजें, जैसे *KA01AB1234* या *MH12DE3456*।'
+      : 'I check a vehicle by its *number plate* — just type the number and send it, like *KA01AB1234* or *MH12DE3456*.')
+    + `\n\n${terms}`,
+    [{ id: BTN.WHAT_GET, title: 'What do I get?' }]);
+}
+
 async function handle(session, message, mobile) {
   const intent = intentOf(message);
   const state = session.state || 'new';
@@ -3438,15 +3497,9 @@ async function handle(session, message, mobile) {
         await quietNudges(mobile);
         const plan = await billing.reportPlan().catch(() => null);
         const price = plan ? ` at ₹${Math.round(plan.price_paise / 100)}` : '';
-        /* "RC book", "RC details", "registration card" (user, 2026-10-26): what GaadiPe can show, and the one
-           thing it cannot - the RC book itself. No naming of official sites on WhatsApp (send.js safeWords). */
-        if (/\b(r\.?\s?c|registration)\b(\s*(book|card|details?|copy|smart\s*card|download|status))?/i.test(said)) {
-          await doors(mobile,
-            '📄 *RC details*\n\nSend the vehicle number, like *KA01AB1234*, and I will show its RC details — '
-            + 'owner (masked), registration date, insurance, PUC, tax, fitness and challans. The basic check is free.\n\n'
-            + '_GaadiPe shows the details only. For a new or duplicate RC book, please contact your RTO._');
-          return;
-        }
+        // "RC book", "Licence banana hai" (topicReply, 2026-10-26): what GaadiPe can show, and what is the RTO's.
+        const topic = topicReply(said);
+        if (topic) { await doors(mobile, topic); return; }
         if (UNHAPPY_RE.test(said)) {
           await send.buttons(mobile,
             'Sorry this was not what you expected 🙏\n\n'
@@ -3578,8 +3631,7 @@ async function handle(session, message, mobile) {
           await deliverReport(mobile, reg, message);
           return;
         }
-        await send.text(mobile, 'Just send your *vehicle number* to start — like *KA01AB1234*.\n\n'
-          + `_By sending it, you agree to our Terms, Privacy & Refund policies (${SITE}/terms)._`);
+        await askForNumber(mobile, intent.text || '');
         return;
       }
       await send.buttons(mobile,
@@ -3610,4 +3662,5 @@ async function handle(session, message, mobile) {
 /** The free check for a number on the waiting list, now the records are back (jobs/waitlist.js). */
 const checkFromWaitlist = (mobile, regNo) => openVehicle(mobile, regNo, { type: 'system' }, 'waitlist: records service back');
 
-module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN, emailNudge, feedbackAsk, _sendValidReport: (m, r) => sendValidReport(m, r) };
+module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN, emailNudge, feedbackAsk, _sendValidReport: (m, r) => sendValidReport(m, r),
+  _test: { topicReply, askForNumber } };
