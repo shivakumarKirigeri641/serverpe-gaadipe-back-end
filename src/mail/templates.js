@@ -114,7 +114,7 @@ function layout({ preheader = '', badge, title, lead, stats = [], sections = [],
       <div style="border-top:1px solid #e3ecea;padding-top:14px;font-size:11.5px;line-height:1.6;color:#6b8380;">
         ${esc(footer || 'You are receiving this because you administer GaadiPe. Alerts can be switched off under Settings in the admin panel.')}<br>
         ${footerHtml ? `${footerHtml}<br>` : ''}GaadiPe · ServerPe App Solutions · Bengaluru · ${repliesWelcome
-          ? 'Reply to this email — it reaches support@gaadipe.in.' : 'This mailbox is not monitored — please do not reply.'}
+          ? 'Reply to this email — it reaches support@gaadipe.in. We reply 10am–6pm IST, Monday to Friday (not on Saturdays, Sundays or public holidays).' :'This mailbox is not monitored — please do not reply.'}
       </div>
     </td></tr>
   </table>

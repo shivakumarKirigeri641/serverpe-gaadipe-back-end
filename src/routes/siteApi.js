@@ -312,7 +312,8 @@ router.post('/contact', safe(async (req, res) => {
     act.log('✉️', `Contact form · ${clip(b.subject, 60) || 'message'} · “${String(message).slice(0, 150)}”`,
       { who: act.who(name, mobile || session?.user?.mobile), detail: 'website' });
   }
-  res.json({ ok: true, message: hi ? 'धन्यवाद — आपका संदेश हमें मिल गया है। हम जल्द जवाब देंगे।' : 'Thank you — your message has reached us. We will reply soon.' });
+  res.json({ ok: true, message: hi ? 'धन्यवाद — आपका संदेश हमें मिल गया है। हम सोमवार से शुक्रवार, सुबह 10 से शाम 6 बजे (IST) के बीच जवाब देते हैं — शनिवार, रविवार और छुट्टियों पर नहीं।'
+    : 'Thank you — your message has reached us. We reply between 10am and 6pm IST, Monday to Friday — not on Saturdays, Sundays or public holidays.' });
 }));
 
 router.post('/session/otp', safe(async (req, res) => {
