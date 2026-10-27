@@ -28,9 +28,23 @@ const FROM = /^\d{4}-\d{2}-\d{2}$/.test(arg('from', '')) ? arg('from') : '2026-1
 const LIMIT = Math.max(1, Math.min(200, Number(arg('limit', 50)) || 50));
 
 const DOCS = [['insurance_upto', 'insurance', 'Insurance'], ['pucc_upto', 'pucc', 'PUC'], ['tax_upto', 'tax', 'Road tax'], ['fitness_upto', 'fitness', 'Fitness']];
-const day = (d) => new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const day = (d) => { const [y, m, dd] = new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).split('-'); return `${dd} ${MON[m - 1]} ${y}`; };
 const mask = (m) => `••••••${String(m).slice(-4)}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* Calendar years, months and days between two dates (user, 2026-10-27: "instead of x days, include years,
+   months, days"): "1 year 2 months 5 days", "3 months", "12 days". Zero parts are left out. */
+function span(a, b) {
+  const [x, y] = a <= b ? [a, b] : [b, a];
+  let years = y.getFullYear() - x.getFullYear();
+  let months = y.getMonth() - x.getMonth();
+  let days = y.getDate() - x.getDate();
+  if (days < 0) { months -= 1; days += new Date(y.getFullYear(), y.getMonth(), 0).getDate(); }
+  if (months < 0) { years -= 1; months += 12; }
+  const part = (n, w) => (n ? `${n} ${w}${n === 1 ? '' : 's'}` : null);
+  return [part(years, 'year'), part(months, 'month'), part(days, 'day')].filter(Boolean).join(' ') || '0 days';
+}
 
 /* The document due soonest (an expired one first) - what the alert is about. */
 function nearest(rc) {
@@ -39,14 +53,27 @@ function nearest(rc) {
     .sort((a, b) => a.at - b.at);
   if (!all.length) return null;
   const d = all[0];
-  const days = Math.ceil((d.at - Date.now()) / 86400000);
-  const status = days < 0 ? `Expired ${-days} day${days === -1 ? '' : 's'} ago` : days === 0 ? 'Expires today'
-    : `Expires in ${days} day${days === 1 ? '' : 's'}`;
+  // Whole days in IST: today's date against the document's date.
+  const today = new Date(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
+  const due = new Date(d.at.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
+  const status = due.getTime() === today.getTime() ? 'Expires today'
+    : due < today ? `Expired ${span(due, today)} ago` : `Expires in ${span(today, due)}`;
   return { key: d.key, document: d.label, expiry: day(d.at), status };
 }
 
+if (process.argv.includes('--examples')) {
+  // What the status line reads like, for sample dates - nothing read, nothing sent.
+  const t = new Date(); const at = (y, m, dd) => new Date(t.getFullYear() + y, t.getMonth() + m, t.getDate() + dd);
+  for (const [label, d] of [['today', at(0, 0, 0)], ['+1 day', at(0, 0, 1)], ['+12 days', at(0, 0, 12)], ['+1 month', at(0, 1, 0)],
+    ['+2 months 5 days', at(0, 2, 5)], ['+1 year 3 months 10 days', at(1, 3, 10)], ['+2 years', at(2, 0, 0)],
+    ['-3 days', at(0, 0, -3)], ['-4 months 2 days', at(0, -4, -2)], ['-1 year 1 month 1 day', at(-1, -1, -1)]]) {
+    console.log(`  ${label.padEnd(26)} ${day(d)}  →  ${nearest({ insurance_upto: d }).status}`);
+  }
+  process.exit(0);
+}
+
 (async () => {
-  const tpl = String(await settings.get('wa_template_monitoring', '') || '').trim();
+  const tpl =String(await settings.get('wa_template_monitoring', '') || '').trim();
   if (!tpl) { console.log('\nNo monitoring template set (wa_template_monitoring). Nothing sent.\n'); process.exit(1); }
   const category = await send.categoryOf(tpl);
   if (category !== 'UTILITY') { console.log(`\n${tpl} is ${category || 'unknown'}, not UTILITY - refused.\n`); process.exit(1); }
