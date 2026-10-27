@@ -165,7 +165,8 @@ async function webChecks() {
       return {
         // Vehicle number and mobile in the subject and at the top (user, 2026-10-08).
         // ✅ record found · ⚠️ not found or the records service failed (user, 2026-10-08).
-        subject: `${d.found === false ? '⚠️' : '✅'} ${d.reg_no || 'Vehicle'} · ${T.mobile(u?.mobile)}${u?.name ? ` · ${u.name}` : ''} · ${kindOf}`,
+        // 🆓 free lookup · 💰 paid lookup, first (user, 2026-10-27).
+        subject: `${await lookupIcon(d.reg_no, e.created_at)}${d.found === false ? '⚠️' : '✅'} ${d.reg_no || 'Vehicle'} · ${T.mobile(u?.mobile)}${u?.name ? ` · ${u.name}` : ''} · ${kindOf}`,
         ...T.layout({
           badge: { text: `Website check · ${kindOf}`, tone: d.found === false ? 'watch' : bought ? 'good' : 'info' },
           title: `${who} checked ${d.reg_no || 'a vehicle'} on gaadipe.in`,
@@ -277,7 +278,8 @@ async function chatChecks() {
         : a.outcome === 'not_found' ? 'No Government record found' : `Failed (${a.refusal || 'records service'})`;
       return {
         // ✅ found and shown · ⚠️ no record · ❌ every source failed (user, 2026-10-08).
-        subject: `${a.outcome === 'shown' ? '✅' : a.outcome === 'not_found' ? '⚠️' : '❌'} Free check · ${a.reg_no || 'vehicle'} · ${shownLine} · ${p.city || place}`,
+        // 🆓 free lookup · 💰 paid lookup, first (user, 2026-10-27).
+        subject: `${await lookupIcon(a.reg_no, a.created_at)}${a.outcome === 'shown' ? '✅' : a.outcome === 'not_found' ? '⚠️' : '❌'} Free check · ${a.reg_no || 'vehicle'} · ${shownLine} · ${p.city || place}`,
         ...T.layout({
           badge: { text: `Free check before sign-in · ${a.outcome === 'shown' ? 'record found' : a.outcome === 'not_found' ? 'no record' : 'failed'}`,
                    tone: a.outcome === 'shown' ? 'good' : a.outcome === 'not_found' ? 'watch' : 'wrong' },
@@ -783,6 +785,18 @@ async function rtoLine(reg) {
   return name ? `${code} · ${name}` : code;
 }
 
+/* FREE OR PAID LOOKUP, AT A GLANCE (user, 2026-10-27: "if there is a free API call for a vehicle put one icon in the
+   subject, if paid, another"). From api_calls for this vehicle around the check: any call that cost money → 💰 with
+   the amount; otherwise 🆓 (the free source, or our saved record - nothing paid). */
+async function lookupIcon(regNo, at) {
+  if (!regNo || !at) return '';
+  const r = await db.one(
+    `SELECT coalesce(sum(cost_paise), 0)::int AS paise FROM api_calls
+      WHERE upper(reg_no) = upper($1) AND created_at BETWEEN $2::timestamptz - interval '3 minutes' AND $2::timestamptz + interval '1 minute'`,
+    [regNo, at]).catch(() => null);
+  return r?.paise > 0 ? `💰₹${(r.paise / 100).toFixed(2)} ` : '🆓 ';
+}
+
 /*
  * MORE ABOUT A NEW CONTACT (user, 2026-09-30) — everything we know, without
  * guessing. WhatsApp shares no location, so "where" comes from what they did:
@@ -1083,7 +1097,8 @@ async function waChecks() {
         const kindOf = d.bought ? 'Repeat check · full report'
           : before?.n ? 'Repeat check · basic' : 'New vehicle';
         return {
-          subject: `${failed ? '⚠️' : '🔎'} ${d.reg_no || 'Vehicle'} checked · ${nameOf(w, d.mobile)} · ${kindOf}`,
+          // 🆓 free lookup · 💰 paid lookup, first (user, 2026-10-27).
+          subject: `${await lookupIcon(d.reg_no, e.created_at)}${failed ? '⚠️' : '🔎'} ${d.reg_no || 'Vehicle'} checked · ${nameOf(w, d.mobile)} · ${kindOf}`,
           ...T.layout({
             badge: { text: failed ? `Check failed · ${kindOf}` : kindOf, tone: failed ? 'watch' : d.bought ? 'good' : 'info' },
             title: `${nameOf(w, d.mobile)} checked ${d.reg_no || 'a vehicle'}`,
