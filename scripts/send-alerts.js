@@ -26,6 +26,8 @@ const arg = (k, d = null) => { const i = process.argv.indexOf(`--${k}`); return 
 const SEND = process.argv.includes('--send');
 const FROM = /^\d{4}-\d{2}-\d{2}$/.test(arg('from', '')) ? arg('from') : '2026-10-23';
 const LIMIT = Math.max(1, Math.min(200, Number(arg('limit', 50)) || 50));
+// Further off than this is "All good" (--far 30 by default).
+const FAR_DAYS = Math.max(1, Number(arg('far', 30)) || 30);
 
 const DOCS = [['insurance_upto', 'insurance', 'Insurance'], ['pucc_upto', 'pucc', 'PUC'], ['tax_upto', 'tax', 'Road tax'], ['fitness_upto', 'fitness', 'Fitness']];
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -56,8 +58,13 @@ function nearest(rc) {
   // Whole days in IST: today's date against the document's date.
   const today = new Date(new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
   const due = new Date(d.at.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }));
-  const status = due.getTime() === today.getTime() ? 'Expires today'
-    : due < today ? `Expired ${span(due, today)} ago` : `Expires in ${span(today, due)}`;
+  /* Far off (user, 2026-10-27: "if expiry date is far, then say all good"): more than FAR_DAYS away - and this
+     is the SOONEST of their documents, so every one of them is fine. */
+  const left = Math.round((due - today) / 86400000);
+  const status = left === 0 ? 'Expires today'
+    : left < 0 ? `Expired ${span(due, today)} ago`
+    : left > FAR_DAYS ? `All good ✅ valid for ${span(today, due)}`
+    : `Expires in ${span(today, due)}`;
   return { key: d.key, document: d.label, expiry: day(d.at), status };
 }
 
