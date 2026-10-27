@@ -28,6 +28,25 @@ const FROM = /^\d{4}-\d{2}-\d{2}$/.test(arg('from', '')) ? arg('from') : '2026-1
 const LIMIT = Math.max(1, Math.min(200, Number(arg('limit', 50)) || 50));
 // Further off than this is "All good" (--far 30 by default).
 const FAR_DAYS = Math.max(1, Number(arg('far', 30)) || 30);
+/* Expired longer ago than this is skipped (user, 2026-10-27, dry run: "Fitness expired 20 years ago") - an old
+   or scrapped vehicle, or an incomplete record; an alert about it reads as wrong, and gets reported. */
+const MAX_EXPIRED_DAYS = Math.max(1, Number(arg('max-expired', 365)) || 365);
+
+/* A name fit for "Hello {{1}}" (2026-10-27 dry run: "🥰", "Hi", "My", "santoshdeepak87"): the first word, letters
+   only, in any script; emoji, a greeting or a username with digits becomes "there". */
+const NOT_NAMES = new Set(['hi', 'hello', 'hey', 'my', 'me', 'ok', 'sir', 'mr', 'mrs', 'ms', 'dr', 'bro', 'user', 'test',
+  'null', 'none', 'na', 'whatsapp', 'unknown', 'mobile', 'customer', 'the', 'shri', 'sri']);
+function tidyName(raw) {
+  const word = String(raw || '').trim().split(/\s+/)[0] || '';
+  if (/\d/.test(word)) return 'there';
+  // Emoji leave variation selectors and joiners behind (marks, but not part of any letter): out first.
+  const letters = word.replace(/[︀-️‌‍]/g, '').replace(/[^\p{L}\p{M}]/gu, '').replace(/^\p{M}+/u, '');
+  const count = (letters.match(/\p{L}/gu) || []).length;
+  if (count < 2 || count > 20 || NOT_NAMES.has(letters.toLowerCase())) return 'there';
+  // Initials stay as they are (KPP); RAJ / raj -> Raj (Latin only; other scripts as they are).
+  if (/^[A-Z]{2,3}$/.test(letters)) return letters;
+  return /^[A-Za-z]+$/.test(letters) ? letters[0].toUpperCase() + letters.slice(1).toLowerCase() : letters;
+}
 
 const DOCS = [['insurance_upto', 'insurance', 'Insurance'], ['pucc_upto', 'pucc', 'PUC'], ['tax_upto', 'tax', 'Road tax'], ['fitness_upto', 'fitness', 'Fitness']];
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -65,7 +84,7 @@ function nearest(rc) {
     : left < 0 ? `Expired ${span(due, today)} ago`
     : left > FAR_DAYS ? `All good ✅ valid for ${span(today, due)}`
     : `Expires in ${span(today, due)}`;
-  return { key: d.key, document: d.label, expiry: day(d.at), status };
+  return { key: d.key, document: d.label, expiry: day(d.at), status, stale: left < -MAX_EXPIRED_DAYS };
 }
 
 if (process.argv.includes('--examples')) {
@@ -74,7 +93,12 @@ if (process.argv.includes('--examples')) {
   for (const [label, d] of [['today', at(0, 0, 0)], ['+1 day', at(0, 0, 1)], ['+12 days', at(0, 0, 12)], ['+1 month', at(0, 1, 0)],
     ['+2 months 5 days', at(0, 2, 5)], ['+1 year 3 months 10 days', at(1, 3, 10)], ['+2 years', at(2, 0, 0)],
     ['-3 days', at(0, 0, -3)], ['-4 months 2 days', at(0, -4, -2)], ['-1 year 1 month 1 day', at(-1, -1, -1)]]) {
-    console.log(`  ${label.padEnd(26)} ${day(d)}  →  ${nearest({ insurance_upto: d }).status}`);
+    const n = nearest({ insurance_upto: d });
+    console.log(`  ${label.padEnd(26)} ${day(d)}  →  ${n.stale ? 'SKIPPED (too old)' : n.status}`);
+  }
+  console.log('');
+  for (const nm of ['Mohd', '🥰', '😁😁😁😁', 'santoshdeepak87', '🅿️K⤵️', 'Hi', 'My', 'raj', 'AZEEZMULLA', 'இளந்துறை', 'KPP', 'Sheikh Ahmed', 'pandiselva861']) {
+    console.log(`  name ${JSON.stringify(nm).padEnd(22)} →  Hello ${tidyName(nm)}`);
   }
   process.exit(0);
 }
@@ -110,7 +134,8 @@ if (process.argv.includes('--examples')) {
   for (const [i, r] of rows.entries()) {
     const due = nearest(r.rc);
     if (!due) { console.log(`  ${i + 1}. ${mask(r.mobile)} ${r.reg_no} - no document dates saved, skipped`); skipped += 1; continue; }
-    const first = String(r.name).split(/\s+/)[0].slice(0, 30);
+    if (due.stale) { console.log(`  ${i + 1}. ${mask(r.mobile)} ${r.reg_no} - ${due.document} ${due.status}: too old, skipped`); skipped += 1; continue; }
+    const first = tidyName(r.name);
     const may = await send.mayStart(r.mobile);
     if (!may.ok) {
       console.log(`  ${i + 1}. ${mask(r.mobile)} ${r.reg_no} - skipped (${may.why})`); skipped += 1;
