@@ -130,6 +130,13 @@ async function snoozed(userId, vehicleId, doc = 'all') {
         AND document IN ($3, 'all') AND until > now() LIMIT 1`, [userId, vehicleId, doc]));
 }
 
+/** Does this customer have monitoring running on this vehicle? */
+async function watched(userId, vehicleId) {
+  return Boolean(await db.one(
+    `SELECT 1 FROM subscriptions WHERE user_id = $1 AND vehicle_id = $2 AND is_active AND ends_on >= CURRENT_DATE LIMIT 1`,
+    [userId, vehicleId]).catch(() => null));
+}
+
 /**
  * A tap on one of the three buttons, or "pause alerts" / "resume alerts" typed.
  * Returns null when the message was not one of these, else
@@ -168,6 +175,26 @@ async function handleTap(mobile, intent) {
         WHERE uv.user_id = $1 AND uv.vehicle_id = $2 LIMIT 1`, [user.id, tap.vehicleId]);
     if (!own) return null;
     reg = own.reg_no;
+  }
+
+  /*
+   * NOT WATCHED (user, 2026-10-27: the one-off alert from scripts/send-alerts.js went to customers with no
+   * monitoring). "We will keep watching" would be a promise nobody keeps, so Thanks, Pause and "No, keep alerts"
+   * offer the alerts instead - the report with 28 days of monitoring (REPORT19). The tap opened the 24-hour window,
+   * so this is a reply, not a template. pending_reg makes "Start alerts" (flow.js BTN.BUY_REPORT) buy for this vehicle.
+   */
+  if (reg && ['t', 'p', 'pn'].includes(action) && !(await watched(user.id, tap.vehicleId))) {
+    const plan = await require('../pay/billing').reportPlan().catch(() => null);
+    const price = plan ? `₹${Math.round(Number(plan.price_paise) / 100)}` : '₹19';
+    await db.query(
+      `UPDATE whatsapp_sessions SET context = coalesce(context, '{}'::jsonb) || $2::jsonb, modified_at = now()
+        WHERE mobile = $1`, [mobile, JSON.stringify({ pending_reg: reg })]).catch(() => {});
+    const opening = action === 't' ? 'You\'re welcome 🙏' : `👍 No alerts are set up for *${reg}*, so there is nothing to pause.`;
+    await say(mobile, `${opening}\n\nWant GaadiPe to keep watching *${reg}*? Get a reminder before insurance, PUC, `
+      + `road tax or fitness expires, and for new challans — *${price} for ${plan?.duration_days || 28} days*, with the full report. `
+      + 'Nothing renews automatically.',
+    [{ id: 'buy_report', title: `Start alerts ${price}` }, { id: `mon|c|${tap.vehicleId}|chg|all`, title: `See ${reg}`.slice(0, 20) }, B.menu]);
+    return { step: action === 't' ? 'alert_thanks_offer' : 'alert_pause_offer' };
   }
 
   if (action === 't') {
