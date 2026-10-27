@@ -1,10 +1,10 @@
 /**
- * scripts/send-alerts.js — THE MONITORING ALERT TO EACH CUSTOMER FROM since-list.js, 2-5 MINUTES APART
- * (user, 2026-10-27: "give script to send each with random of 2-5 min gap"). About their OWN vehicle: its nearest
+ * scripts/send-alerts.js — THE MONITORING ALERT TO EACH CUSTOMER FROM since-list.js, 1-2 MINUTES APART
+ * (user, 2026-10-27: "give script to send each with random of 2-5 min gap", then "1 or 2 min, no more"). About their OWN vehicle: its nearest
  * document date. Dry run by default - nothing is sent without --send.
  *
  *   node scripts/send-alerts.js                     dry run: who would get what (masked numbers)
- *   node scripts/send-alerts.js --limit 50 --send   really send, 2-5 min apart
+ *   node scripts/send-alerts.js --limit 50 --send   really send, 1-2 min apart
  *   --from 2026-10-23                               joined from this IST date (default), up to 24 hours ago
  *
  * The template is the monitoring alert the alert jobs use (setting wa_template_monitoring; whatsapp/monitorAlert.js):
@@ -105,7 +105,7 @@ if (process.argv.includes('--examples')) {
       ORDER BY u.created_at
       LIMIT $3`, [FROM, tpl, LIMIT]);
 
-  console.log(`\n${SEND ? 'SENDING' : 'DRY RUN (nothing sent)'} · ${tpl} (${category}) · ${rows.length} customer${rows.length === 1 ? '' : 's'} · 2-5 min apart\n`);
+  console.log(`\n${SEND ? 'SENDING' : 'DRY RUN (nothing sent)'} · ${tpl} (${category}) · ${rows.length} customer${rows.length === 1 ? '' : 's'} · 1-2 min apart\n`);
   let sent = 0; let skipped = 0;
   for (const [i, r] of rows.entries()) {
     const due = nearest(r.rc);
@@ -129,7 +129,7 @@ if (process.argv.includes('--examples')) {
     const brake = await send.mayStart(r.mobile).catch(() => ({ ok: false, why: 'unknown' }));
     if (['whatsapp_off', 'templates_paused'].includes(brake.why)) { console.log('\n  WhatsApp is off or templates are paused (the spam brake) - stopped.\n'); break; }
     if (i < rows.length - 1) {
-      const wait = 120000 + Math.floor(Math.random() * 180000);
+      const wait = 60000 + Math.floor(Math.random() * 60000);
       console.log(`     next in ${(wait / 60000).toFixed(1)} min`);
       await sleep(wait);
     }
