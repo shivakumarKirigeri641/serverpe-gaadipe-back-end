@@ -708,4 +708,4 @@ async function optedOut(mobile) {
 }
 
 module.exports = { _unmasked: unmasked, text, buttons, ctaUrl, list, document, uploadPdf, template, windowOpen, toWaId, allowed, optedOut, mayStart, live, numberSince,
-                   agreedTerms, optedInToOffers, categoryOf, consentGate, _varCount: varCount };
+                   agreedTerms, optedInToOffers, categoryOf, consentGate, qualityRating, _varCount: varCount };
