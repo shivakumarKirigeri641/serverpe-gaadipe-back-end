@@ -58,6 +58,18 @@ const show = (title, obj) => { console.log(`\n── ${title}`); console.log(JSO
   show('4. Token belongs to', me);
   const perms = await G('me/permissions');
   if (Array.isArray(perms.data)) console.log(`   scopes: ${perms.data.filter((p) => p.status === 'granted').map((p) => p.permission).join(', ') || '(none listed — system-user tokens list them in Business Settings)'}`);
+  /* WHEN IT EXPIRES (user, 2026-10-28: "permanent token for gaadipe is for 60 days or permanent?"). The token
+     inspects itself (debug_token, a GET); expires_at 0 = never. Nothing of the token is printed. */
+  const dbg = await G(`debug_token?input_token=${encodeURIComponent(TOKEN || '')}`);
+  const d = dbg.data || {};
+  if (dbg.error || !dbg.data) console.log(`   expiry: could not read (${dbg.error || 'no answer'})`);
+  else {
+    const when = (s) => new Date(s * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
+    const left = d.expires_at ? Math.floor((d.expires_at * 1000 - Date.now()) / 86400000) : null;
+    console.log(`   type: ${d.type || '?'} · valid: ${d.is_valid ? 'yes' : 'NO'}`);
+    console.log(`   expires: ${d.expires_at ? `⚠️  ${when(d.expires_at)} (${left} days left) — make a "Never" token before then` : 'NEVER ✅ (permanent)'}`);
+    if (d.data_access_expires_at) console.log(`   data access until: ${when(d.data_access_expires_at)}`);
+  }
 
   // 6. GaadiPe's own switches
   console.log('\n── 6. GaadiPe settings');
