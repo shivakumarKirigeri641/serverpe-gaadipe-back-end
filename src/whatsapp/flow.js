@@ -675,7 +675,8 @@ async function whatYouGet(mobile) {
     + NOT_A_DOCUMENT_SHORT + '\n\n'
     + `Sample report: ${require('../mail/customer').SITE()}/sample-report.pdf`,
   // The middle button shows the packs (fleet hidden, 2026-10-26).
-  ['check', ...(pk?.length ? [{ id: BTN.BUY_CHECKS, title: 'Buy vehicle checks' }] : []), 'menu']);
+  // Only while a pack is on sale (migrations 223-224).
+  ['check', ...((pk || await packList()).length ? [{ id: BTN.BUY_CHECKS, title: 'Buy vehicle checks' }] : []), 'menu']);
 }
 
 /*
