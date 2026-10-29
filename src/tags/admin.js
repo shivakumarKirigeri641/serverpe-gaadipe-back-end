@@ -20,7 +20,7 @@ async function list({ q = '' } = {}) {
             (SELECT count(*) FROM tag_messages m WHERE m.tag_id = t.id)::int AS messages,
             (SELECT max(created_at) FROM tag_messages m WHERE m.tag_id = t.id) AS last_message_at,
             (SELECT count(*) FROM tag_orders o WHERE o.tag_id = t.id AND o.status IN ('paid', 'dispatched'))::int AS stickers
-       FROM vehicle_tags t JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = t.user_id
+       FROM qr_tags t JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = t.user_id
       WHERE ($1 = '' OR v.reg_no LIKE '%' || $1 || '%' OR t.code = $1 OR u.mobile LIKE '%' || $1 || '%')
       ORDER BY t.is_active DESC, t.created_at DESC LIMIT 300`, [term]);
   const allow = String(await settings.get('tag_allow_mobiles', '') || '');
@@ -34,7 +34,7 @@ async function messages() {
     `SELECT m.id, m.reason, m.status, m.channel, m.error, m.replies, m.last_reply, m.last_reply_at, m.created_at,
             right(m.sender_mobile, 4) AS sender_last4, t.code, v.reg_no, u.mobile AS owner_mobile,
             EXISTS (SELECT 1 FROM tag_blocks b WHERE b.owner_user_id = t.user_id AND b.sender_mobile = m.sender_mobile) AS blocked
-       FROM tag_messages m JOIN vehicle_tags t ON t.id = m.tag_id JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = t.user_id
+       FROM tag_messages m JOIN qr_tags t ON t.id = m.tag_id JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = t.user_id
       ORDER BY m.id DESC LIMIT 200`);
   return rows.map((r) => ({ ...r, id: String(r.id) }));
 }
@@ -43,7 +43,7 @@ async function blocks() {
   const { rows } = await db.query(
     `SELECT b.id, b.reported, b.created_at, right(b.sender_mobile, 4) AS sender_last4, u.mobile AS owner_mobile,
             coalesce(nullif(u.display_name, ''), nullif(u.wa_profile_name, '')) AS owner_name, m.reason,
-            (SELECT string_agg(v.reg_no, ', ') FROM vehicle_tags t JOIN vehicles v ON v.id = t.vehicle_id WHERE t.user_id = b.owner_user_id AND t.is_active) AS vehicles
+            (SELECT string_agg(v.reg_no, ', ') FROM qr_tags t JOIN vehicles v ON v.id = t.vehicle_id WHERE t.user_id = b.owner_user_id AND t.is_active) AS vehicles
        FROM tag_blocks b JOIN users u ON u.id = b.owner_user_id LEFT JOIN tag_messages m ON m.id = b.message_id
       ORDER BY b.reported DESC, b.id DESC LIMIT 200`);
   return rows.map((r) => ({ ...r, id: String(r.id) }));
@@ -94,11 +94,11 @@ async function create({ mobile, regs = [], allow = true }) {
 async function setActive(code, on) {
   const c = String(code || '').toUpperCase();
   if (!on) {
-    const { rowCount } = await db.query(`UPDATE vehicle_tags SET is_active = false, deactivated_at = now() WHERE code = $1 AND is_active`, [c]);
+    const { rowCount } = await db.query(`UPDATE qr_tags SET is_active = false, deactivated_at = now() WHERE code = $1 AND is_active`, [c]);
     return { ok: rowCount > 0 };
   }
   try {
-    const { rowCount } = await db.query(`UPDATE vehicle_tags SET is_active = true, deactivated_at = NULL WHERE code = $1 AND NOT is_active`, [c]);
+    const { rowCount } = await db.query(`UPDATE qr_tags SET is_active = true, deactivated_at = NULL WHERE code = $1 AND NOT is_active`, [c]);
     return { ok: rowCount > 0 };
   } catch (e) {
     if (e.code === '23505') return { ok: false, error: 'This vehicle already has another live tag for the same owner.' };

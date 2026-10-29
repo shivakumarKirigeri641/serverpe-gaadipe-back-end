@@ -7,7 +7,7 @@
 --
 -- New tables only, plus one plan kind ('sticker', the paid delivered tag). Nothing existing changes behaviour.
 
-CREATE TABLE IF NOT EXISTS vehicle_tags (
+CREATE TABLE IF NOT EXISTS qr_tags (
   id              bigserial PRIMARY KEY,
   -- What the QR carries: /t/<code>. 6 characters, no look-alikes (0/O, 1/I/L, 5/S).
   code            text        NOT NULL UNIQUE CHECK (code ~ '^[A-Z0-9]{6}$'),
@@ -20,13 +20,13 @@ CREATE TABLE IF NOT EXISTS vehicle_tags (
   deactivated_at  timestamptz
 );
 -- One live tag per vehicle per owner; an old one switched off can stay for the record.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_vehicle_tags_live ON vehicle_tags (user_id, vehicle_id) WHERE is_active;
-CREATE INDEX IF NOT EXISTS idx_vehicle_tags_user ON vehicle_tags (user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_qr_tags_live ON qr_tags (user_id, vehicle_id) WHERE is_active;
+CREATE INDEX IF NOT EXISTS idx_qr_tags_user ON qr_tags (user_id);
 
 -- One relayed message: a scanner's preset reason to the owner, and the owner's reply(ies) back.
 CREATE TABLE IF NOT EXISTS tag_messages (
   id              bigserial PRIMARY KEY,
-  tag_id          bigint      NOT NULL REFERENCES vehicle_tags(id) ON DELETE CASCADE,
+  tag_id          bigint      NOT NULL REFERENCES qr_tags(id) ON DELETE CASCADE,
   sender_mobile   text        NOT NULL CHECK (sender_mobile ~ '^[0-9]{10}$'),
   reason          text        NOT NULL,
   -- how the owner was told: whatsapp (free-form) / template / sms; or why not: blocked / limited / failed
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS tag_blocks (
 -- A delivered sticker (paid, the 'sticker' plan). The address is kept only to post it.
 CREATE TABLE IF NOT EXISTS tag_orders (
   id              bigserial PRIMARY KEY,
-  tag_id          bigint      NOT NULL REFERENCES vehicle_tags(id) ON DELETE CASCADE,
+  tag_id          bigint      NOT NULL REFERENCES qr_tags(id) ON DELETE CASCADE,
   user_id         bigint      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   pincode         text        NOT NULL CHECK (pincode ~ '^[1-9][0-9]{5}$'),
   zone            text        NOT NULL,

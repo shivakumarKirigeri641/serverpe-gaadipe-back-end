@@ -78,7 +78,7 @@ async function onPaid(c, pay) {
 async function notifyPaid(result, user) {
   const send = require('../whatsapp/send');
   const o = await db.one(
-    `SELECT o.*, t.code, v.reg_no FROM tag_orders o JOIN vehicle_tags t ON t.id = o.tag_id JOIN vehicles v ON v.id = t.vehicle_id
+    `SELECT o.*, t.code, v.reg_no FROM tag_orders o JOIN qr_tags t ON t.id = o.tag_id JOIN vehicles v ON v.id = t.vehicle_id
       WHERE o.payment_row_id = $1`, [result.payment.id]);
   if (!o) return;
   const body = `✅ *Sticker ordered — ${T.masked(o.reg_no)}*\n\n`
@@ -103,7 +103,7 @@ async function dispatch(orderId, { courier, tracking }) {
   if (!o) return { ok: false, error: 'Only a paid order can be marked as posted.' };
   const row = await db.one(
     `SELECT u.mobile, coalesce(nullif(u.display_name, ''), nullif(u.wa_profile_name, ''), 'there') AS name, v.reg_no
-       FROM tag_orders o JOIN users u ON u.id = o.user_id JOIN vehicle_tags t ON t.id = o.tag_id JOIN vehicles v ON v.id = t.vehicle_id
+       FROM tag_orders o JOIN users u ON u.id = o.user_id JOIN qr_tags t ON t.id = o.tag_id JOIN vehicles v ON v.id = t.vehicle_id
       WHERE o.id = $1`, [orderId]);
   const send = require('../whatsapp/send');
   const first = String(row.name).trim().split(/\s+/)[0];
@@ -123,9 +123,9 @@ async function dispatch(orderId, { courier, tracking }) {
 
 async function overview() {
   const c = await db.one(
-    `SELECT (SELECT count(*) FROM vehicle_tags WHERE is_active)::int AS tags,
-            (SELECT count(DISTINCT user_id) FROM vehicle_tags WHERE is_active)::int AS owners,
-            (SELECT coalesce(sum(scans), 0) FROM vehicle_tags)::int AS scans,
+    `SELECT (SELECT count(*) FROM qr_tags WHERE is_active)::int AS tags,
+            (SELECT count(DISTINCT user_id) FROM qr_tags WHERE is_active)::int AS owners,
+            (SELECT coalesce(sum(scans), 0) FROM qr_tags)::int AS scans,
             (SELECT count(*) FROM tag_messages)::int AS messages,
             (SELECT count(*) FROM tag_messages WHERE created_at > now() - interval '1 day')::int AS messages_today,
             (SELECT count(*) FROM tag_messages WHERE replies > 0)::int AS answered,
@@ -136,14 +136,14 @@ async function overview() {
   const { rows: orders } = await db.query(
     `SELECT o.id, o.status, o.pincode, o.zone, o.amount_paise, o.ship_name, o.ship_address, o.courier, o.tracking,
             o.created_at, o.paid_at, o.dispatched_at, t.code, v.reg_no, u.mobile, p.raw->>'test_mode' AS test
-       FROM tag_orders o JOIN vehicle_tags t ON t.id = o.tag_id JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = o.user_id
+       FROM tag_orders o JOIN qr_tags t ON t.id = o.tag_id JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = o.user_id
        LEFT JOIN payments p ON p.id = o.payment_row_id
       WHERE o.status <> 'created' OR o.created_at > now() - interval '2 days'
       ORDER BY (o.status = 'paid') DESC, o.created_at DESC LIMIT 100`);
   const { rows: recent } = await db.query(
     `SELECT m.id, m.reason, m.status, m.channel, m.replies, m.created_at, t.code, v.reg_no,
             right(m.sender_mobile, 4) AS sender_last4
-       FROM tag_messages m JOIN vehicle_tags t ON t.id = m.tag_id JOIN vehicles v ON v.id = t.vehicle_id
+       FROM tag_messages m JOIN qr_tags t ON t.id = m.tag_id JOIN vehicles v ON v.id = t.vehicle_id
       ORDER BY m.id DESC LIMIT 30`);
   return { counts: c, orders, recent, enabled: await T.switchOn() };
 }

@@ -74,7 +74,7 @@ async function vehiclesOf(userId) {
             t.code, t.is_active AS tagged
        FROM user_vehicles uv
        JOIN vehicles v ON v.id = uv.vehicle_id
-       LEFT JOIN vehicle_tags t ON t.user_id = uv.user_id AND t.vehicle_id = v.id AND t.is_active
+       LEFT JOIN qr_tags t ON t.user_id = uv.user_id AND t.vehicle_id = v.id AND t.is_active
       WHERE uv.user_id = $1 AND uv.hidden_at IS NULL
       ORDER BY (t.id IS NOT NULL) DESC, (uv.relation = 'owned') DESC, uv.last_checked_at DESC
       LIMIT 9`, [userId]);
@@ -83,18 +83,18 @@ async function vehiclesOf(userId) {
 
 /** This owner's live tag for this vehicle, made now if there is none. */
 async function getOrCreate(userId, vehicleId) {
-  const have = await db.one(`SELECT * FROM vehicle_tags WHERE user_id = $1 AND vehicle_id = $2 AND is_active`, [userId, vehicleId]);
+  const have = await db.one(`SELECT * FROM qr_tags WHERE user_id = $1 AND vehicle_id = $2 AND is_active`, [userId, vehicleId]);
   if (have) return { tag: have, created: false };
   for (let i = 0; i < 6; i += 1) {
     try {
       const { rows } = await db.query(
-        `INSERT INTO vehicle_tags (code, user_id, vehicle_id) VALUES ($1, $2, $3) RETURNING *`, [newCode(), userId, vehicleId]);
+        `INSERT INTO qr_tags (code, user_id, vehicle_id) VALUES ($1, $2, $3) RETURNING *`, [newCode(), userId, vehicleId]);
       await db.query(`INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'tag_created', $3)`,
         [userId, vehicleId, JSON.stringify({ code: rows[0].code })]).catch(() => {});
       return { tag: rows[0], created: true };
     } catch (e) {
       if (e.code !== '23505') throw e;                 // a code collision: try another; a second live tag: return it
-      const again = await db.one(`SELECT * FROM vehicle_tags WHERE user_id = $1 AND vehicle_id = $2 AND is_active`, [userId, vehicleId]);
+      const again = await db.one(`SELECT * FROM qr_tags WHERE user_id = $1 AND vehicle_id = $2 AND is_active`, [userId, vehicleId]);
       if (again) return { tag: again, created: false };
     }
   }
@@ -108,7 +108,7 @@ async function byCode(code) {
   return db.one(
     `SELECT t.*, v.reg_no, u.mobile AS owner_mobile, u.is_internal AS owner_internal,
             coalesce(nullif(u.display_name, ''), nullif(u.wa_profile_name, ''), nullif(u.name, '')) AS owner_name
-       FROM vehicle_tags t JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = t.user_id
+       FROM qr_tags t JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = t.user_id
       WHERE t.code = $1`, [c]);
 }
 
@@ -119,12 +119,12 @@ async function live(tag) {
 }
 
 async function recordScan(code) {
-  await db.query(`UPDATE vehicle_tags SET scans = scans + 1, last_scan_at = now() WHERE code = $1`, [String(code).toUpperCase()]).catch(() => {});
+  await db.query(`UPDATE qr_tags SET scans = scans + 1, last_scan_at = now() WHERE code = $1`, [String(code).toUpperCase()]).catch(() => {});
 }
 
 async function switchOff(code, userId) {
   const { rowCount } = await db.query(
-    `UPDATE vehicle_tags SET is_active = false, deactivated_at = now() WHERE code = $1 AND user_id = $2 AND is_active`, [code, userId]);
+    `UPDATE qr_tags SET is_active = false, deactivated_at = now() WHERE code = $1 AND user_id = $2 AND is_active`, [code, userId]);
   return rowCount > 0;
 }
 

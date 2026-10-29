@@ -151,7 +151,7 @@ async function tellOwner(tag, m, reason) {
 /** The message this owner may act on: theirs, by id. */
 const ownersMessage = (mobile, id) => db.one(
   `SELECT m.*, t.code, t.user_id, v.reg_no, u.mobile AS owner_mobile
-     FROM tag_messages m JOIN vehicle_tags t ON t.id = m.tag_id JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = t.user_id
+     FROM tag_messages m JOIN qr_tags t ON t.id = m.tag_id JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = t.user_id
     WHERE m.id = $1 AND u.mobile = $2`, [Number(id) || 0, mobile]);
 
 async function askReply(mobile, id) {
