@@ -566,11 +566,7 @@ async function template(mobile, name, params = [], { language = 'en', buttons = 
         ...(headerDocument?.id ? [{ type: 'header', parameters: [{ type: 'document',
           document: { id: headerDocument.id, filename: headerDocument.filename || 'GaadiPe report.pdf' } }] }] : []),
         ...(values.length ? [{ type: 'body', parameters: values.map(text => ({ type: 'text', text })) }] : []),
-        // A { url } entry fills a link button's {{1}} (2026-10-29, gp_tag_shipped_v1 "Track sticker"); the rest are quick replies.
-        ...buttons.map((payload, i) => (payload && typeof payload === 'object' && payload.url != null
-          ? { type: 'button', sub_type: 'url', index: String(i), parameters: [{ type: 'text', text: String(payload.url) }] }
-          : { type: 'button', sub_type: 'quick_reply', index: String(i),
-              parameters: [{ type: 'payload', payload: String(payload).slice(0, 128) }] })),
+        ...buttonParts(buttons, categories.btns?.get(name)),
       ],
     },
   }, { mobile, type: 'template', body: `${name}(${values.join(' | ')})`, templateName: name });
@@ -585,7 +581,7 @@ let categories = { at: 0, map: new Map(), vars: new Map(), words: new Map() };
 async function readTemplates() {
   if (Date.now() - categories.at > 60 * 60 * 1000 && wa.token && wa.businessId) {
     try {
-      const map = new Map(); const vars = new Map(); const words = new Map();
+      const map = new Map(); const vars = new Map(); const words = new Map(); const btns = new Map();
       let next = `https://graph.facebook.com/${wa.apiVersion}/${wa.businessId}/message_templates?fields=name,category,components&limit=200`;
       for (let i = 0; next && i < 10; i += 1) {
         const r = await fetch(next, { headers: { Authorization: `Bearer ${wa.token}` }, signal: AbortSignal.timeout(15000) });
@@ -599,13 +595,37 @@ async function readTemplates() {
              banned account's text under the same name — "…to avoid fines" — and stopped the new, clean template). */
           words.set(t.name, (t.components || []).filter((c) => ['HEADER', 'BODY', 'FOOTER'].includes(c.type) && c.text)
             .map((c) => c.text).join(' '));
+          // The button types in Meta's order (2026-10-29): a link mixed with quick replies may be regrouped by Meta.
+          const b = (t.components || []).find((c) => c.type === 'BUTTONS');
+          if (b?.buttons) btns.set(t.name, b.buttons.map((x) => String(x.type || '').toUpperCase()));
         }
         next = j.paging?.next || null;
       }
-      if (map.size) categories = { at: Date.now(), map, vars, words };
+      if (map.size) categories = { at: Date.now(), map, vars, words, btns };
     } catch { /* keep the last answer */ }
   }
 }
+/*
+ * THE BUTTON VALUES (2026-10-29). A { url } entry fills a link button's {{1}} (gp_tag_shipped_v1 "Track sticker"); any
+ * other entry is a quick reply's payload. With the template's button types known (readTemplates), link values go to the
+ * link buttons and payloads to the quick replies, each in order — so Meta regrouping the buttons does not break a send.
+ * A static link button takes no value and is skipped. Types not known: given order.
+ */
+function buttonParts(buttons, types) {
+  const isUrl = (p) => p && typeof p === 'object' && p.url != null;
+  const part = (p, i) => (isUrl(p)
+    ? { type: 'button', sub_type: 'url', index: String(i), parameters: [{ type: 'text', text: String(p.url) }] }
+    : { type: 'button', sub_type: 'quick_reply', index: String(i), parameters: [{ type: 'payload', payload: String(p).slice(0, 128) }] });
+  if (!types?.length) return buttons.map(part);
+  const urls = buttons.filter(isUrl); const quick = buttons.filter((p) => !isUrl(p));
+  const out = [];
+  types.forEach((t, i) => {
+    if (t === 'URL' && urls.length) out.push(part(urls.shift(), i));
+    else if (t === 'QUICK_REPLY' && quick.length) out.push(part(quick.shift(), i));
+  });
+  return out;
+}
+
 /** How many {{n}} the template's body has, or null when not known. */
 async function varCount(name) {
   await readTemplates();
