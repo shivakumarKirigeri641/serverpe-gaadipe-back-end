@@ -40,4 +40,29 @@ router.get('/t/:code', async (req, res) => {
   }
 });
 
+/*
+ * GET /tr/<tracking no.> — WHERE IS MY STICKER (2026-10-29). The link in the shipped message (WhatsApp button, SMS):
+ * a Delhivery waybill opens Delhivery's own tracking page; any other courier gets a page with its name and number.
+ * Keyed by the tracking number the owner was already given, so it shows nothing they don't have.
+ */
+router.get('/tr/:tracking', async (req, res) => {
+  try {
+    const awb = String(req.params.tracking || '').trim().slice(0, 40);
+    const o = await require('../db').one(
+      `SELECT courier, tracking, waybill FROM tag_orders WHERE tracking = $1 OR waybill = $1 ORDER BY id DESC LIMIT 1`, [awb]);
+    if (!o) {
+      return res.status(404).send(page('Not found', `<div style="font-size:42px">📦</div><h1>Tracking number not found</h1>
+        <p>Please check the number in your GaadiPe message.</p>`));
+    }
+    res.set('Cache-Control', 'no-store');
+    if (o.waybill === awb || /delhivery/i.test(o.courier || '')) return res.redirect(302, T.trackUrl(awb));
+    return res.status(200).send(page('Track your sticker', `<div style="font-size:42px">📦</div><h1>Your GaadiPe Tag sticker</h1>
+      <p>Courier: <b>${esc(o.courier || '—')}</b><br>Tracking number: <b>${esc(o.tracking)}</b></p>
+      <p>Track it on the courier's website with this number.</p>`));
+  } catch (e) {
+    console.error('[tag] /tr failed: %s', e.message);
+    return res.status(500).send(page('Try again', '<h1>Something went wrong</h1><p>Please try again in a moment.</p>'));
+  }
+});
+
 module.exports = router;

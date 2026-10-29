@@ -65,6 +65,9 @@ const waNumber = () => {
 const base = () => (process.env.PUBLIC_BASE_URL || 'https://api.gaadipe.in').replace(/\/+$/, '');
 /** What the QR carries: our own link first (counts the scan, can be switched off), which opens WhatsApp. */
 const tagUrl = (code) => `${base()}/t/${code}`;
+/** The owner's link for a shipped sticker (routes/tags.js /tr), and Delhivery's own page it opens for a waybill. */
+const shipLink = (tracking) => `${base()}/tr/${encodeURIComponent(tracking)}`;
+const trackUrl = (awb) => `https://www.delhivery.com/track-v2/package/${encodeURIComponent(awb)}`;
 const waLink = (code) => `https://wa.me/${waNumber()}?text=${encodeURIComponent(`TAG ${code}`)}`;
 
 /** The vehicles this person has with GaadiPe — their own first — for "which vehicle is the tag for?". */
@@ -158,5 +161,5 @@ function replyProblem(text) {
   return null;
 }
 
-module.exports = { REASONS, reasonOf, enabledFor, switchOn, isInternal, allowListed, masked, tagUrl, waLink, waNumber, vehiclesOf,
+module.exports = { REASONS, reasonOf, enabledFor, switchOn, isInternal, allowListed, masked, tagUrl, shipLink, trackUrl, waLink, waNumber, vehiclesOf,
   getOrCreate, byCode, live, recordScan, switchOff, refusal, replyProblem, ten };

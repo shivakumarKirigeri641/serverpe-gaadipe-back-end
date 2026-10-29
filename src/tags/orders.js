@@ -136,10 +136,15 @@ async function dispatch(orderId, { courier, tracking }) {
   const first = String(row.name).trim().split(/\s+/)[0];
   const body = `📦 *Your GaadiPe Tag sticker is on its way* — ${T.masked(row.reg_no)}\n\nCourier: *${o.courier || '—'}*\nTracking number: *${o.tracking || '—'}*\n\n`
     + 'Once it arrives, stick it on your vehicle where people can easily see and scan it.';
-  let told = await send.buttons(row.mobile, body, [{ id: 'tag_menu', title: '🏷️ My tags' }, { id: 'menu', title: 'Menu' }]).catch(() => ({ ok: false }));
+  // With a tracking number: one "Track sticker" link button (opens /tr → Delhivery's page); without: the usual buttons.
+  let told = o.tracking
+    ? await send.ctaUrl(row.mobile, body, { text: 'Track sticker', url: T.shipLink(o.tracking) }).catch(() => ({ ok: false }))
+    : await send.buttons(row.mobile, body, [{ id: 'tag_menu', title: '🏷️ My tags' }, { id: 'menu', title: 'Menu' }]).catch(() => ({ ok: false }));
   if (!told.ok) {
+    // gp_tag_shipped_v1 buttons, in order: [Track sticker] link (…/tr/{{1}}), [My tags], [Menu].
     told = await send.template(row.mobile, await settings.get('tag_shipped_template', 'gp_tag_shipped_v1'),
-      [first, T.masked(row.reg_no), o.courier || 'Courier', o.tracking || '-'], { buttons: ['tag_menu', 'menu'] }).catch(() => ({ ok: false }));
+      [first, T.masked(row.reg_no), o.courier || 'Courier', o.tracking || '-'],
+      { buttons: [{ url: o.tracking || '-' }, 'tag_menu', 'menu'] }).catch(() => ({ ok: false }));
   }
   if (!told.ok) {
     told = await require('../util/sms').sendTemplate('tag_shipped', row.mobile,

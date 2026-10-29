@@ -566,8 +566,11 @@ async function template(mobile, name, params = [], { language = 'en', buttons = 
         ...(headerDocument?.id ? [{ type: 'header', parameters: [{ type: 'document',
           document: { id: headerDocument.id, filename: headerDocument.filename || 'GaadiPe report.pdf' } }] }] : []),
         ...(values.length ? [{ type: 'body', parameters: values.map(text => ({ type: 'text', text })) }] : []),
-        ...buttons.map((payload, i) => ({ type: 'button', sub_type: 'quick_reply', index: String(i),
-                                          parameters: [{ type: 'payload', payload: String(payload).slice(0, 128) }] })),
+        // A { url } entry fills a link button's {{1}} (2026-10-29, gp_tag_shipped_v1 "Track sticker"); the rest are quick replies.
+        ...buttons.map((payload, i) => (payload && typeof payload === 'object' && payload.url != null
+          ? { type: 'button', sub_type: 'url', index: String(i), parameters: [{ type: 'text', text: String(payload.url) }] }
+          : { type: 'button', sub_type: 'quick_reply', index: String(i),
+              parameters: [{ type: 'payload', payload: String(payload).slice(0, 128) }] })),
       ],
     },
   }, { mobile, type: 'template', body: `${name}(${values.join(' | ')})`, templateName: name });
