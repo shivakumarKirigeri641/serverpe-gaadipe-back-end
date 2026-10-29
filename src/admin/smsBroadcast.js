@@ -177,6 +177,11 @@ const FILTERS = {
   monitoring: `EXISTS (SELECT 1 FROM watches w WHERE w.user_id = u.id AND w.is_active)`,
   not_recent: `NOT EXISTS (SELECT 1 FROM notify_log nl WHERE nl.user_id = u.id AND nl.channel = 'sms' AND nl.kind IN ('promo', 'service')
                  AND nl.status IN ('sent', 'simulated') AND nl.created_at > now() - interval '7 days')`,
+  /* Customers from before the current WhatsApp number went live (23 Oct) and with no broadcast SMS in 7 days
+     (user, 2026-10-29: "SMS those customers before 23rd October and opted-in ones"). */
+  before_wa: `u.created_at < '2026-10-23T00:00:00+05:30'
+              AND NOT EXISTS (SELECT 1 FROM notify_log nl WHERE nl.user_id = u.id AND nl.channel = 'sms' AND nl.kind IN ('promo', 'service')
+                 AND nl.status IN ('sent', 'simulated') AND nl.created_at > now() - interval '7 days')`,
 };
 
 /** Who the mode may reach: agreed in this panel's channel (or the owner, to test) — and, for promo, opted in. */
