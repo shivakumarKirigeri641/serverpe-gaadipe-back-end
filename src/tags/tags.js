@@ -40,9 +40,15 @@ async function isInternal(mobile) {
   return Boolean(r);
 }
 
-/** May this person make and manage tags? Everyone once switched on; before that, GaadiPe's own numbers only. */
+/* Before launch, the numbers in tag_allow_mobiles (migration 219) have tags fully working too — the owner's family. */
+async function allowListed(mobile) {
+  const list = String(await settings.get('tag_allow_mobiles', '') || '').split(/[\s,]+/).map(ten).filter((m) => m.length === 10);
+  return list.includes(ten(mobile));
+}
+
+/** May this person make and manage tags? Everyone once switched on; before that, GaadiPe's own and allow-listed numbers. */
 async function enabledFor(mobile) {
-  return (await switchOn()) || isInternal(mobile);
+  return (await switchOn()) || (await allowListed(mobile)) || isInternal(mobile);
 }
 
 /** "KA01AB1234" → "KA01••1234": enough to know it's your vehicle, not enough to identify it to a stranger. */
@@ -106,10 +112,10 @@ async function byCode(code) {
       WHERE t.code = $1`, [c]);
 }
 
-/** Can this tag be scanned right now? Switched on for everyone, or (hidden) a tag of GaadiPe's own numbers. */
+/** Can this tag be scanned right now? Switched on for everyone, or (hidden) a tag of GaadiPe's own or allow-listed numbers. */
 async function live(tag) {
   if (!tag || !tag.is_active) return false;
-  return (await switchOn()) || Boolean(tag.owner_internal);
+  return (await switchOn()) || Boolean(tag.owner_internal) || allowListed(tag.owner_mobile);
 }
 
 async function recordScan(code) {
@@ -152,5 +158,5 @@ function replyProblem(text) {
   return null;
 }
 
-module.exports = { REASONS, reasonOf, enabledFor, switchOn, isInternal, masked, tagUrl, waLink, waNumber, vehiclesOf,
+module.exports = { REASONS, reasonOf, enabledFor, switchOn, isInternal, allowListed, masked, tagUrl, waLink, waNumber, vehiclesOf,
   getOrCreate, byCode, live, recordScan, switchOff, refusal, replyProblem, ten };

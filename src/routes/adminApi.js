@@ -943,7 +943,37 @@ router.post('/customers/:id/vehicles/remove-all', needs('block'), safe(async (re
 /* GaadiPe Tag (2026-10-29; src/tags): tags, scans, relayed messages, blocks and reports, and the sticker orders to post.
    The switch itself is the tag_enabled row in Settings. */
 router.get('/tags', safe(async (req, res) => {
-  res.json(await require('../tags/orders').overview());
+  res.json({ ...(await require('../tags/orders').overview()), settings: await require('../tags/admin').settingsView() });
+}));
+// The admin's GaadiPe Tag section (2026-10-29): every tag, every relayed message, blocks; make tags; print sheets.
+router.get('/tags/list', safe(async (req, res) => res.json({ rows: await require('../tags/admin').list({ q: req.query.q }) })));
+router.get('/tags/messages', safe(async (req, res) => res.json({ rows: await require('../tags/admin').messages() })));
+router.get('/tags/blocks', safe(async (req, res) => res.json({ rows: await require('../tags/admin').blocks() })));
+router.post('/tags/create', needs('settings'), safe(async (req, res) => {
+  const out = await require('../tags/admin').create({ mobile: req.body?.mobile, regs: req.body?.regs, allow: req.body?.allow !== false });
+  if (!out.ok) return res.status(400).json({ error: 'cannot', message: out.error });
+  await auth.audit({ adminId: req.admin.id, action: 'tags_created', ip: ipOf(req), detail: { mobile: out.mobile, tags: out.tags } });
+  res.json(out);
+}));
+router.post('/tags/:code/active', needs('settings'), safe(async (req, res) => {
+  const out = await require('../tags/admin').setActive(req.params.code, Boolean(req.body?.on));
+  if (!out.ok) return res.status(400).json({ error: 'cannot', message: out.error || 'Nothing to change.' });
+  await auth.audit({ adminId: req.admin.id, action: req.body?.on ? 'tag_on' : 'tag_off', ip: ipOf(req), detail: { code: req.params.code } });
+  res.json(out);
+}));
+router.post('/tags/blocks/:id/remove', needs('settings'), safe(async (req, res) => {
+  const out = await require('../tags/admin').unblock(req.params.id);
+  await auth.audit({ adminId: req.admin.id, action: 'tag_unblock', ip: ipOf(req), detail: { id: req.params.id } });
+  res.json(out);
+}));
+// The print sheet (a file, outside the encrypted tunnel — app.js fileRoute): ?codes=ABC234,XYZ987&copies=2
+router.get('/tags/sheet', safe(async (req, res) => {
+  const file = await require('../tags/admin').sheet(req.query.codes, Number(req.query.copies) || 2);
+  if (!file) return res.status(404).json({ error: 'not_found', message: 'No such tags.' });
+  await auth.audit({ adminId: req.admin.id, action: 'tag_sheet', ip: ipOf(req), detail: { codes: req.query.codes } });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${require('path').basename(file)}"`);
+  require('fs').createReadStream(file).pipe(res);
 }));
 router.post('/tags/orders/:id/dispatch', needs('settings'), safe(async (req, res) => {
   const out = await require('../tags/orders').dispatch(Number(req.params.id) || 0,
