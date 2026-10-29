@@ -20,30 +20,45 @@ const T = require('./tags');
 
 const ZONE_LABEL = { city: 'Bengaluru', state: 'Rest of Karnataka', india: 'Rest of India', remote: 'Remote area' };
 
-async function quote(pincode) {
+/* THE PRICE (user, 2026-10-29; migration 220): at least tag_sticker_min (2) stickers for tag_sticker_base (₹149), each
+   more tag_sticker_extra (₹49) — GST and delivery included, any vehicle; tag_remote_extra for remote pincodes (₹0). */
+async function pricing() {
+  return {
+    min: await settings.num('tag_sticker_min', 2), base: await settings.num('tag_sticker_base', 149),
+    extra: await settings.num('tag_sticker_extra', 49), max: await settings.num('tag_sticker_max', 10),
+    remote: await settings.num('tag_remote_extra', 0),
+  };
+}
+async function priceFor(qty, zone = null) {
+  const p = await pricing();
+  const n = Math.min(p.max, Math.max(p.min, Number(qty) || p.min));
+  return { qty: n, rupees: p.base + (n - p.min) * p.extra + (zone === 'remote' ? p.remote : 0), pricing: p };
+}
+
+async function quote(pincode, qty = 2) {
   const p = String(pincode || '').replace(/\D/g, '');
   if (!pin.valid(p)) return null;
   const pickup = String(await settings.get('tag_pickup_pincode', '560013') || '560013');
   const zone = pin.zoneOf(p, pickup);
-  const rupees = await settings.num(`tag_zone_${zone}`, { city: 59, state: 69, india: 79, remote: 119 }[zone]);
+  const { qty: n, rupees } = await priceFor(qty, zone);
   const label = zone === 'city' && !pickup.startsWith('560') ? 'Same city' : ZONE_LABEL[zone];
   const days = { city: '1–2', state: '2–4', india: '3–6', remote: '5–10' }[zone];
-  return { pincode: p, zone, label, rupees, paise: Math.round(rupees * 100), state: pin.stateOf(p), days };
+  return { pincode: p, zone, label, qty: n, rupees, paise: Math.round(rupees * 100), state: pin.stateOf(p), days };
 }
 
-async function startOrder({ user, tag, pincode, name, address }) {
+async function startOrder({ user, tag, pincode, name, address, qty = 2 }) {
   const razorpay = require('../pay/razorpay');
   const billing = require('../pay/billing');
-  const q = await quote(pincode);
+  const q = await quote(pincode, qty);
   if (!q) throw new Error('bad_pincode');
   const plan = await db.one(`SELECT * FROM plans WHERE code = 'TAG_STICKER'`);
   if (!plan || !razorpay.configured()) throw new Error('payments_unavailable');
   const test = await razorpay.isTestBuyer(user).catch(() => false);
 
   const order = (await db.query(
-    `INSERT INTO tag_orders (tag_id, user_id, pincode, zone, amount_paise, ship_name, ship_address)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-    [tag.id, user.id, q.pincode, q.zone, q.paise, String(name || '').slice(0, 80), String(address || '').slice(0, 400)])).rows[0];
+    `INSERT INTO tag_orders (tag_id, user_id, pincode, zone, amount_paise, ship_name, ship_address, quantity)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [tag.id, user.id, q.pincode, q.zone, q.paise, String(name || '').slice(0, 80), String(address || '').slice(0, 400), q.qty])).rows[0];
   const pending = await billing.createPending({ userId: user.id, planId: plan.id, amountPaise: q.paise, vehicleId: tag.vehicle_id, channel: 'whatsapp' });
   const rz = await razorpay.createOrder({
     amountPaise: q.paise, receipt: `gp-${pending.id}`,
@@ -57,7 +72,7 @@ async function startOrder({ user, tag, pincode, name, address }) {
       WHERE id = $1 RETURNING *`,
     [pending.id, rz.id, token, JSON.stringify({
       order_id: rz.id, tag_order_id: order.id, tag_code: tag.code,
-      sticker: { pincode: q.pincode, zone: q.zone, label: q.label },
+      sticker: { pincode: q.pincode, zone: q.zone, label: q.label, qty: q.qty },
       // The invoice's place of supply is where the sticker goes (CGST+SGST in Karnataka, IGST elsewhere).
       ...(q.state ? { buyer_state_code: q.state } : {}),
       ...(name ? { buyer_name: String(name).slice(0, 80) } : {}),
@@ -81,16 +96,16 @@ async function notifyPaid(result, user) {
     `SELECT o.*, t.code, v.reg_no FROM tag_orders o JOIN qr_tags t ON t.id = o.tag_id JOIN vehicles v ON v.id = t.vehicle_id
       WHERE o.payment_row_id = $1`, [result.payment.id]);
   if (!o) return;
-  const body = `✅ *Sticker ordered — ${T.masked(o.reg_no)}*\n\n`
-    + `We'll post your GaadiPe Tag sticker to pincode *${o.pincode}* within 2 working days, and send you the tracking number here.\n\n`
+  const body = `✅ *${o.quantity} stickers ordered — ${T.masked(o.reg_no)}*\n\n`
+    + `We'll post your GaadiPe Tag stickers to pincode *${o.pincode}* within 2 working days, and send you the tracking number here.\n\n`
     + 'Until it arrives, your free digital tag already works — the QR you have can be printed at any shop.\n\n'
     + 'Your GST invoice follows.';
   const out = await send.buttons(user.mobile, body, [{ id: 'tag_menu', title: '🏷️ My tags' }, { id: 'menu', title: 'Menu' }]).catch(() => ({ ok: false }));
   if (!out.ok) await send.text(user.mobile, body).catch(() => {});
   require('../util/adminPing').ping({
     key: `tag_order:${o.id}`, severity: 'info', source: 'tags',
-    title: `🏷️ Sticker order to post — ${o.reg_no} → ${o.pincode}`,
-    text: `Order #${o.id} paid (${result.payment.raw?.test_mode ? 'TEST' : `₹${(o.amount_paise / 100).toFixed(0)}`}). Ship to: ${o.ship_name || ''}, ${o.ship_address || ''} — ${o.pincode}. Post it and enter the tracking number on the admin Tags page.`,
+    title: `🏷️ ${o.quantity} stickers to post — ${o.reg_no} → ${o.pincode}`,
+    text: `Order #${o.id} paid (${result.payment.raw?.test_mode ? 'TEST' : `₹${(o.amount_paise / 100).toFixed(0)}`}), ${o.quantity} stickers of tag ${o.code}. Ship to: ${o.ship_name || ''}, ${o.ship_address || ''} — ${o.pincode}. Post it and enter the tracking number on the admin Tags page.`,
   }).catch(() => {});
 }
 
@@ -134,7 +149,7 @@ async function overview() {
             (SELECT count(*) FROM tag_orders WHERE status = 'paid')::int AS to_post,
             (SELECT count(*) FROM tag_orders WHERE status = 'dispatched')::int AS posted`);
   const { rows: orders } = await db.query(
-    `SELECT o.id, o.status, o.pincode, o.zone, o.amount_paise, o.ship_name, o.ship_address, o.courier, o.tracking,
+    `SELECT o.id, o.status, o.pincode, o.zone, o.quantity, o.amount_paise, o.ship_name, o.ship_address, o.courier, o.tracking,
             o.created_at, o.paid_at, o.dispatched_at, t.code, v.reg_no, u.mobile, p.raw->>'test_mode' AS test
        FROM tag_orders o JOIN qr_tags t ON t.id = o.tag_id JOIN vehicles v ON v.id = t.vehicle_id JOIN users u ON u.id = o.user_id
        LEFT JOIN payments p ON p.id = o.payment_row_id
@@ -148,4 +163,4 @@ async function overview() {
   return { counts: c, orders, recent, enabled: await T.switchOn() };
 }
 
-module.exports = { quote, startOrder, onPaid, notifyPaid, dispatch, overview };
+module.exports = { quote, priceFor, pricing, startOrder, onPaid, notifyPaid, dispatch, overview };

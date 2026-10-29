@@ -261,12 +261,12 @@ async function forVehicle(mobile, vehicleId) {
 async function card(mobile, tag, { created = false } = {}) {
   const file = await require('./qr').cardPdf(tag);
   await send.document(mobile, file, { filename: `GaadiPe-Tag-${tag.code}.pdf`, caption: `🏷️ GaadiPe Tag · ${T.masked(tag.reg_no)} · ${tag.code}` }).catch(() => {});
-  const cheapest = await settings.num('tag_zone_city', 59);
+  const p = (await require('./orders').priceFor(2)).pricing;
   await buttons(mobile,
     `${created ? '✅ *Your GaadiPe Tag is ready!*' : '🏷️ *Your GaadiPe Tag*'} — ${T.masked(tag.reg_no)}\n\n`
     + 'Print the QR above at any shop (₹5–10) and stick it on the *rear windscreen or a side window*. When someone scans it, '
     + 'their message comes here — your number stays private.\n\n'
-    + `Want a printed, weatherproof sticker delivered? From *₹${cheapest}* incl. delivery.`,
+    + `Want printed, weatherproof stickers delivered? *${p.min} for ₹${p.base}*, GST and delivery included.`,
     [{ id: `tag_ord:${tag.code}`, title: '📦 Order sticker' }, { id: `tag_off:${tag.code}`, title: '🔕 Switch off' }, { id: 'menu', title: 'Menu' }]);
 }
 
@@ -291,19 +291,37 @@ async function doOff(mobile, code) {
 
 /* ─────────────────────────────── the delivered sticker ─────────────────────────────── */
 
-async function askPincode(mobile, code) {
+/* HOW MANY (user, 2026-10-29: "2 mandatory, any vehicle, ₹149 inclusive of GST, ₹49 per extra"; migration 220). */
+async function askQty(mobile, code) {
   const tag = await ownTag(mobile, code);
   if (!tag) { await send.text(mobile, 'That tag is not active.'); return; }
-  await enter(mobile, 'tag_pin', { tag_code: tag.code });
-  await send.text(mobile, `📦 *Sticker delivery* — ${T.masked(tag.reg_no)}\n\nType your *6-digit pincode* to see the delivery charge.\n\n_Type *menu* to cancel._`);
+  const O = require('./orders');
+  const opts = [];
+  for (const n of [2, 3, 4]) opts.push({ n, ...(await O.priceFor(n)) });
+  const p = opts[0].pricing;
+  await buttons(mobile,
+    `📦 *Printed weatherproof stickers* — ${T.masked(tag.reg_no)}\n\n`
+    + `*${p.min} stickers for ₹${p.base}*, then ₹${p.extra} for each extra — GST and delivery included.\n`
+    + `_A car needs 2: rear windscreen + a side window. Up to ${p.max}? Type the number._`,
+    opts.map((o) => ({ id: `tag_q:${tag.code}:${o.qty}`, title: `${o.qty} · ₹${o.rupees}` })));
+  await enter(mobile, 'tag_qty', { tag_code: tag.code });
+}
+
+async function askPincode(mobile, code, qty) {
+  const tag = await ownTag(mobile, code);
+  if (!tag) { await leave(mobile); await send.text(mobile, 'That tag is not active.'); return; }
+  const { qty: n, rupees } = await require('./orders').priceFor(qty);
+  await enter(mobile, 'tag_pin', { tag_code: tag.code, tag_qty: n });
+  await send.text(mobile, `📦 *${n} stickers — ₹${rupees}* for ${T.masked(tag.reg_no)}\n\nType your *6-digit pincode* for delivery.\n\n_Type *menu* to cancel._`);
 }
 
 async function quotePin(mobile, text) {
-  const q = await require('./orders').quote(String(text).replace(/\D/g, ''));
+  const s = await ctx(mobile);
+  const q = await require('./orders').quote(String(text).replace(/\D/g, ''), s.context?.tag_qty);
   if (!q) { await send.text(mobile, 'Please type a valid 6-digit pincode, like *560013* — or *menu* to cancel.'); return; }
   await setState(mobile, 'tag_pin', { tag_pin: q.pincode });
   await buttons(mobile,
-    `📦 Delivery to *${q.pincode}* (${q.label}): *₹${q.rupees}*\n_Sticker + delivery + GST included · arrives in about ${q.days} days after posting._`,
+    `📦 *${q.qty} stickers* to *${q.pincode}* (${q.label}): *₹${q.rupees}*\n_GST and delivery included · arrives in about ${q.days} days after posting._`,
     [{ id: 'tag_ord_ok', title: '✅ Continue' }, { id: 'tag_ord_no', title: 'Cancel' }]);
 }
 
@@ -324,7 +342,7 @@ async function placeOrder(mobile, text) {
   const name = addr.split(/[,\n]/)[0].trim().slice(0, 80);
   let out;
   try {
-    out = await require('./orders').startOrder({ user, tag, pincode: s.context.tag_pin, name, address: addr });
+    out = await require('./orders').startOrder({ user, tag, pincode: s.context.tag_pin, name, address: addr, qty: s.context.tag_qty });
   } catch (e) {
     console.error('[tag] sticker order failed: %s', e.message);
     await leave(mobile);
@@ -333,7 +351,7 @@ async function placeOrder(mobile, text) {
   }
   await leave(mobile);
   const url = `${(process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '')}/pay/${out.payment.checkout_token}`;
-  const body = `🧾 *Sticker for ${T.masked(tag.reg_no)} — ₹${out.quote.rupees}*\n\nDelivered to: ${addr} — ${out.quote.pincode}\n\n`
+  const body = `🧾 *${out.quote.qty} stickers for ${T.masked(tag.reg_no)} — ₹${out.quote.rupees}*\n\nDelivered to: ${addr} — ${out.quote.pincode}\n\n`
     + '✅ Pay with *UPI* — GPay, PhonePe, Paytm — or card\n✅ Secure checkout by *Razorpay* · GST invoice included\n\n'
     + '_GaadiPe never asks for your PIN or OTP._';
   const link = await send.ctaUrl(mobile, body, { text: `Pay ₹${out.quote.rupees} securely`, url }, { footer: 'GaadiPe · secure checkout by Razorpay' })
@@ -371,7 +389,8 @@ async function handle(session, message, mobile, intent) {
       case 'tagv':       await forVehicle(mobile, a); return true;
       case 'tag_off':    await askOff(mobile, a); return true;
       case 'tag_offy':   await doOff(mobile, a); return true;
-      case 'tag_ord':    await askPincode(mobile, a); return true;
+      case 'tag_ord':    await askQty(mobile, a); return true;
+      case 'tag_q':      await askPincode(mobile, a, b); return true;
       case 'tag_ord_ok': await askAddress(mobile); return true;
       case 'tag_ord_no': await leave(mobile); await buttons(mobile, 'No problem — no order placed.', [{ id: 'tag_menu', title: '🏷️ My tags' }, { id: 'menu', title: 'Menu' }]); return true;
       default: return false;
@@ -383,6 +402,13 @@ async function handle(session, message, mobile, intent) {
   if (state.startsWith('tag_')) {
     if (intent.kind !== 'text' || ESCAPE.test(text)) { await leave(mobile); return false; }   // anything else: back to the usual flow
     if (state === 'tag_reply') { await sendReply(mobile, text); return true; }
+    if (state === 'tag_qty') {
+      const n = Number(String(text).replace(/\D/g, ''));
+      const p = (await require('./orders').priceFor(2)).pricing;
+      if (!n || n < p.min || n > p.max) { await send.text(mobile, `Please type a number from ${p.min} to ${p.max} — or *menu* to cancel.`); return true; }
+      await askPincode(mobile, (await ctx(mobile)).context?.tag_code, n);
+      return true;
+    }
     if (state === 'tag_pin') { await quotePin(mobile, text); return true; }
     if (state === 'tag_addr') { await placeOrder(mobile, text); return true; }
     await leave(mobile);

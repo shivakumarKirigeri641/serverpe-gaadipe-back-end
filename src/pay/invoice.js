@@ -145,8 +145,8 @@ function pdfInput(row, pay, business) {
         'One-time fee, no renewal',
       ].join('\n') : pay.plan_kind === 'sticker' ? [
         // A GaadiPe Tag sticker, delivered (migration 218, src/tags/orders.js).
-        pay.reg_no ? `GaadiPe Tag sticker — ${pay.reg_no}` : 'GaadiPe Tag sticker',
-        pay.raw?.sticker?.pincode ? `Printed QR sticker, delivered to pincode ${pay.raw.sticker.pincode}` : 'Printed QR sticker, delivered',
+        `GaadiPe Tag stickers × ${Number(pay.raw?.sticker?.qty) || 2}${pay.reg_no ? ` — ${pay.reg_no}` : ''}`,
+        pay.raw?.sticker?.pincode ? `Printed QR stickers, delivered to pincode ${pay.raw.sticker.pincode}` : 'Printed QR stickers, delivered',
         'One-time purchase · delivery included',
       ].join('\n') : pay.plan_kind === 'checks' ? [
         // A check pack (migration 213): checks, how long they last - no vehicle.

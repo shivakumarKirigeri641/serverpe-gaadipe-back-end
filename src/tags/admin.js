@@ -9,7 +9,7 @@ const settings = require('../util/settings');
 const T = require('./tags');
 
 const SETTING_KEYS = ['tag_enabled', 'tag_allow_mobiles', 'tag_limit_per_vehicle_hour', 'tag_limit_per_sender_day',
-  'tag_zone_city', 'tag_zone_state', 'tag_zone_india', 'tag_zone_remote', 'tag_pickup_pincode',
+  'tag_sticker_min', 'tag_sticker_base', 'tag_sticker_extra', 'tag_sticker_max', 'tag_remote_extra', 'tag_pickup_pincode',
   'tag_alert_template', 'tag_shipped_template', 'sms_tpl_tag_alert', 'sms_tpl_tag_shipped'];
 
 async function list({ q = '' } = {}) {

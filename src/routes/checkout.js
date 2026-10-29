@@ -346,7 +346,7 @@ router.get('/pay/:token', safe(async (req, res) => {
   const chatText = web ? 'Report' : '';
   const validDays = await settings.num('report_valid_days', 7);
   const planLine = isSticker
-    ? `GaadiPe Tag sticker · delivered to ${stick.pincode || 'your pincode'}`
+    ? `GaadiPe Tag stickers × ${Number(stick.qty) || 2} · delivered to ${stick.pincode || 'your pincode'}`
     : isChecks
     ? `${packSize} vehicle checks · valid ${pay.duration_days || 30} days`
     : isReplace
@@ -357,7 +357,7 @@ router.get('/pay/:token', safe(async (req, res) => {
     : `GaadiPe Watch · ${pay.duration_days || 28} days`;
   const where = web ? 'in your GaadiPe account' : 'on WhatsApp';
   const benefits = isSticker
-    ? ['A printed, weatherproof QR sticker for your vehicle',
+    ? [`${Number(stick.qty) || 2} printed, weatherproof QR stickers for your vehicle`,
        `Posted within 2 working days to pincode ${stick.pincode || ''}${stick.label ? ` (${stick.label})` : ''} — delivery included`,
        'Tracking number on WhatsApp once it is posted',
        'Anyone who scans it reaches you on WhatsApp — your number stays private',
