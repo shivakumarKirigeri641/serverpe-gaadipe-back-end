@@ -47,9 +47,11 @@ router.get('/t/:code', async (req, res) => {
  * shows nothing they don't have (the plate masked, no name or address).
  */
 const when = (d) => (d ? new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '');
-router.get('/tr/:tracking', async (req, res) => {
+// /tr/<no.> for WhatsApp's link button; /tr?n=<no.> for the SMS (DLT wants a "?" in a dynamic link, no "/" after it).
+router.get(['/tr/:tracking', '/tr'], async (req, res) => {
   try {
-    const o = await require('../tags/orders').trackPage(String(req.params.tracking || '').trim().slice(0, 40));
+    const number = String(req.params.tracking || req.query.n || '').trim().slice(0, 40);
+    const o = number ? await require('../tags/orders').trackPage(number) : null;
     if (!o) {
       return res.status(404).send(page('Not found', `<div style="font-size:42px">📦</div><h1>Tracking number not found</h1>
         <p>Please check the number in your GaadiPe message.</p>`));
