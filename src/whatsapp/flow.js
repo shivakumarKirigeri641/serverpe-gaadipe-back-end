@@ -403,6 +403,9 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
   const user = await db.one(`SELECT email, email_verified_at FROM users WHERE mobile = $1`, [mobile]).catch(() => null);
   const ownerRow = await owners.enabled()
     ? { id: BTN.OWNER_VERIFY, title: 'I own a vehicle', description: 'Verify it with your RC — badge, and hide it from others' } : null;
+  // GaadiPe Tag (2026-10-29): only for whom it is on (tag_enabled, or GaadiPe's own numbers while hidden).
+  const tagRow = await require('../tags/tags').enabledFor(mobile).catch(() => false)
+    ? { id: 'tag_menu', title: 'My vehicle tag', description: 'A QR for your vehicle — people reach you, number private' } : null;
   const out = await send.list(mobile, {
     body,
     button: 'Choose',
@@ -413,7 +416,7 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
       { id: BTN.MY_MONITORING,   title: 'My monitoring',    description: 'Watched vehicles, end dates, next alert, paused alerts' },
       // My reports carries the GST invoice too (2026-10-15), so its row goes to "GaadiPe so far".
       { id: BTN.DOWNLOAD_REPORT, title: 'My reports',       description: 'Report PDFs again, and GST invoices' },
-      ownerRow || { id: BTN.SO_FAR, title: 'GaadiPe so far', description: 'People served, vehicles checked, challans found' },
+      ownerRow || tagRow || { id: BTN.SO_FAR, title: 'GaadiPe so far', description: 'People served, vehicles checked, challans found' },
       { id: BTN.EMAIL,           title: 'Email for alerts',
         description: user?.email_verified_at ? `✓ ${user.email}` : 'Add and confirm your email for reports & alerts' },
       { id: BTN.WHAT_GET,        title: 'What do I get?',   description: 'Free check, check packs, full report, monitoring' },
@@ -2536,6 +2539,18 @@ async function handle(session, message, mobile) {
   if (intent.kind === 'text' && intent.text) {
     const why = require('../util/unhappy').kind(intent.text);
     if (why) require('../util/unhappy').flag({ mobile, said: intent.text, why }).catch(() => {});
+  }
+
+  /*
+   * GAADIPE TAG (user, 2026-10-29; src/tags). "TAG <code>" from a scanned QR, the tag buttons (agree, reason,
+   * reply, block, report, the owner's tag pages) and the steps that wait for typing (the owner's reply, a pincode,
+   * an address) — answered there, before anything else here reads the words. Hidden until tag_enabled: only
+   * GaadiPe's own numbers can make tags, and only their tags can be scanned. A failure there never stops the bot.
+   */
+  try {
+    if (await require('../tags/chat').handle(session, message, mobile, intent)) return;
+  } catch (e) {
+    console.error('[tag] handling %s failed: %s', mobile, e.message);
   }
 
   /*

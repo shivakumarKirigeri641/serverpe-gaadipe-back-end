@@ -224,8 +224,11 @@ async function send(mobile, text, { variables = {}, templateId = null } = {}) {
 // 'manual' (2026-10-10): the web admin's own SMS to chosen customers — a placeholder template until approved.
 // 'status' (2026-10-10): the status update on the cadence in jobs/watch.js — [vehicle, short status].
 // 'promo' (2026-10-13): the admin's promotional broadcast — 3 values, opted-in customers only (admin/smsBroadcast.js).
-const KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers', 'manual', 'status', 'promo'];
+// 'tag_alert' / 'tag_shipped' (GaadiPe Tag, 2026-10-29; src/tags): a message relayed to an owner who made a tag, and
+// their sticker's tracking number — asked for by the owner, so not held by the alerts switch; header GAADIP.
+const KINDS = ['expiry', 'challan', 'monitor_end', 'service', 'offers', 'manual', 'status', 'promo', 'tag_alert', 'tag_shipped'];
 const PROMOTIONAL = ['offers', 'promo'];
+const TAG_KINDS = ['tag_alert', 'tag_shipped'];
 async function sendTemplate(kind, mobile, values = [], meta = {}) {
   const out = await sendTemplateRaw(kind, mobile, values, meta);
   await logSms({ kind, mobile, out, values: values.map((v) => String(v ?? '')), queueId: meta.queueId || null, adminId: meta.adminId || null });
@@ -236,7 +239,7 @@ async function sendTemplateRaw(kind, mobile, values = [], meta = {}) {
   const settings = require('./settings');
   // The master switch is for the automatic SMS; a manual or promotional send from the admin is a decision of its own.
   // 'service' too (2026-10-13): only ever sent by hand, from the admin's SMS broadcast or the web admin.
-  if (!['manual', 'promo', 'service'].includes(kind) && !(await settings.bool('sms_alerts_enabled', false))) {
+  if (!['manual', 'promo', 'service', ...TAG_KINDS].includes(kind) && !(await settings.bool('sms_alerts_enabled', false))) {
     /* A test of an alert template (scripts/test-sms-alert.js, 2026-10-22: "SMS templates approved") may go
        before the switch is on — to GaadiPe's own internal numbers only, so the wording is seen first. */
     const own = meta.test && await require('../db').one(
@@ -303,7 +306,7 @@ async function sendTemplateRaw(kind, mobile, values = [], meta = {}) {
     if (PROMOTIONAL.includes(kind) && !promoSender) throw new Error('no promotional sender id (Settings sms_promo_sender_id)');
     /* The alert templates are approved under their own header, GAADIP (2026-10-22: gp_*_alert_v1 on the
        DLT portal) — not the sign-in code's header in .env; a mismatch is refused by Fast2SMS. */
-    const alertSender = ALERT.includes(kind) && !tpl?.sender
+    const alertSender = (ALERT.includes(kind) || TAG_KINDS.includes(kind)) && !tpl?.sender
       ? String(await settings.get('sms_alert_sender_id', 'GAADIP') || 'GAADIP').trim() : null;
     const out = await sendViaFast2sms({ mobile: m, messageId: await fast2smsMessageId(messageId), values: cut, sender: alertSender || promoSender });
     // The server log line — who, what, how it went — is written by logSms, after this returns.

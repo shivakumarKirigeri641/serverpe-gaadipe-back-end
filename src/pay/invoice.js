@@ -143,6 +143,11 @@ function pdfInput(row, pay, business) {
         `GaadiPe Replace Vehicle — ${pay.raw?.replace?.from_reg || 'old vehicle'} to ${pay.raw?.replace?.to_reg || pay.reg_no || 'new vehicle'}`,
         pay.ends_on ? `Monitoring moved; alerts until ${fmtDate(pay.ends_on)}` : 'Monitoring moved to the new vehicle',
         'One-time fee, no renewal',
+      ].join('\n') : pay.plan_kind === 'sticker' ? [
+        // A GaadiPe Tag sticker, delivered (migration 218, src/tags/orders.js).
+        pay.reg_no ? `GaadiPe Tag sticker — ${pay.reg_no}` : 'GaadiPe Tag sticker',
+        pay.raw?.sticker?.pincode ? `Printed QR sticker, delivered to pincode ${pay.raw.sticker.pincode}` : 'Printed QR sticker, delivered',
+        'One-time purchase · delivery included',
       ].join('\n') : pay.plan_kind === 'checks' ? [
         // A check pack (migration 213): checks, how long they last - no vehicle.
         `GaadiPe Vehicle Checks — ${Number(pay.raw?.checks) || 5} checks`,

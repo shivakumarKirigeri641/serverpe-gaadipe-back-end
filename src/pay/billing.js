@@ -196,6 +196,24 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
       return { activated: true, subscription: null, endsOn: expires, checks: credits, payment: pay, vehicleId: null, plan };
     }
 
+    /* A GAADIPE TAG STICKER (migration 218, src/tags/orders.js): paid, the order is ready to post — no
+       subscription, no checks. The invoice and the WhatsApp confirmation follow from routes/payments.js. */
+    if (plan?.kind === 'sticker') {
+      await c.query(
+        `UPDATE payments SET status = 'paid', payment_id = $2, order_id = $3, paid_at = now(),
+                amount_paise = CASE WHEN $5 THEN 0 ELSE amount_paise END,
+                raw = COALESCE(raw, '{}'::jsonb) || $4::jsonb
+                      || CASE WHEN $5 THEN jsonb_build_object('test_amount_paise', amount_paise) ELSE '{}'::jsonb END
+          WHERE id = $1`,
+        [pay.id, razorpayPaymentId, orderId || null, JSON.stringify({ gateway: raw || {} }), test]);
+      await require('../tags/orders').onPaid(c, pay);
+      await c.query(
+        `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'payment_paid', $3)`,
+        [pay.user_id, vehicleId, JSON.stringify({ payment_id: razorpayPaymentId, amount_paise: pay.amount_paise,
+          sticker: pay.raw?.sticker || null, tag: pay.raw?.tag_code || null, plan: plan.code })]);
+      return { activated: true, subscription: null, endsOn: null, sticker: true, payment: pay, vehicleId, plan };
+    }
+
     /* THE ONE-TIME REPORT (REPORT11, migration 212): paid, and nothing more — no subscription, no watch, no
        renewal. The report itself is issued by the delivery (routes/payments.js), as for the ₹19. */
     if (plan?.kind === 'report' && plan.monitoring === false) {

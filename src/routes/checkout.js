@@ -251,6 +251,12 @@ router.get('/pay/:token', safe(async (req, res) => {
     });
   }
 
+  if (pay.status === 'paid' && pay.plan_kind === 'sticker') {
+    return res.send(page('Already paid', `<div class="card">
+      <h1>This payment is already complete ✅</h1>
+      <p class="muted">Your GaadiPe Tag sticker for <b>${esc(pay.reg_no || 'your vehicle')}</b> is ordered — we post it within 2 working days and send the tracking number on WhatsApp.</p>
+      ${wayOut(`${site}/chat`, { wa: 'Back to WhatsApp', web: 'Open GaadiPe' })}</div>`));
+  }
   if (pay.status === 'paid' && pay.plan_kind === 'checks') {
     return res.send(page('Already paid', `<div class="card">
       <h1>This payment is already complete ✅</h1>
@@ -312,6 +318,9 @@ router.get('/pay/:token', safe(async (req, res) => {
   const isReplace = pay.plan_kind === 'replace';
   // A check pack (migration 213): no vehicle - checks, and how long they last.
   const isChecks = pay.plan_kind === 'checks';
+  // A GaadiPe Tag sticker, delivered (migration 218): the vehicle, and where it goes.
+  const isSticker = pay.plan_kind === 'sticker';
+  const stick = pay.raw?.sticker || {};
   const packSize = Number(pay.raw?.checks) || 5;
   const rep = pay.raw?.replace || {};
   /* A payment started on the website must end on the website: sending a web
@@ -336,7 +345,9 @@ router.get('/pay/:token', safe(async (req, res) => {
   void WA_ON;
   const chatText = web ? 'Report' : '';
   const validDays = await settings.num('report_valid_days', 7);
-  const planLine = isChecks
+  const planLine = isSticker
+    ? `GaadiPe Tag sticker · delivered to ${stick.pincode || 'your pincode'}`
+    : isChecks
     ? `${packSize} vehicle checks · valid ${pay.duration_days || 30} days`
     : isReplace
     ? `Replace vehicle · ${rep.from_reg || ''} → ${rep.to_reg || pay.reg_no || ''}`
@@ -345,7 +356,13 @@ router.get('/pay/:token', safe(async (req, res) => {
     ? (pay.plan_monitoring === false ? 'Full vehicle report · one time' : `Full vehicle report + ${pay.duration_days || 28} days of alerts`)
     : `GaadiPe Watch · ${pay.duration_days || 28} days`;
   const where = web ? 'in your GaadiPe account' : 'on WhatsApp';
-  const benefits = isChecks
+  const benefits = isSticker
+    ? ['A printed, weatherproof QR sticker for your vehicle',
+       `Posted within 2 working days to pincode ${stick.pincode || ''}${stick.label ? ` (${stick.label})` : ''} — delivery included`,
+       'Tracking number on WhatsApp once it is posted',
+       'Anyone who scans it reaches you on WhatsApp — your number stays private',
+       `GST invoice ${where}`]
+    : isChecks
     ? [`${packSize} vehicle checks — make, model, insurance, PUC, tax, fitness and challan status of any vehicle`,
        `Valid for ${pay.duration_days || 30} days; a vehicle you already checked is free to check again, any time`,
        'Use them on WhatsApp or on gaadipe.in',
@@ -379,7 +396,9 @@ router.get('/pay/:token', safe(async (req, res) => {
 </div>` : ''}
 <div id="done" class="card" style="display:none">
   <h1>Payment successful ✅</h1>
-  <p class="muted" style="margin:0 0 14px">${isChecks
+  <p class="muted" style="margin:0 0 14px">${isSticker
+    ? `Your GaadiPe Tag sticker for <b>${esc(pay.reg_no || '')}</b> is ordered. The confirmation and GST invoice are on their way to your WhatsApp chat.`
+    : isChecks
     ? `${packSize} vehicle checks have been added. ${web ? 'Send any vehicle number in the chat to use one.' : 'The confirmation and GST invoice are on their way to your WhatsApp chat.'}`
     : isReplace
     ? `Monitoring has moved from <b>${esc(rep.from_reg || '')}</b> to <b>${esc(rep.to_reg || pay.reg_no || '')}</b>. ${web ? 'It shows under My subscriptions.' : 'The confirmation and GST invoice are on their way to your WhatsApp chat.'}`
@@ -559,7 +578,7 @@ router.get('/pay/:token', safe(async (req, res) => {
       amount: ${pay.amount_paise},
       currency: 'INR',
       name: 'GaadiPe',
-      description: ${JSON.stringify(isChecks ? `${packSize} vehicle checks` : `${isReport ? 'Full report' : 'Watch'} — ${pay.reg_no || ''}`)},
+      description: ${JSON.stringify(isSticker ? `Tag sticker — ${pay.reg_no || ''}` : isChecks ? `${packSize} vehicle checks` : `${isReport ? 'Full report' : 'Watch'} — ${pay.reg_no || ''}`)},
       prefill: { contact: ${JSON.stringify('+91' + String(pay.mobile).slice(-10))},
                  name: bname.value.trim(),
                  email: bemail.value.trim() },
@@ -680,6 +699,7 @@ router.post('/pay/:token/verify', express.json(), safe(async (req, res) => {
   if (result.activated) {
     console.log('[checkout] activated %s from the browser callback',
       result.oneTime ? `one-time report (payment ${result.payment.id})`
+        : result.sticker ? `tag sticker (payment ${result.payment.id})`
         : result.checks ? `${result.checks} checks (payment ${result.payment.id})` : `subscription ${result.subscription.id}`);
     const { notifyPaid } = require('./payments');
     notifyPaid(result).catch(e => console.error('[checkout] notify:', e.message));

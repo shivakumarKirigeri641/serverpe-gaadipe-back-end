@@ -158,6 +158,7 @@ async function handle(body) {
     return;
   }
   if (result.oneTime) console.log('[pay] one-time report paid (payment %d)', result.payment.id);
+  else if (result.sticker) console.log('[pay] tag sticker paid (payment %d)', result.payment.id);
   else if (result.checks) console.log('[pay] check pack paid: %d checks (payment %d)', result.checks, result.payment.id);
   else console.log('[pay] activated subscription %d until %s',
     result.subscription.id, result.endsOn.toISOString().slice(0, 10));
@@ -184,6 +185,12 @@ async function notifyPaid(result) {
   // Replace vehicle (2026-10-13): its own confirmation — no report, so not the purchase email.
   if (result.plan?.kind === 'replace') {
     await notifyReplaced(result, user).catch((e) => console.error('[pay] replace confirmation failed:', e.message));
+    return;
+  }
+  // A GaadiPe Tag sticker (migration 218): "ordered, posted within 2 days", and the GST invoice — no report.
+  if (result.plan?.kind === 'sticker') {
+    await require('../tags/orders').notifyPaid(result, user).catch((e) => console.error('[pay] sticker confirmation failed:', e.message));
+    await sendInvoice(user, result.payment.id);
     return;
   }
   // A check pack (migration 213): the checks, until when, and the GST invoice — no report, so not the purchase email.

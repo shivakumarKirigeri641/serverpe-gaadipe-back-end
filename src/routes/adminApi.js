@@ -940,6 +940,20 @@ router.post('/customers/:id/vehicles/remove-all', needs('block'), safe(async (re
   res.json({ ok: true, removed });
 }));
 
+/* GaadiPe Tag (2026-10-29; src/tags): tags, scans, relayed messages, blocks and reports, and the sticker orders to post.
+   The switch itself is the tag_enabled row in Settings. */
+router.get('/tags', safe(async (req, res) => {
+  res.json(await require('../tags/orders').overview());
+}));
+router.post('/tags/orders/:id/dispatch', needs('settings'), safe(async (req, res) => {
+  const out = await require('../tags/orders').dispatch(Number(req.params.id) || 0,
+    { courier: req.body?.courier, tracking: req.body?.tracking });
+  if (!out.ok) return res.status(400).json({ error: 'cannot', message: out.error });
+  await auth.audit({ adminId: req.admin.id, action: 'tag_sticker_dispatched', ip: ipOf(req),
+                     detail: { order: req.params.id, courier: req.body?.courier, tracking: req.body?.tracking, told: out.told } });
+  res.json(out);
+}));
+
 /* SMS broadcast — the promotional DLT template, opted-in customers only (2026-10-13; admin/smsBroadcast.js). */
 router.get('/sms-broadcast', safe(async (req, res) => {
   const S = require('../admin/smsBroadcast');

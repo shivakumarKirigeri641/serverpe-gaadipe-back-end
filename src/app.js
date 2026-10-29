@@ -129,6 +129,9 @@ app.use('/', checkoutRoutes);
 // The confirm and unsubscribe links in customer email. The token is the authorisation.
 app.use('/', require('./routes/email'));
 
+// What a GaadiPe Tag's QR opens (/t/<code>, 2026-10-29): counts the scan, then WhatsApp with "TAG <code>".
+app.use('/', require('./routes/tags'));
+
 /* -------------------------------------------------------------------- auth */
 /** Constant-time compare, so a wrong key cannot be found by timing. */
 function keyMatches(given) {
