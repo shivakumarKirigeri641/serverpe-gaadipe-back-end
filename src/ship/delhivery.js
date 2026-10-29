@@ -104,7 +104,9 @@ async function track(waybill) {
   const out = await call(`/api/v1/packages/json/?waybill=${encodeURIComponent(waybill)}`);
   if (!out.ok) return out;
   const st = out.data?.ShipmentData?.[0]?.Shipment?.Status || {};
-  return { ok: true, status: st.Status || null, at: st.StatusDateTime || null, location: st.StatusLocation || null,
+  // Delhivery's times are India time with no zone ("2026-10-29T10:15:00.123"); places read like "Bengaluru_Hub".
+  const at = st.StatusDateTime && !/(Z|[+-]\d\d:?\d\d)$/.test(st.StatusDateTime) ? `${st.StatusDateTime}+05:30` : (st.StatusDateTime || null);
+  return { ok: true, status: st.Status || null, at, location: st.StatusLocation ? String(st.StatusLocation).replace(/_/g, ' ') : null,
     instructions: st.Instructions || null };
 }
 

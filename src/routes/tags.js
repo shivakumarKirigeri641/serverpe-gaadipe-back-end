@@ -42,23 +42,30 @@ router.get('/t/:code', async (req, res) => {
 
 /*
  * GET /tr/<tracking no.> — WHERE IS MY STICKER (2026-10-29). The link in the shipped message (WhatsApp button, SMS):
- * a Delhivery waybill opens Delhivery's own tracking page; any other courier gets a page with its name and number.
- * Keyed by the tracking number the owner was already given, so it shows nothing they don't have.
+ * our own page with Delhivery's live status read by its API (tags/orders.trackPage), and Delhivery's full tracking as a
+ * second link; any other courier: its name and number. Keyed by the tracking number the owner was already given, so it
+ * shows nothing they don't have (the plate masked, no name or address).
  */
+const when = (d) => (d ? new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '');
 router.get('/tr/:tracking', async (req, res) => {
   try {
-    const awb = String(req.params.tracking || '').trim().slice(0, 40);
-    const o = await require('../db').one(
-      `SELECT courier, tracking, waybill FROM tag_orders WHERE tracking = $1 OR waybill = $1 ORDER BY id DESC LIMIT 1`, [awb]);
+    const o = await require('../tags/orders').trackPage(String(req.params.tracking || '').trim().slice(0, 40));
     if (!o) {
       return res.status(404).send(page('Not found', `<div style="font-size:42px">📦</div><h1>Tracking number not found</h1>
         <p>Please check the number in your GaadiPe message.</p>`));
     }
     res.set('Cache-Control', 'no-store');
-    if (o.waybill === awb || /delhivery/i.test(o.courier || '')) return res.redirect(302, T.trackUrl(awb));
-    return res.status(200).send(page('Track your sticker', `<div style="font-size:42px">📦</div><h1>Your GaadiPe Tag sticker</h1>
-      <p>Courier: <b>${esc(o.courier || '—')}</b><br>Tracking number: <b>${esc(o.tracking)}</b></p>
-      <p>Track it on the courier's website with this number.</p>`));
+    const delivered = o.status === 'delivered';
+    const status = o.live ? `${o.live.status}${o.live.location ? ` · ${o.live.location}` : ''}` : (o.ship_status || (o.status === 'paid' ? 'Being prepared' : 'Shipped'));
+    const at = o.live?.at || o.ship_status_at || o.dispatched_at;
+    const isDelhivery = Boolean(o.waybill) || /delhivery/i.test(o.courier || '');
+    return res.status(200).send(page('Track your sticker', `<div style="font-size:42px">${delivered ? '✅' : '📦'}</div>
+      <h1>${delivered ? 'Delivered' : 'Your sticker is on its way'}</h1>
+      <p>GaadiPe Tag sticker${o.quantity > 1 ? `s (${o.quantity})` : ''} for <b>${esc(T.masked(o.reg_no))}</b></p>
+      <p style="background:#f3f7f5;border-radius:12px;padding:12px"><b>${esc(status)}</b>${at ? `<br><small>${esc(when(at))}</small>` : ''}</p>
+      <p><small>Courier: <b>${esc(o.courier || (isDelhivery ? 'Delhivery' : '—'))}</b> · Tracking no. <b>${esc(o.tracking || o.waybill)}</b></small></p>
+      ${delivered ? '<p>Stick it on your vehicle where people can easily see and scan it.</p>' : ''}
+      ${isDelhivery ? `<p><a href="${esc(T.trackUrl(o.waybill || o.tracking))}" rel="noopener">Full tracking on Delhivery →</a></p>` : ''}`));
   } catch (e) {
     console.error('[tag] /tr failed: %s', e.message);
     return res.status(500).send(page('Try again', '<h1>Something went wrong</h1><p>Please try again in a moment.</p>'));

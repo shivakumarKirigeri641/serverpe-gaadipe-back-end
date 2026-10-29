@@ -207,14 +207,46 @@ async function refreshTracking() {
   for (const r of rows) {
     const t = await D.track(r.waybill).catch(() => ({ ok: false }));
     if (!t.ok || !t.status) continue;
-    const done = /^delivered$/i.test(t.status);
-    await db.query(
-      `UPDATE tag_orders SET ship_status = $2, ship_status_at = coalesce($3::timestamptz, now()),
-              status = CASE WHEN $4 THEN 'delivered' ELSE status END, delivered_at = CASE WHEN $4 THEN now() ELSE delivered_at END
-        WHERE id = $1`, [r.id, `${t.status}${t.location ? ` · ${t.location}` : ''}`.slice(0, 120), t.at || null, done]);
+    const done = await saveTrack(r.id, t);
     updated += 1; if (done) delivered += 1;
   }
   return { ok: true, checked: rows.length, updated, delivered };
+}
+
+/** Saves a Delhivery status on the order; true when it says delivered. */
+async function saveTrack(id, t) {
+  const done = /^delivered$/i.test(t.status);
+  await db.query(
+    `UPDATE tag_orders SET ship_status = $2, ship_status_at = coalesce($3::timestamptz, now()),
+            status = CASE WHEN $4 THEN 'delivered' ELSE status END, delivered_at = CASE WHEN $4 AND delivered_at IS NULL THEN now() ELSE delivered_at END
+      WHERE id = $1`, [id, `${t.status}${t.location ? ` · ${t.location}` : ''}`.slice(0, 120), t.at || null, done]);
+  return done;
+}
+
+/*
+ * THE OWNER'S TRACKING PAGE (routes/tags.js /tr, 2026-10-29). The order for this tracking number, with Delhivery's live
+ * status for a waybill: asked at most once every 15 minutes per waybill (the 3-hourly job keeps it fresh otherwise),
+ * and saved on the order like the job does. Delhivery not set up or not answering: the saved status is shown.
+ */
+const lastAsked = new Map();
+async function trackPage(number) {
+  const o = await db.one(
+    `SELECT o.id, o.status, o.courier, o.tracking, o.waybill, o.quantity, o.ship_status, o.ship_status_at, o.dispatched_at, o.delivered_at,
+            o.pincode, o.ship_city, v.reg_no
+       FROM tag_orders o JOIN qr_tags t ON t.id = o.tag_id JOIN vehicles v ON v.id = t.vehicle_id
+      WHERE o.tracking = $1 OR o.waybill = $1 ORDER BY o.id DESC LIMIT 1`, [number]);
+  if (!o) return null;
+  let live = null;
+  const D = require('../ship/delhivery');
+  if (o.waybill && o.status === 'dispatched' && D.configured() && Date.now() - (lastAsked.get(o.waybill) || 0) > 15 * 60e3) {
+    lastAsked.set(o.waybill, Date.now());
+    const t = await D.track(o.waybill).catch(() => ({ ok: false }));
+    if (t.ok && t.status) {
+      live = t;
+      if (await saveTrack(o.id, t)) { o.status = 'delivered'; o.delivered_at = new Date(); }
+    }
+  }
+  return { ...o, live };
 }
 
 async function overview() {
@@ -247,4 +279,4 @@ async function overview() {
     delhivery: { configured: D.configured(), mode: D.mode(), pickup: D.pickupName() } };
 }
 
-module.exports = { quote, priceFor, pricing, startOrder, onPaid, notifyPaid, dispatch, book, labelFor, requestPickup, refreshTracking, overview };
+module.exports = { quote, priceFor, pricing, startOrder, onPaid, notifyPaid, dispatch, book, labelFor, requestPickup, refreshTracking, trackPage, overview };
