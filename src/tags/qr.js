@@ -23,28 +23,48 @@ const CARD_H = 420;
 
 const qrOf = (code) => QRCode.toBuffer(T.tagUrl(code), { errorCorrectionLevel: 'H', margin: 1, width: 900, color: { dark: '#0d1f1a', light: '#ffffff' } });
 
-/** One card with its top-left corner at (x, y). */
+/**
+ * One card with its top-left corner at (x, y). THE LAYOUT (user, 2026-10-29: "logo at the centre of the QR; at the top
+ * the vehicle number and tag id, footer gaadipe.in; one simple reason, bigger, so a stranger finds it and scans"):
+ *   top band   the vehicle number (in full — the plate beside it shows it anyway, and a copied sticker on another
+ *              vehicle is then plain to see) and the tag id
+ *   headline   "Is this vehicle blocking you?" — the one reason everyone understands
+ *   the QR     with the GaadiPe logo in its centre (error correction H keeps it scannable)
+ *   footer     gaadipe.in
+ */
 function drawCard(doc, tag, qr, x, y) {
   const W = CARD_W; const H = CARD_H;
+  const reg = String(tag.reg_no || '').toUpperCase();
   doc.save().translate(x, y);
   doc.rect(0, 0, W, H).fill('#ffffff');
   doc.roundedRect(8, 8, W - 16, H - 16, 14).lineWidth(2).stroke(GREEN);
-  doc.save().roundedRect(8, 8, W - 16, 52, 14).clip().rect(8, 8, W - 16, 52).fill(GREEN).restore();
-  if (fs.existsSync(LOGO)) doc.image(LOGO, 20, 16, { width: 36, height: 36 });
-  doc.fill('#ffffff').font('b').fontSize(17).text('GaadiPe Tag', 64, 20, { lineBreak: false });
-  doc.font('r').fontSize(8.5).text('Contact the owner · numbers stay private', 64, 41, { lineBreak: false });
 
-  doc.fill('#0d1f1a').font('b').fontSize(13).text('Need to reach this vehicle’s owner?', 16, 74, { width: W - 32, align: 'center' });
-  const q = 190;
-  doc.image(qr, (W - q) / 2, 100, { width: q, height: q });
-  doc.font('b').fontSize(12).fill(GREEN).text('Scan → WhatsApp the owner', 16, 298, { width: W - 32, align: 'center', lineBreak: false });
-  doc.font('r').fontSize(8.5).fill('#41514e')
-    .text('Blocking? Lights on? Window open? Being towed? Tell the owner in one tap. Your number is never shown.',
-      24, 316, { width: W - 48, align: 'center' });
-  doc.roundedRect(40, 352, W - 80, 30, 8).fill('#eef6f2');
-  doc.fill('#0d1f1a').font('b').fontSize(12).text(`${T.masked(tag.reg_no)}   ·   Tag ${tag.code}`, 40, 361, { width: W - 80, align: 'center', lineBreak: false });
-  doc.font('r').fontSize(7.5).fill('#6b7c78')
-    .text(`No camera? WhatsApp “TAG ${tag.code}” to GaadiPe · gaadipe.in`, 16, 392, { width: W - 32, align: 'center', lineBreak: false });
+  // Top band: the vehicle number, and the tag id
+  doc.save().roundedRect(8, 8, W - 16, 50, 14).clip().rect(8, 8, W - 16, 50).fill(GREEN).restore();
+  doc.fill('#ffffff').font('b').fontSize(reg.length > 10 ? 18 : 20).text(reg, 22, 22, { lineBreak: false });
+  doc.roundedRect(W - 108, 20, 86, 26, 13).fill('#ffffff');
+  doc.fill(GREEN).font('b').fontSize(10.5).text(`TAG ${tag.code}`, W - 108, 28, { width: 86, align: 'center', lineBreak: false });
+
+  // The one reason, big
+  doc.fill('#0d1f1a').font('b').fontSize(19).text('Is this vehicle', 16, 70, { width: W - 32, align: 'center', lineBreak: false });
+  doc.fill('#c0392b').font('b').fontSize(19).text('blocking you?', 16, 92, { width: W - 32, align: 'center', lineBreak: false });
+
+  // The QR, with the GaadiPe logo in its centre
+  const q = 192; const qx = (W - q) / 2; const qy = 122;
+  doc.image(qr, qx, qy, { width: q, height: q });
+  if (fs.existsSync(LOGO)) {
+    const l = 46; const lx = qx + (q - l) / 2; const ly = qy + (q - l) / 2;
+    doc.roundedRect(lx - 4, ly - 4, l + 8, l + 8, 9).fill('#ffffff');
+    doc.image(LOGO, lx, ly, { width: l, height: l });
+  }
+
+  doc.fill(GREEN).font('b').fontSize(13).text('Scan to message the owner', 16, 322, { width: W - 32, align: 'center', lineBreak: false });
+  doc.fill('#41514e').font('r').fontSize(9).text('on WhatsApp · your number stays private', 16, 341, { width: W - 32, align: 'center', lineBreak: false });
+
+  // Footer
+  doc.moveTo(40, 366).lineTo(W - 40, 366).lineWidth(0.6).stroke('#d5e3dd');
+  doc.fill('#0d1f1a').font('b').fontSize(14).text('gaadipe.in', 16, 376, { width: W - 32, align: 'center', lineBreak: false });
+  doc.fill('#8a9a96').font('r').fontSize(6.5).text(`No camera? WhatsApp “TAG ${tag.code}” to GaadiPe`, 16, 396, { width: W - 32, align: 'center', lineBreak: false });
   doc.restore();
 }
 
@@ -63,7 +83,8 @@ async function write(doc, file) {
 
 async function cardPdf(tag) {
   fs.mkdirSync(DIR, { recursive: true });
-  const file = path.join(DIR, `GaadiPe-Tag-${tag.code}.pdf`);
+  // -v2: the redesigned card (2026-10-29) — files of the first design are never served again.
+  const file = path.join(DIR, `GaadiPe-Tag-${tag.code}-v2.pdf`);
   if (fs.existsSync(file)) return file;
   const doc = newDoc([CARD_W, CARD_H], `GaadiPe Tag ${tag.code}`);
   doc.addPage();

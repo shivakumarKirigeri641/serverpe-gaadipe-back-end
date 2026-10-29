@@ -69,12 +69,33 @@ async function startScan(mobile, code) {
       [{ id: 'tag_menu', title: '🏷️ My tags' }, { id: 'menu', title: 'Menu' }]);
     return;
   }
+  /* A COPIED STICKER (user, 2026-10-29: "QR must not replicate"): the scanner checks the plate against the tag's vehicle;
+     on another vehicle they tap Wrong vehicle — the owner and the admin are told, and nothing is sent. */
   await buttons(mobile,
     `🚗 *Contact the owner of ${T.masked(tag.reg_no)}*\n\n`
-    + 'GaadiPe passes your message to this vehicle\'s owner. *Your number stays private*, and so does theirs.\n\n'
-    + 'Please use this only for a genuine reason about this vehicle. Misuse can be reported and blocked.\n\n'
+    + `First check: the number plate should end in *${String(tag.reg_no).slice(-4)}*. If it doesn't, tap *Wrong vehicle*.\n\n`
+    + 'GaadiPe passes your message to this vehicle\'s owner. *Your number stays private*, and so does theirs. '
+    + 'Please use this only for a genuine reason. Misuse can be reported and blocked.\n\n'
     + `By tapping *Agree & continue* you accept GaadiPe's Terms: ${SITE()}/terms`,
-    [{ id: `tag_ok:${tag.code}`, title: '✅ Agree & continue' }, { id: 'tag_cancel', title: 'Cancel' }]);
+    [{ id: `tag_ok:${tag.code}`, title: '✅ Agree & continue' }, { id: `tag_wrong:${tag.code}`, title: '🚫 Wrong vehicle' },
+      { id: 'tag_cancel', title: 'Cancel' }]);
+}
+
+/** The sticker is on a vehicle it doesn't belong to: tell the owner and the admin; send nothing. */
+async function wrongVehicle(mobile, code) {
+  const tag = await T.byCode(code);
+  await send.text(mobile, '🙏 Thank you for telling us — we\'ll look into it. Nothing was sent to anyone.');
+  if (!tag) return;
+  await db.query(`INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'tag_wrong_vehicle', $3)`,
+    [tag.user_id, tag.vehicle_id, JSON.stringify({ code: tag.code, by: T.ten(mobile).slice(-4) })]).catch(() => {});
+  require('../util/adminPing').ping({
+    key: `tag_wrong:${tag.code}:${new Date().toISOString().slice(0, 13)}`, severity: 'warning', source: 'tags',
+    title: `🚫 GaadiPe Tag ${tag.code} seen on the wrong vehicle`,
+    text: `Someone (••${T.ten(mobile).slice(-4)}) scanned tag ${tag.code} of ${tag.reg_no} and said it is on a different vehicle — possibly a copied sticker. Switch it off from the admin's GaadiPe Tag page if needed.`,
+  }).catch(() => {});
+  await send.buttons(T.ten(tag.owner_mobile),
+    `⚠️ Someone scanned your GaadiPe Tag for ${T.masked(tag.reg_no)} and said it is on a *different vehicle*.\n\nIf you didn't put it there, switch this tag off — the QR stops working at once, and you can make a new one.`,
+    [{ id: `tag_off:${tag.code}`, title: '🔕 Switch off' }, { id: 'tag_menu', title: '🏷️ My tags' }]).catch(() => {});
 }
 
 async function reasons(mobile, code, { agreed = false } = {}) {
@@ -336,6 +357,7 @@ async function handle(session, message, mobile, intent) {
       case 'tag_ok':     await reasons(mobile, a, { agreed: true }); return true;
       case 'tag_more':   await reasons(mobile, a); return true;
       case 'tag_cancel': await send.text(mobile, 'No problem 🙂 Nothing was sent.'); return true;
+      case 'tag_wrong':  await wrongVehicle(mobile, a); return true;
       case 'tag_r':      await relay(mobile, a, b); return true;
       case 'tag_rp':     await askReply(mobile, a); return true;
       case 'tag_bk':     await block(mobile, a); return true;
