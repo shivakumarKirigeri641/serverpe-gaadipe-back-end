@@ -652,12 +652,15 @@ async function whatYouGet(mobile) {
   const checks = !q?.enforced ? ''
     : q.unlimited ? '🔢 *Free checks:* no limit for you.\n\n'
     // Check packs (migrations 213-215): one free, then the packs; the ₹19 report adds checks (migration 222).
-    : q.packs ? `🔢 *Checks:* 1st free, then ${pk.map((p) => `*${p.checks} = ₹${p.rupees}*`).join(' · ')}; ${bonus ? `the ₹${bonus.rupees} report adds ${bonus.checks}; ` : ''}`
+    : q.packs && pk.length ? `🔢 *Checks:* 1st free, then ${pk.map((p) => `*${p.checks} = ₹${p.rupees}*`).join(' · ')}; ${bonus ? `the ₹${bonus.rupees} report adds ${bonus.checks}; ` : ''}`
         + `vehicles you checked before stay free. *${q.today.left}* left.\n\n`
+      // No pack on sale (migration 223): the first vehicle free, then the report per vehicle.
+      : q.packs ? `🔢 *Checks:* your *1st vehicle is free*; after that, a new vehicle is its full report. Vehicles you checked before stay free.`
+        + `${q.today.left > 0 ? ` *${q.today.left}* check${q.today.left === 1 ? '' : 's'} left.` : ''}\n\n`
       : `🔢 *Free checks:* ${q.today.limit} a day${q.month ? `, ${q.month.base} a month (+${q.month.per_report} with every report you buy)` : ''}. `
         + `You have *${q.today.left} left today*${q.month ? ` · ${q.month.left} this month` : ''}.\n\n`;
   await reply(mobile, '💡 *What you get with GaadiPe*\n\n'
-    + '✅ *Free check* — send any vehicle number: the vehicle, owner (masked), registration date and age, RC status, '
+    + `✅ *Free check${await quota.packsOn().catch(() => false) ? ' — your 1st vehicle' : ''}* — send a vehicle number: the vehicle, owner (masked), registration date and age, RC status, `
     + 'RTO, every validity date (insurance, PUC, road tax, fitness, permit) and pending challans with the total.\n\n'
     + checks
     + `📋 *Full report — ${once ? `${rupeesOf(once.price_paise)} one time` : price}* — adds the loan / hypothecation, blacklist and NOC, each challan with offence and place, number of owners, `
@@ -672,7 +675,7 @@ async function whatYouGet(mobile) {
     + NOT_A_DOCUMENT_SHORT + '\n\n'
     + `Sample report: ${require('../mail/customer').SITE()}/sample-report.pdf`,
   // The middle button shows the packs (fleet hidden, 2026-10-26).
-  ['check', { id: BTN.BUY_CHECKS, title: 'Buy vehicle checks' }, 'menu']);
+  ['check', ...(pk?.length ? [{ id: BTN.BUY_CHECKS, title: 'Buy vehicle checks' }] : []), 'menu']);
 }
 
 /*
@@ -1168,6 +1171,30 @@ async function packOffer(packs, { used = false } = {}) {
     + `_GST included. ${await require('../pay/packs').reportBonus().then((b) => (b ? `The ₹${b.rupees} report with alerts also adds ${b.checks} checks. ` : '')).catch(() => '')}`
     + 'Vehicles you already checked are free to check again, any time._';
 }
+/* NO PACK ON SALE (user, 2026-10-29: "keep 11 & 19 ... very first check per mobile number free"; migration 223). The
+   first vehicle check is free; any other new vehicle is its full report - ₹11 once or ₹19 with alerts. Those who
+   bought a pack still use its checks (quota.check). */
+async function reportPrices() {
+  const plan = await billing.reportPlan().catch(() => null);
+  const once = await billing.oneTimePlan().catch(() => null);
+  const r = (p) => `₹${Math.round(Number(p.price_paise) / 100)}`;
+  return [once && `*${r(once)}* one time`, plan && `*${r(plan)}* with ${plan.duration_days || 28} days of alerts`].filter(Boolean).join(' or ') || 'the full report';
+}
+async function reportOffer(mobile, regNo, { used = true } = {}) {
+  const plan = await billing.reportPlan().catch(() => null);
+  const once = await billing.oneTimePlan().catch(() => null);
+  const r = (p) => `₹${Math.round(Number(p.price_paise) / 100)}`;
+  const btns = [...(once ? [{ id: BTN.BUY_ONETIME, title: `Report ${r(once)}` }] : []),
+    ...(plan ? [{ id: BTN.BUY_REPORT, title: `Report + alerts ${r(plan)}` }] : []),
+    { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }];
+  await send.buttons(mobile, (used ? '🔢 *Your free check has been used*\n\nOnly the *first vehicle check is free*. ' : '🔢 *Your first vehicle check is free.* ')
+    + (regNo ? `For *${regNo}*, get the full report — ${await reportPrices()}:\n\n` : `After that, each new vehicle is its full report — ${await reportPrices()}.\n\n`)
+    + '📋 Every validity date, loan / hypothecation, blacklist and NOC, each challan with offence and place, number of owners, '
+    + 'insurer and policy, FASTag — as a PDF, here in this chat.\n\n'
+    + '_GST included. Vehicles you already checked are free to check again, any time._',
+  regNo ? btns : [{ id: BTN.CHECK_ANOTHER, title: 'Check a vehicle' }, { id: BTN.WHAT_GET, title: 'What do I get?' }]);
+}
+
 async function buyChecks(mobile, code = null) {
   const user = await store.upsertUser(mobile);
   await funnel(mobile, 'pack_tapped', { pack: code });
@@ -1452,15 +1479,14 @@ async function checksLeftLine(userId, thisCheck = null) {
         ? ` (valid till ${new Date(q.credits.last_expiry).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })})` : '';
       return `🔢 ${cost}*Checks left: ${q.today.left}*${till}`;
     }
-    if (cost && q.today.left <= 0) {
-      const pk = await packList();
-      return `🔢 ${cost}*No checks left for new vehicles* — only the first check is free; packs: ${pk.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}. `
-        + 'Type *buy checks* any time. Vehicles you checked before stay free.';
-    }
     if (q.today.left <= 0) {
       const pk = await packList();
-      return `🔢 *No checks left for new vehicles* — ${pk.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}. `
-        + 'Type *buy checks* any time. Vehicles you checked before stay free.';
+      // No pack on sale (migration 223): a new vehicle is the full report, ₹11 / ₹19.
+      const next = pk.length
+        ? `packs: ${pk.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}. Type *buy checks* any time.`
+        : `for another vehicle, get its full report — ${await reportPrices()}.`;
+      return `🔢 ${cost}*No checks left for new vehicles* — only the first check is free; ${next} `
+        + 'Vehicles you checked before stay free.';
     }
     const till = q.credits?.last_expiry ? ` (valid till ${new Date(q.credits.last_expiry).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })})` : '';
     return `🔢 *Checks left:* ${q.today.left}${q.credits?.left ? till : ''}`;
@@ -1707,7 +1733,14 @@ async function deliverReport(mobile, regNo, message) {
     await quota.noteOut(user.id, regNo, 'whatsapp');
     await savePendingReg(mobile, regNo);
     const packs = await packList();
-    await send.buttons(mobile, await packOffer(packs, { used: true }), packs.length ? packButtons(packs) : [{ id: BTN.WHAT_GET, title: 'What do I get?' }]);
+    if (packs.length) {
+      await send.buttons(mobile, await packOffer(packs, { used: true }), packButtons(packs));
+      return;
+    }
+    // No pack on sale (migration 223): the report for this vehicle. Its row by number only - nothing is looked up;
+    // the report's own lookup runs once it is paid (routes/payments.js ownerRefresh).
+    await db.query(`INSERT INTO vehicles (reg_no) VALUES ($1) ON CONFLICT (reg_no) DO NOTHING`, [regNo]);
+    await reportOffer(mobile, regNo);
     return;
   }
   if (!q.allowed) {
@@ -1977,12 +2010,14 @@ async function start(mobile) {
   const once = await billing.oneTimePlan().catch(() => null);
   /* THE PLANS IN THE WELCOME (user, 2026-10-26: "mention it in the welcome as well, people don't see it"): only the
      first check is free, then the packs - read from the plans, so the admin's prices are what they read. */
-  const packs = await quota.packsOn().catch(() => false) ? await packList() : [];
+  const packsOn = await quota.packsOn().catch(() => false);
+  const packs = packsOn ? await packList() : [];
   /* THEIR OWN CHECKS (user, 2026-10-26: "if already consumed, show it's consumed"): a new person, or one who has
      not used the free check, reads "1st vehicle check FREE"; one who has, reads that it is used - or how many
-     checks they have left, and till when. */
+     checks they have left, and till when. Also with no pack on sale (user, 2026-10-29: "very first check per
+     mobile number free", then ₹11 / ₹19 per vehicle; migration 223). */
   const me = await db.one(`SELECT id FROM users WHERE right(mobile, 10) = right($1, 10) LIMIT 1`, [mobile]).catch(() => null);
-  const left = me && packs.length ? await quota.left(me.id).catch(() => null) : null;
+  const left = me && packsOn ? await quota.left(me.id).catch(() => null) : null;
   const tillOf = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
   const mine = !left?.packs ? '✅ 1st vehicle check — *FREE* _(only the first)_\n'
     : left.free_left > 0 ? '✅ 1st vehicle check — *FREE* _(only the first)_\n'
@@ -1991,6 +2026,7 @@ async function start(mobile) {
     : '✅ Your free check — _already used_\n';
   const first = packs.length
     ? `${mine}🔢 More checks: *${packs.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}*\n`
+    : packsOn ? `${mine}🔢 Every other vehicle: the full report below\n`
     : '✅ Basic check — *FREE*\n';
   const price = plan
     // "Full report @ just ₹19" (user, 2026-10-24: "something attractive"); from ₹11 one time (2026-10-25, REPORT11).
@@ -3347,7 +3383,8 @@ async function handle(session, message, mobile) {
         // The packs, to choose one (from What do I get? / the menu).
         {
           const packs = await packList();
-          await send.buttons(mobile, await packOffer(packs), packs.length ? packButtons(packs) : [{ id: BTN.WHAT_GET, title: 'What do I get?' }]);
+          if (packs.length) await send.buttons(mobile, await packOffer(packs), packButtons(packs));
+          else await reportOffer(mobile, null, { used: false });   // no pack on sale (migration 223)
         }
         return;
 
@@ -3486,6 +3523,8 @@ async function handle(session, message, mobile) {
   if (/^(buy( vehicle)? checks?|check packs?|packs?|recharge)\s*\??$/i.test(intent.text || '') && await send.agreedTerms(mobile)) {
     const packs = await packList();
     if (packs.length) { await send.buttons(mobile, await packOffer(packs), packButtons(packs)); return; }
+    await reportOffer(mobile, null, { used: false });   // no pack on sale (migration 223)
+    return;
   }
   if (/^(checks?|checks? left|my checks|balance|limit)\s*\??$/i.test(intent.text || '') && await send.agreedTerms(mobile)) {
     const u = await store.upsertUser(mobile);
@@ -3805,4 +3844,4 @@ async function handle(session, message, mobile) {
 const checkFromWaitlist = (mobile, regNo) => openVehicle(mobile, regNo, { type: 'system' }, 'waitlist: records service back');
 
 module.exports = { handle, welcome, recordConsent, checkFromWaitlist, BTN, emailNudge, feedbackAsk, _sendValidReport: (m, r) => sendValidReport(m, r),
-  _test: { topicReply, askForNumber, checksLeftLine, packOffer, packList } };
+  _test: { topicReply, askForNumber, checksLeftLine, packOffer, packList, reportOffer, whatYouGet } };

@@ -936,9 +936,20 @@ router.post('/check', safe(async (req, res) => {
     const b = await P.reportBonus().catch(() => null);   // the ₹19 report's checks (migration 222)
     const hi = langOf(req.body?.language) === 'hi';
     const list = packs.map((p) => (hi ? `${p.checks} जाँच ₹${p.rupees} (${p.days} दिन)` : `${p.checks} checks ₹${p.rupees} (${p.days} days)`)).join(' · ');
+    // No pack on sale (migration 223): the full report for this vehicle instead - the site opens its Buy window.
+    const plan = await billing.reportPlan().catch(() => null);
+    const once = await billing.oneTimePlan().catch(() => null);
+    const rs = (p) => (p ? `₹${Math.round(Number(p.price_paise) / 100)}` : null);
+    const reportOnly = !packs.length;
+    // Its row by number only (nothing looked up), so /buy can sell its report; the lookup runs once it is paid.
+    if (reportOnly) await db.query(`INSERT INTO vehicles (reg_no) VALUES ($1) ON CONFLICT (reg_no) DO NOTHING`, [parsed.regNo]);
     return res.status(402).json({
-      error: 'checks_needed', reason: 'no_credits',
-      message: hi
+      error: 'checks_needed', reason: 'no_credits', reg_no: parsed.regNo, report_only: reportOnly,
+      price_paise: plan?.price_paise ?? null, one_time_paise: once?.price_paise ?? null,
+      message: reportOnly ? (hi
+        ? `आपकी मुफ़्त जाँच हो चुकी है — सिर्फ़ पहली गाड़ी जाँच मुफ़्त है। ${parsed.regNo} की पूरी रिपोर्ट लें — ${[rs(once) && `${rs(once)} एक बार`, rs(plan) && `${rs(plan)} अलर्ट के साथ`].filter(Boolean).join(' या ')} (GST सहित)। पहले जाँची हुई गाड़ी दोबारा मुफ़्त।`
+        : `Your free check has been used — only the first vehicle check is free. Get the full report for ${parsed.regNo} — ${[rs(once) && `${rs(once)} one time`, rs(plan) && `${rs(plan)} with alerts`].filter(Boolean).join(' or ')} (GST included). Vehicles you already checked stay free.`)
+      : hi
         ? `आपकी मुफ़्त जाँच हो चुकी है — सिर्फ़ पहली गाड़ी जाँच मुफ़्त है। और गाड़ियाँ जाँचने के लिए एक पैक चुनें: ${list} — GST सहित। ${b ? `₹${b.rupees} वाली रिपोर्ट के साथ ${b.checks} जाँच और; ` : ''}पहले जाँची हुई गाड़ी दोबारा मुफ़्त।`
         : `Your free check has been used — only the first vehicle check is free. To check more vehicles, please choose a pack: ${list} — GST included. ${b ? `The ₹${b.rupees} report adds ${b.checks} more; ` : ''}vehicles you already checked stay free.`,
       pack: packs[0] || null, packs,
