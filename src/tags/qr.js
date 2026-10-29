@@ -61,10 +61,11 @@ function drawCard(doc, tag, qr, x, y) {
   doc.fill(GREEN).font('b').fontSize(13).text('Scan to message the owner', 16, 322, { width: W - 32, align: 'center', lineBreak: false });
   doc.fill('#41514e').font('r').fontSize(9).text('on WhatsApp · your number stays private', 16, 341, { width: W - 32, align: 'center', lineBreak: false });
 
-  // Footer
-  doc.moveTo(40, 366).lineTo(W - 40, 366).lineWidth(0.6).stroke('#d5e3dd');
-  doc.fill('#0d1f1a').font('b').fontSize(14).text('gaadipe.in', 16, 376, { width: W - 32, align: 'center', lineBreak: false });
-  doc.fill('#8a9a96').font('r').fontSize(6.5).text(`No camera? WhatsApp “TAG ${tag.code}” to GaadiPe`, 16, 396, { width: W - 32, align: 'center', lineBreak: false });
+  // Footer: the site, who runs it (user, 2026-10-29: "Powered by: ServerPe App Solutions"), and the no-camera way in
+  doc.moveTo(40, 362).lineTo(W - 40, 362).lineWidth(0.6).stroke('#d5e3dd');
+  doc.fill('#0d1f1a').font('b').fontSize(14).text('gaadipe.in', 16, 368, { width: W - 32, align: 'center', lineBreak: false });
+  doc.fill('#41514e').font('r').fontSize(7.5).text('Powered by: ServerPe App Solutions', 16, 386, { width: W - 32, align: 'center', lineBreak: false });
+  doc.fill('#8a9a96').font('r').fontSize(6.5).text(`No camera? WhatsApp “TAG ${tag.code}” to GaadiPe`, 16, 398, { width: W - 32, align: 'center', lineBreak: false });
   doc.restore();
 }
 
@@ -83,8 +84,8 @@ async function write(doc, file) {
 
 async function cardPdf(tag) {
   fs.mkdirSync(DIR, { recursive: true });
-  // -v2: the redesigned card (2026-10-29) — files of the first design are never served again.
-  const file = path.join(DIR, `GaadiPe-Tag-${tag.code}-v2.pdf`);
+  // -v3: the redesigned card with "Powered by" (2026-10-29) — files of earlier designs are never served again.
+  const file = path.join(DIR, `GaadiPe-Tag-${tag.code}-v3.pdf`);
   if (fs.existsSync(file)) return file;
   const doc = newDoc([CARD_W, CARD_H], `GaadiPe Tag ${tag.code}`);
   doc.addPage();
