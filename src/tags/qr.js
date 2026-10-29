@@ -93,31 +93,46 @@ async function cardPdf(tag) {
   return write(doc, file);
 }
 
-/** A4 print sheets: four cards to a page (2 × 2), each tag `copies` times, with light cut lines. */
-async function sheetPdf(tags, { copies = 2 } = {}) {
+/*
+ * A4 PRINT SHEETS, two sizes (user, 2026-10-29: "4 stickers per sheet — don't you think it's big?"):
+ *   small  9 a sheet (3 × 3), each ~6.1 × 8.6 cm, QR ~4 cm — bikes, scooters, side glass, most cars (the default)
+ *   large  4 a sheet (2 × 2), each ~9.8 × 13.8 cm — a big rear windscreen
+ * SAFE MARGINS FOR HOME PRINTERS (TeQuiero matte vinyl, 21 × 29 cm): nothing within ~5 mm of the sides or ~9 mm of the
+ * top and bottom, so nothing is lost at the printer's edge. Dashed cut lines run through the gaps.
+ */
+const SIZES = { small: { cols: 3, rows: 3 }, large: { cols: 2, rows: 2 } };
+
+async function sheetPdf(tags, { copies = 2, size = 'small' } = {}) {
   fs.mkdirSync(DIR, { recursive: true });
-  const n = Math.max(1, Math.min(4, Number(copies) || 2));
+  const L = SIZES[size] || SIZES.small;
+  const n = Math.max(1, Math.min(9, Number(copies) || 2));
   const cards = tags.flatMap((t) => Array(n).fill(t));
-  const file = path.join(DIR, `GaadiPe-Tags-${tags.map((t) => t.code).join('-').slice(0, 60)}-x${n}.pdf`);
+  const file = path.join(DIR, `GaadiPe-Tags-${tags.map((t) => t.code).join('-').slice(0, 60)}-x${n}-${size === 'large' ? 'large' : 'small'}.pdf`);
   const doc = newDoc('A4', 'GaadiPe Tags — print sheet');
   const qrs = new Map();
   for (const t of tags) qrs.set(t.code, await qrOf(t.code));
-  /* SAFE MARGINS FOR HOME PRINTERS (user, 2026-10-29: TeQuiero matte vinyl, 21 × 29 cm). A home printer cannot print to
-     the edge (3–6 mm lost) and that sheet is 7 mm shorter than A4, so the four cards are drawn at 93% with ~5 mm at the
-     sides and ~9 mm at the top and bottom — everything lands on the paper. Cut along the dashed lines. */
-  const S = 0.93;
-  const cw = CARD_W * S; const ch = CARD_H * S; const gap = 10;
-  const ox = (595 - (2 * cw + gap)) / 2; const oy = (842 - (2 * ch + gap)) / 2;
-  const slots = [[ox, oy], [ox + cw + gap, oy], [ox, oy + ch + gap], [ox + cw + gap, oy + ch + gap]];
+
+  const gap = 10; const maxW = 595 - 2 * 16; const maxH = 822 - 2 * 26;   // printable area on a 21 × 29 cm sheet
+  const S = Math.min((maxW - (L.cols - 1) * gap) / (L.cols * CARD_W), (maxH - (L.rows - 1) * gap) / (L.rows * CARD_H));
+  const cw = CARD_W * S; const ch = CARD_H * S;
+  const ox = (595 - (L.cols * cw + (L.cols - 1) * gap)) / 2; const oy = (822 - (L.rows * ch + (L.rows - 1) * gap)) / 2;
+  const per = L.cols * L.rows;
   cards.forEach((t, i) => {
-    if (i % 4 === 0) {
+    if (i % per === 0) {
       doc.addPage();
-      // Cut lines, light grey and dashed, through the gaps between the four cards.
-      doc.save().lineWidth(0.5).dash(4, { space: 4 }).strokeColor('#b8c4c0')
-        .moveTo(ox + cw + gap / 2, oy - 6).lineTo(ox + cw + gap / 2, oy + 2 * ch + gap + 6).stroke()
-        .moveTo(ox - 6, oy + ch + gap / 2).lineTo(ox + 2 * cw + gap + 6, oy + ch + gap / 2).stroke().undash().restore();
+      const dash = doc.save().lineWidth(0.5).dash(4, { space: 4 }).strokeColor('#b8c4c0');
+      for (let c = 1; c < L.cols; c += 1) {
+        const x = ox + c * cw + (c - 0.5) * gap;
+        dash.moveTo(x, oy - 6).lineTo(x, oy + L.rows * ch + (L.rows - 1) * gap + 6).stroke();
+      }
+      for (let r = 1; r < L.rows; r += 1) {
+        const y = oy + r * ch + (r - 0.5) * gap;
+        dash.moveTo(ox - 6, y).lineTo(ox + L.cols * cw + (L.cols - 1) * gap + 6, y).stroke();
+      }
+      dash.undash().restore();
     }
-    const [x, y] = slots[i % 4];
+    const k = i % per;
+    const x = ox + (k % L.cols) * (cw + gap); const y = oy + Math.floor(k / L.cols) * (ch + gap);
     doc.save().translate(x, y).scale(S);
     drawCard(doc, t, qrs.get(t.code), 0, 0);
     doc.restore();

@@ -106,8 +106,8 @@ async function setActive(code, on) {
   }
 }
 
-/** The print sheet for these tag codes (A4, four cards a page, `copies` of each). */
-async function sheet(codes, copies = 2) {
+/** The print sheet for these tag codes (A4; size small = 9 a page, large = 4 a page; `copies` of each). */
+async function sheet(codes, copies = 2, size = 'small') {
   const want = [...new Set(String(codes || '').toUpperCase().split(/[\s,]+/).filter((x) => /^[A-Z0-9]{6}$/.test(x)))];
   if (!want.length) return null;
   const tags = [];
@@ -116,7 +116,7 @@ async function sheet(codes, copies = 2) {
     if (t) tags.push(t);
   }
   if (!tags.length) return null;
-  return require('./qr').sheetPdf(tags, { copies });
+  return require('./qr').sheetPdf(tags, { copies, size: size === 'large' ? 'large' : 'small' });
 }
 
 async function settingsView() {

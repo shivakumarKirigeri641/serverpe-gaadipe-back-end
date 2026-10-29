@@ -968,7 +968,7 @@ router.post('/tags/blocks/:id/remove', needs('settings'), safe(async (req, res) 
 }));
 // The print sheet (a file, outside the encrypted tunnel — app.js fileRoute): ?codes=ABC234,XYZ987&copies=2
 router.get('/tags/sheet', safe(async (req, res) => {
-  const file = await require('../tags/admin').sheet(req.query.codes, Number(req.query.copies) || 2);
+  const file = await require('../tags/admin').sheet(req.query.codes, Number(req.query.copies) || 2, req.query.size);
   if (!file) return res.status(404).json({ error: 'not_found', message: 'No such tags.' });
   await auth.audit({ adminId: req.admin.id, action: 'tag_sheet', ip: ipOf(req), detail: { codes: req.query.codes } });
   res.setHeader('Content-Type', 'application/pdf');
