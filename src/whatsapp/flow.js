@@ -648,11 +648,11 @@ async function whatYouGet(mobile) {
   const user = await store.upsertUser(mobile).catch(() => null);
   const q = user ? await quota.left(user.id).catch(() => null) : null;
   const pk = q?.packs ? await packList() : null;
-  const bonus = pk ? await settings.num('checks_per_report_bonus', 5) : 0;
+  const bonus = pk ? await require('../pay/packs').reportBonus().catch(() => null) : null;
   const checks = !q?.enforced ? ''
     : q.unlimited ? '🔢 *Free checks:* no limit for you.\n\n'
-    // Check packs (migrations 213-215): one free, then the packs; reports add checks.
-    : q.packs ? `🔢 *Checks:* 1st free, then ${pk.map((p) => `*${p.checks} = ₹${p.rupees}*`).join(' · ')}; each report adds ${bonus}; `
+    // Check packs (migrations 213-215): one free, then the packs; the ₹19 report adds checks (migration 222).
+    : q.packs ? `🔢 *Checks:* 1st free, then ${pk.map((p) => `*${p.checks} = ₹${p.rupees}*`).join(' · ')}; ${bonus ? `the ₹${bonus.rupees} report adds ${bonus.checks}; ` : ''}`
         + `vehicles you checked before stay free. *${q.today.left}* left.\n\n`
       : `🔢 *Free checks:* ${q.today.limit} a day${q.month ? `, ${q.month.base} a month (+${q.month.per_report} with every report you buy)` : ''}. `
         + `You have *${q.today.left} left today*${q.month ? ` · ${q.month.left} this month` : ''}.\n\n`;
@@ -1165,7 +1165,7 @@ async function packOffer(packs, { used = false } = {}) {
     + `${lines.join('\n')}\n\n`
     + 'Each check shows the vehicle, the owner (masked), registration date, RC status, RTO, every validity date '
     + '(insurance, PUC, tax, fitness, permit) and pending challans. The full report is separate.\n\n'
-    + `_GST included. Every full report you buy also adds ${await settings.num('checks_per_report_bonus', 5)} checks. `
+    + `_GST included. ${await require('../pay/packs').reportBonus().then((b) => (b ? `The ₹${b.rupees} report with alerts also adds ${b.checks} checks. ` : '')).catch(() => '')}`
     + 'Vehicles you already checked are free to check again, any time._';
 }
 async function buyChecks(mobile, code = null) {

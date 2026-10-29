@@ -169,12 +169,14 @@ async function activate({ paymentRowId, razorpayPaymentId, orderId, raw }) {
       return { activated: true, subscription: moved.sub, endsOn: moved.endsOn, payment: pay, vehicleId, plan, replaced: pay.raw?.replace || null };
     }
 
-    /* CHECK CREDITS (migration 213, util/quota.js): every report adds checks_per_report_bonus (5) for
-       check_credit_days (30); a pack (CHECKS5) is nothing but its checks. Granted once per payment. */
+    /* CHECK CREDITS (migration 213, util/quota.js): a report adds its plan's check_credits (migration 222: ₹11 none,
+       ₹19 five; not set → checks_per_report_bonus) for check_credit_days (30); a pack (CHECKS5) is nothing but its
+       checks. Granted once per payment. */
     const creditDays = await settings.num('check_credit_days', 30);
-    if (plan?.kind === 'report' && await settings.bool('check_packs_enabled', true)) {
+    const reportBonus = plan?.kind === 'report' ? await require('./packs').reportChecks(plan) : 0;
+    if (reportBonus > 0 && await settings.bool('check_packs_enabled', true)) {
       await require('../util/quota').grant(c, { userId: pay.user_id, paymentId: pay.id, source: 'report',
-        credits: await settings.num('checks_per_report_bonus', 5), days: creditDays });
+        credits: reportBonus, days: creditDays });
     }
     if (plan?.kind === 'checks') {
       await c.query(

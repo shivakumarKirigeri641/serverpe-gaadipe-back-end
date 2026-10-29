@@ -39,6 +39,22 @@ async function packPlan(code = null) {
 /** For the customer-facing lists: code, checks, rupees, days, best. */
 const brief = (p) => ({ code: p.code, checks: p.checks, price_paise: p.price_paise, rupees: p.rupees, days: p.days, best: p.best });
 
+/* CHECKS THAT COME WITH A REPORT (user, 2026-10-29: "go ahead" - ₹11 one report only, ₹19 keeps +5; migration 222).
+   A report plan's own check_credits; not set → checks_per_report_bonus. reportBonus(): the cheapest active report
+   that adds checks, for the texts ("The ₹19 report with alerts also adds 5 checks"), or null when none does. */
+async function reportChecks(plan) {
+  if (plan?.check_credits != null) return Math.max(0, Number(plan.check_credits) || 0);
+  return require('../util/settings').num('checks_per_report_bonus', 5);
+}
+async function reportBonus() {
+  const { rows } = await db.query(`SELECT * FROM plans WHERE kind = 'report' AND is_active ORDER BY price_paise, id`);
+  for (const p of rows) {
+    const checks = await reportChecks(p);
+    if (checks > 0) return { code: p.code, checks, rupees: Math.round(Math.max(100, Number(p.price_paise) - (Number(p.discount_paise) || 0)) / 100) };
+  }
+  return null;
+}
+
 class PackError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
@@ -96,4 +112,4 @@ async function startOrder({ user, channel = 'whatsapp', code = null }) {
   return row;
 }
 
-module.exports = { startOrder, packPlan, packPlans, brief, PackError };
+module.exports = { startOrder, packPlan, packPlans, brief, reportChecks, reportBonus, PackError };

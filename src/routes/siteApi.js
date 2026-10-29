@@ -107,7 +107,11 @@ router.get('/pricing', safe(async (_req, res) => {
     ...(await (async () => {
       if (!(await settings.bool('check_packs_enabled', true))) return { check_pack: null, check_packs: [] };
       const packs = await require('../pay/packs').packPlans().catch(() => []);
-      const extra = { per_report: await settings.num('checks_per_report_bonus', 5), free: await settings.num('free_checks_lifetime', 1) };
+      // per_report: the checks the report with alerts adds; per_report_once: the one-time report's (0 since migration 222).
+      const P = require('../pay/packs');
+      const once = await billing.oneTimePlan().catch(() => null);
+      const extra = { per_report: (await P.reportBonus().catch(() => null))?.checks || 0,
+        per_report_once: once ? await P.reportChecks(once) : 0, free: await settings.num('free_checks_lifetime', 1) };
       const list = packs.map((p) => ({ ...require('../pay/packs').brief(p), ...extra }));
       return { check_pack: list[0] || null, check_packs: list };
     })()),
@@ -929,14 +933,14 @@ router.post('/check', safe(async (req, res) => {
     await quota.noteOut(req.user.id, parsed.regNo, 'web');
     const P = require('../pay/packs');
     const packs = (await P.packPlans().catch(() => [])).map(P.brief);
-    const bonus = await settings.num('checks_per_report_bonus', 5);
+    const b = await P.reportBonus().catch(() => null);   // the ₹19 report's checks (migration 222)
     const hi = langOf(req.body?.language) === 'hi';
     const list = packs.map((p) => (hi ? `${p.checks} जाँच ₹${p.rupees} (${p.days} दिन)` : `${p.checks} checks ₹${p.rupees} (${p.days} days)`)).join(' · ');
     return res.status(402).json({
       error: 'checks_needed', reason: 'no_credits',
       message: hi
-        ? `आपकी मुफ़्त जाँच हो चुकी है — सिर्फ़ पहली गाड़ी जाँच मुफ़्त है। और गाड़ियाँ जाँचने के लिए एक पैक चुनें: ${list} — GST सहित। हर रिपोर्ट के साथ ${bonus} जाँच और; पहले जाँची हुई गाड़ी दोबारा मुफ़्त।`
-        : `Your free check has been used — only the first vehicle check is free. To check more vehicles, please choose a pack: ${list} — GST included. Every report adds ${bonus} more; vehicles you already checked stay free.`,
+        ? `आपकी मुफ़्त जाँच हो चुकी है — सिर्फ़ पहली गाड़ी जाँच मुफ़्त है। और गाड़ियाँ जाँचने के लिए एक पैक चुनें: ${list} — GST सहित। ${b ? `₹${b.rupees} वाली रिपोर्ट के साथ ${b.checks} जाँच और; ` : ''}पहले जाँची हुई गाड़ी दोबारा मुफ़्त।`
+        : `Your free check has been used — only the first vehicle check is free. To check more vehicles, please choose a pack: ${list} — GST included. ${b ? `The ₹${b.rupees} report adds ${b.checks} more; ` : ''}vehicles you already checked stay free.`,
       pack: packs[0] || null, packs,
       quota: await quota.left(req.user.id).catch(() => null),
     });

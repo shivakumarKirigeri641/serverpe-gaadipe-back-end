@@ -1731,8 +1731,10 @@ router.put('/plans/:code', needs('settings'), safe(async (req, res) => {
   // A check pack's number of checks (2026-10-26, migration 215): 1 to 500.
   if (check_credits !== undefined && check_credits !== null) {
     const n = Number(check_credits);
-    if (before.kind !== 'checks') return res.status(400).json({ error: 'bad_checks', message: 'Only a check pack has a number of checks.' });
-    if (!Number.isInteger(n) || n < 1 || n > 500) return res.status(400).json({ error: 'bad_checks', message: 'The checks must be a whole number from 1 to 500.' });
+    // A report's bonus checks too (2026-10-29, migration 222): 0 (none) to 500.
+    if (!['checks', 'report'].includes(before.kind)) return res.status(400).json({ error: 'bad_checks', message: 'Only a check pack or a report has a number of checks.' });
+    const min = before.kind === 'report' ? 0 : 1;
+    if (!Number.isInteger(n) || n < min || n > 500) return res.status(400).json({ error: 'bad_checks', message: `The checks must be a whole number from ${min} to 500.` });
   }
   // The discount (2026-10-03): whole paise, and at least ₹1 must remain to pay.
   if (discount_paise !== undefined && discount_paise !== null) {
