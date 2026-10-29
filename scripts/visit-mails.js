@@ -41,6 +41,23 @@ const db = require('../src/db');
   console.log('\nAll admin emails, last 12 hours (does ANY mail go out?):');
   for (const r of anyMail) console.log(r.error || `  ${r.kind.padEnd(22)} ${r.status.padEnd(8)} ${r.n}`);
 
+  // Every email type, hour by hour (2026-10-29: "new customer, existing customer mails are not coming").
+  const kinds = await q(
+    `SELECT to_char(date_trunc('hour', created_at) AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:00') AS hr, kind,
+            count(*) FILTER (WHERE status = 'sent' AND coalesce(sent_to, '') NOT LIKE '(%')::int AS sent,
+            count(*) FILTER (WHERE status = 'failed')::int AS failed,
+            count(*) FILTER (WHERE status = 'sent' AND coalesce(sent_to, '') LIKE '(%')::int AS skipped
+       FROM admin_notifications WHERE created_at > now() - interval '24 hours' AND kind IN ('wa_hi', 'wa_agreed', 'wa_check', 'sign_in', 'web_check', 'chat_check')
+      GROUP BY 1, 2, date_trunc('hour', created_at) ORDER BY date_trunc('hour', created_at), 2`);
+  console.log('\nCustomer emails by hour (wa_hi = "New / Existing customer said Hi"):');
+  for (const r of kinds) console.log(r.error || `  ${r.hr}  ${r.kind.padEnd(11)} sent ${r.sent}${r.failed ? ` · FAILED ${r.failed}` : ''}${r.skipped ? ` · skipped ${r.skipped}` : ''}`);
+  const his = await q(
+    `SELECT to_char(date_trunc('hour', created_at) AT TIME ZONE 'Asia/Kolkata', 'DD Mon HH24:00') AS hr, count(DISTINCT mobile)::int AS people
+       FROM whatsapp_messages WHERE direction = 'in' AND created_at > now() - interval '12 hours'
+      GROUP BY 1, date_trunc('hour', created_at) ORDER BY date_trunc('hour', created_at)`);
+  console.log('\nPeople writing on WhatsApp, by hour (last 12 h):');
+  console.log(his.length ? his.map((r) => r.error || `${r.hr.slice(7)}h: ${r.people}`).join(' · ') : '  none');
+
   const job = await q(`SELECT job, max(started_at) AS last, count(*) FILTER (WHERE status = 'failed')::int AS failed
                          FROM job_runs WHERE job = 'notify' AND started_at > now() - interval '24 hours' GROUP BY 1`);
   console.log('\nNotify job:', job[0]?.error || (job[0] ? `last ran ${new Date(job[0].last).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}, ${job[0].failed} failed runs in 24 h` : 'NOT RUN in the last 24 hours'));
