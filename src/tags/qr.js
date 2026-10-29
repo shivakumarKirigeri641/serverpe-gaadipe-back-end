@@ -102,18 +102,25 @@ async function sheetPdf(tags, { copies = 2 } = {}) {
   const doc = newDoc('A4', 'GaadiPe Tags — print sheet');
   const qrs = new Map();
   for (const t of tags) qrs.set(t.code, await qrOf(t.code));
-  // A4 is 595 × 842 pt; two A6 cards side by side are 596 wide, so they sit edge to edge with no margin to lose.
-  const slots = [[0, 0], [CARD_W - 1, 0], [0, CARD_H + 1], [CARD_W - 1, CARD_H + 1]];
+  /* SAFE MARGINS FOR HOME PRINTERS (user, 2026-10-29: TeQuiero matte vinyl, 21 × 29 cm). A home printer cannot print to
+     the edge (3–6 mm lost) and that sheet is 7 mm shorter than A4, so the four cards are drawn at 93% with ~5 mm at the
+     sides and ~9 mm at the top and bottom — everything lands on the paper. Cut along the dashed lines. */
+  const S = 0.93;
+  const cw = CARD_W * S; const ch = CARD_H * S; const gap = 10;
+  const ox = (595 - (2 * cw + gap)) / 2; const oy = (842 - (2 * ch + gap)) / 2;
+  const slots = [[ox, oy], [ox + cw + gap, oy], [ox, oy + ch + gap], [ox + cw + gap, oy + ch + gap]];
   cards.forEach((t, i) => {
     if (i % 4 === 0) {
       doc.addPage();
-      // Cut lines, light grey and dashed, between the four cards.
+      // Cut lines, light grey and dashed, through the gaps between the four cards.
       doc.save().lineWidth(0.5).dash(4, { space: 4 }).strokeColor('#b8c4c0')
-        .moveTo(CARD_W - 0.5, 0).lineTo(CARD_W - 0.5, 842).stroke()
-        .moveTo(0, CARD_H + 0.5).lineTo(595, CARD_H + 0.5).stroke().undash().restore();
+        .moveTo(ox + cw + gap / 2, oy - 6).lineTo(ox + cw + gap / 2, oy + 2 * ch + gap + 6).stroke()
+        .moveTo(ox - 6, oy + ch + gap / 2).lineTo(ox + 2 * cw + gap + 6, oy + ch + gap / 2).stroke().undash().restore();
     }
     const [x, y] = slots[i % 4];
-    drawCard(doc, t, qrs.get(t.code), x, y);
+    doc.save().translate(x, y).scale(S);
+    drawCard(doc, t, qrs.get(t.code), 0, 0);
+    doc.restore();
   });
   return write(doc, file);
 }
