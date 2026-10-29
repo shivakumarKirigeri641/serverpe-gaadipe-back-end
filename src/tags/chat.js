@@ -264,7 +264,7 @@ async function card(mobile, tag, { created = false } = {}) {
   const p = (await require('./orders').priceFor(2)).pricing;
   await buttons(mobile,
     `${created ? '✅ *Your GaadiPe Tag is ready!*' : '🏷️ *Your GaadiPe Tag*'} — ${T.masked(tag.reg_no)}\n\n`
-    + 'Print the QR above at any shop (₹5–10) and stick it on the *rear windscreen or a side window*. When someone scans it, '
+    + 'Print the QR above at any shop (₹5–10) and stick it on your vehicle where people can easily see and scan it. When someone scans it, '
     + 'their message comes here — your number stays private.\n\n'
     + `Want printed, weatherproof stickers delivered? *${p.min} for ₹${p.base}*, GST and delivery included.`,
     [{ id: `tag_ord:${tag.code}`, title: '📦 Order sticker' }, { id: `tag_off:${tag.code}`, title: '🔕 Switch off' }, { id: 'menu', title: 'Menu' }]);
@@ -302,7 +302,7 @@ async function askQty(mobile, code) {
   await buttons(mobile,
     `📦 *Printed weatherproof stickers* — ${T.masked(tag.reg_no)}\n\n`
     + `*${p.min} stickers for ₹${p.base}*, then ₹${p.extra} for each extra — GST and delivery included.\n`
-    + `_A car needs 2: rear windscreen + a side window. Up to ${p.max}? Type the number._`,
+    + `_Two let you tag two sides of your vehicle (or keep one spare). Up to ${p.max}? Type the number._`,
     opts.map((o) => ({ id: `tag_q:${tag.code}:${o.qty}`, title: `${o.qty} · ₹${o.rupees}` })));
   await enter(mobile, 'tag_qty', { tag_code: tag.code });
 }

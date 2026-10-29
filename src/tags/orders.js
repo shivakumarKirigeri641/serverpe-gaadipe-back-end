@@ -135,7 +135,7 @@ async function dispatch(orderId, { courier, tracking }) {
   const send = require('../whatsapp/send');
   const first = String(row.name).trim().split(/\s+/)[0];
   const body = `📦 *Your GaadiPe Tag sticker is on its way* — ${T.masked(row.reg_no)}\n\nCourier: *${o.courier || '—'}*\nTracking number: *${o.tracking || '—'}*\n\n`
-    + 'Once it arrives, stick it on the rear windscreen or a side window.';
+    + 'Once it arrives, stick it on your vehicle where people can easily see and scan it.';
   let told = await send.buttons(row.mobile, body, [{ id: 'tag_menu', title: '🏷️ My tags' }, { id: 'menu', title: 'Menu' }]).catch(() => ({ ok: false }));
   if (!told.ok) {
     told = await send.template(row.mobile, await settings.get('tag_shipped_template', 'gp_tag_shipped_v1'),
