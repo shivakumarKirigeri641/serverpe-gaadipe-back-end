@@ -975,6 +975,25 @@ router.get('/tags/sheet', safe(async (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="${require('path').basename(file)}"`);
   require('fs').createReadStream(file).pipe(res);
 }));
+// Delhivery by API (2026-10-29; src/ship/delhivery.js): book a paid order, its label, one pickup, tracking.
+router.post('/tags/orders/:id/book', needs('settings'), safe(async (req, res) => {
+  const out = await require('../tags/orders').book(req.params.id);
+  if (!out.ok) return res.status(400).json({ error: 'cannot', message: out.error });
+  await auth.audit({ adminId: req.admin.id, action: 'tag_sticker_booked', ip: ipOf(req), detail: { order: req.params.id, waybill: out.waybill } });
+  res.json(out);
+}));
+router.get('/tags/orders/:id/label', safe(async (req, res) => {
+  const out = await require('../tags/orders').labelFor(req.params.id);
+  if (!out.ok) return res.status(400).json({ error: 'cannot', message: out.error });
+  res.json(out);
+}));
+router.post('/tags/pickup', needs('settings'), safe(async (req, res) => {
+  const out = await require('../tags/orders').requestPickup();
+  if (!out.ok) return res.status(400).json({ error: 'cannot', message: out.error });
+  await auth.audit({ adminId: req.admin.id, action: 'tag_pickup_requested', ip: ipOf(req), detail: out });
+  res.json(out);
+}));
+router.post('/tags/tracking', safe(async (req, res) => res.json(await require('../tags/orders').refreshTracking())));
 router.post('/tags/orders/:id/dispatch', needs('settings'), safe(async (req, res) => {
   const out = await require('../tags/orders').dispatch(Number(req.params.id) || 0,
     { courier: req.body?.courier, tracking: req.body?.tracking });

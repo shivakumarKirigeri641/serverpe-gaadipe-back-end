@@ -262,6 +262,8 @@ app.listen(config.port, () => {
   // Numbers sent while vehicle records were down: checked and sent once they are back.
   // Only inside the customer's own 24-hour window (back 2026-10-09).
   require('./jobs/waitlist').start(Number(process.env.WAITLIST_TICK_SECONDS) || 300);
+  // GaadiPe Tag stickers sent by Delhivery: their tracking, every 3 hours (2026-10-29).
+  require('./jobs/tagShipping').start(Number(process.env.TAG_SHIPPING_TICK_SECONDS) || 3 * 3600);
   // The WhatsApp account as Meta sees it — limit tier, quality — read hourly (back 2026-10-09).
   require('./jobs/metaStatus').start(Number(process.env.META_STATUS_TICK_SECONDS) || 3600);
   // The WhatsApp failsafe (2026-10-23): blocked by Meta -> GaadiPe switches to the web on its own, owner told.

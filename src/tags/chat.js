@@ -319,6 +319,10 @@ async function quotePin(mobile, text) {
   const s = await ctx(mobile);
   const q = await require('./orders').quote(String(text).replace(/\D/g, ''), s.context?.tag_qty);
   if (!q) { await send.text(mobile, 'Please type a valid 6-digit pincode, like *560013* — or *menu* to cancel.'); return; }
+  if (q.unserviceable) {
+    await send.text(mobile, `😕 Sorry — our courier doesn't deliver to *${q.pincode}* yet. Try another pincode (office or a relative's), or use the free digital tag above — print it at any shop.`);
+    return;
+  }
   await setState(mobile, 'tag_pin', { tag_pin: q.pincode });
   await buttons(mobile,
     `📦 *${q.qty} stickers* to *${q.pincode}* (${q.label}): *₹${q.rupees}*\n_GST and delivery included · arrives in about ${q.days} days after posting._`,
