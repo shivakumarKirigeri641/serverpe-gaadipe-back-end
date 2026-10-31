@@ -210,7 +210,7 @@ async function sendFleetInfo(mobile) {
     + '4. The list of vehicle numbers (5 or more)\n'
     + '5. The line: "We own or operate these vehicles"\n\n'
     + 'Subject: *Fleet enquiry*\n'
-    + 'We reply quickly with your quotation — ₹19 per vehicle for 28 days.');
+    + 'We reply quickly with your per-vehicle quotation.');
 }
 
 /**
@@ -411,7 +411,7 @@ async function mainMenu(mobile, body = 'What would you like to do?') {
     button: 'Choose',
     sectionTitle: 'GaadiPe',
     rows: [
-      { id: BTN.CHECK_ANOTHER,   title: 'Check a vehicle',  description: 'Any Indian number — your first check is free' },
+      { id: BTN.CHECK_ANOTHER,   title: 'Check a vehicle',  description: 'Any Indian number — free check' },
       { id: BTN.MY_VEHICLES,     title: 'My vehicles',      description: 'Pick one — its report, or a fresh check' },
       { id: BTN.MY_MONITORING,   title: 'My monitoring',    description: 'Watched vehicles, end dates, next alert, paused alerts' },
       // My reports carries the GST invoice too (2026-10-15), so its row goes to "GaadiPe so far".
@@ -450,8 +450,9 @@ async function myMonitoring(mobile) {
   const user = await store.upsertUser(mobile);
   const { rows } = await require('../site/subscriptions').forUser(user.id);
   if (!rows.length) {
+    const plan = await billing.reportPlan().catch(() => null);
     await reply(mobile, '📋 *My monitoring*\n\nNo vehicle is being monitored yet.\n\n'
-      + 'Every full report includes *28 days of monitoring* — a message before insurance, PUC, road tax, fitness or permit '
+      + `Every full report includes *${plan?.duration_days || 50} days of monitoring* — a message before insurance, PUC, road tax, fitness or permit `
       + 'expires, and when a new challan appears.', ['check', { id: BTN.WHAT_GET, title: 'What do I get?' }, 'menu']);
     return;
   }
@@ -472,7 +473,7 @@ async function myMonitoring(mobile) {
       lines.push(`• Ended on ${dayIn(s.ends_at)}`);
     }
     if (s.next_document) lines.push(`• Next to expire: ${DOC_NAME[s.next_document.doc] || s.next_document.label} on ${dayIn(s.next_document.date)}`);
-    if (s.renew_paise) lines.push(`• ${s.stopped ? 'Start again' : 'Renew'} for 28 days: *${rupeesOf(s.renew_paise)}* — send the vehicle number`);
+    if (s.renew_paise) lines.push(`• ${s.stopped ? 'Start again' : 'Renew'}: *${rupeesOf(s.renew_paise)}* — send the vehicle number`);
     if (s.replace?.ok) {
       lines.push(`• 🔁 Replace with another vehicle: *${rupeesOf(s.replace.price_paise)}*${s.replace.until ? ` (till ${dayIn(s.replace.until)})` : ''}`);
     }
@@ -1511,8 +1512,8 @@ async function quotaMessage(q) {
   }
   const days = Math.round(await settings.num('trial_minutes', 10080) / (60 * 24)) || 1;
   if (q.tier === 'trial') {
-    return `You have used today's ${q.limit} free checks — they reset tomorrow.\n\n`
-      + 'The vehicles on your trial are still being checked automatically every day.';
+    return `You have used today's ${q.limit} free vehicle checks — they reset tomorrow.\n\n`
+      + 'Vehicles you already checked are free to open again any time, and they are still being watched for you.';
   }
   if (!await trialOn()) {
     return `You have used your ${q.limit} free checks for today — they reset tomorrow.\n\n`
@@ -2028,12 +2029,16 @@ async function start(mobile) {
   const first = packs.length
     ? `${mine}🔢 More checks: *${packs.map((p) => `${p.checks} for ₹${p.rupees}`).join(' · ')}*\n`
     : packsOn ? `${mine}🔢 Every other vehicle: the full report below\n`
-    : '✅ Basic check — *FREE*\n';
+    /* FREE CHECKS + ONE PLAN (user, 2026-10-31; migration 225): up to free_checks_per_day new vehicles a day, each
+       watched free for free_monitor_days; then the one paid plan, the full report with its days of alerts. */
+    : `✅ Vehicle check — *FREE* _(up to ${await settings.num('free_checks_per_day', 5)} new vehicles a day)_\n`
+      + (await settings.bool('free_monitor_auto', false)
+        ? `🔔 *${await settings.num('free_monitor_days', 14)} days of free alerts* on every vehicle you check\n` : '');
   const price = plan
     // "Full report @ just ₹19" (user, 2026-10-24: "something attractive"); from ₹11 one time (2026-10-25, REPORT11).
     ? (once
       ? `${first}📋 Full report @ just *₹${Math.round(once.price_paise / 100)}/-* 🔥 · with ${plan.duration_days} days of alerts *₹${Math.round(plan.price_paise / 100)}/-* _(only if you want it)_\n\n`
-      : `${first}📋 Full report @ just ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}/-* 🔥 _(only if you want it)_\n\n`)
+      : `${first}📋 Full report + *${plan.duration_days} days of alerts* @ just ${plan.discount_paise ? `~₹${Math.round(plan.list_price_paise / 100)}~ ` : ''}*₹${Math.round(plan.price_paise / 100)}/-* 🔥 _(GST included, only if you want it)_\n\n`)
     : '';
   /* ONCE, NOT ON EVERY HI (user, 2026-10-23: "accept the Terms one time, and ask again when the policies
      change"). Someone who already agreed to the policies in force goes straight to the start; anyone else —
@@ -2470,7 +2475,7 @@ function topicReply(said) {
       ? '🪪 *ड्राइविंग लाइसेंस*\n\nGaadiPe ड्राइविंग लाइसेंस नहीं बनाता। नया लाइसेंस या उसका नवीनीकरण के लिए कृपया अपने नज़दीकी RTO से संपर्क करें।\n\n'
         + 'हम *गाड़ी* की जानकारी दिखाते हैं — बीमा, PUC, टैक्स और चालान। गाड़ी का नंबर भेजें, जैसे *KA01AB1234* — पहली जाँच मुफ़्त है।'
       : '🪪 *Driving licence*\n\nGaadiPe does not issue driving licences. For a new licence or a renewal, please contact your nearest RTO.\n\n'
-        + 'What we do: show a *vehicle\'s* insurance, PUC, tax and challans. Send a vehicle number, like *KA01AB1234* — the first check is free.';
+        + 'What we do: show a *vehicle\'s* insurance, PUC, tax and challans. Send a vehicle number, like *KA01AB1234* — the check is free.';
   }
   if (/\b(r\.?\s?c|registration)\b/i.test(t) || /आरसी/.test(t)) {
     return hi
@@ -3120,10 +3125,12 @@ async function handle(session, message, mobile) {
         // while the trial is off: monitoring comes with the ₹19 report.
         if (!r.ok && r.reason === 'disabled') {
           await setState(mobile, 'owner_menu', 'trial is off');
+          const plan = await billing.reportPlan().catch(() => null);
+          const rs = `₹${plan ? Math.round(Number(plan.price_paise) / 100) : 29}`;
           await send.buttons(mobile,
-            reg ? `Monitoring comes with the full report — *₹19 for ${reg}*, one-time.`
-              : 'Monitoring comes with the full report — ₹19 per vehicle, one-time.',
-            [...(reg ? [{ id: BTN.BUY_REPORT, title: 'Full report ₹19' }] : []),
+            reg ? `Monitoring comes with the full report — *${rs} for ${reg}*, ${plan?.duration_days || 50} days, one-time.`
+              : `Monitoring comes with the full report — ${rs} per vehicle, one-time.`,
+            [...(reg ? [{ id: BTN.BUY_REPORT, title: `Full report ${rs}` }] : []),
              { id: BTN.CHECK_ANOTHER, title: 'Check other vehicle' }]);
           return;
         }

@@ -376,7 +376,7 @@ async function freeMonitorStarted() {
         ...T.layout({
           badge: { text: 'Free monitoring · 14 days', tone: 'good' },
           title: `${who} started free monitoring of ${e.reg_no || 'a vehicle'}`,
-          lead: `${T.ist(e.created_at)}. When the 14 days end they are offered 28 more days for ₹19.`,
+          lead: `${T.ist(e.created_at)}. When the free days end they are offered the full report with alerts.`,
           sections: [{ heading: 'Who and what', rows: [
             ['Name', u?.name || 'Not given'], ['Mobile', T.mobile(u?.mobile)],
             ['Vehicle', [e.reg_no, e.maker, e.model].filter(Boolean).join(' · ')],

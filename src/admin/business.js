@@ -181,7 +181,7 @@ async function summary() {
     },
     conversion: conv.wa ? [
       { label: 'Agreed → Saw a vehicle', from: conv.visitors, to: conv.checkers, pct: rate(conv.checkers, conv.visitors), note: 'People who agreed on WhatsApp today and saw a vehicle check.' },
-      { label: 'Saw a vehicle → Payment link', from: conv.checkers, to: conv.signed_in, pct: rate(conv.signed_in, conv.checkers), note: 'Of those, how many asked for the ₹19 report (payment link sent).' },
+      { label: 'Saw a vehicle → Payment link', from: conv.checkers, to: conv.signed_in, pct: rate(conv.signed_in, conv.checkers), note: 'Of those, how many asked for the paid report (payment link sent).' },
       { label: 'Payment link → Paid', from: conv.signed_in, to: conv.payers, pct: rate(conv.payers, conv.signed_in), note: 'Payment links that were paid.' },
     ] : [
       { label: 'Visit → Vehicle check', from: conv.visitors, to: conv.checkers, pct: rate(conv.checkers, conv.visitors), note: 'Website visits that checked a vehicle.' },

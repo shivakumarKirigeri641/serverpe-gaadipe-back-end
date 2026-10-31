@@ -100,7 +100,7 @@ function mailFor(person, { regNo, endsOn, paise, days }) {
     stats: [['Vehicle', regNo], ['Ends', istDay(endsOn)], ['Renew for', money(paise)]],
     blocks: [`<div style="font-size:13px;line-height:1.7;color:#0b1f1c;background:#f6faf9;
       border:1px solid #e3ecea;border-radius:10px;padding:14px 16px;">
-      <b>Another ${T.esc(String(days))} days for ${T.esc(money(paise))}</b> — less than a new vehicle's ₹19,
+      <b>Another ${T.esc(String(days))} days for ${T.esc(money(paise))}</b> — less than a new report,
       because the report is already yours. You keep getting told the moment a new challan appears,
       and before any document runs out.</div>`,
       `<div style="font-size:13px;line-height:1.6;color:#41514e;">

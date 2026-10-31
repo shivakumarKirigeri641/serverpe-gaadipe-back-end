@@ -92,7 +92,7 @@ async function overviewDay({ day }) {
 /* From "Agreed": someone who only said Hi is not counted anywhere in this admin. */
 const STEPS = [
   ['agreed', 'Agreed to terms'], ['number', 'Sent a number'], ['basic_shown', 'Saw the free check'],
-  ['buy_tapped', 'Tapped ₹19'], ['link_sent', 'Got the payment link'], ['paid', 'Paid'],
+  ['buy_tapped', 'Tapped Full report'], ['link_sent', 'Got the payment link'], ['paid', 'Paid'],
 ];
 
 /* Who reached each step in the period, by mobile. "Paid" is a paid WhatsApp payment. */
@@ -449,7 +449,7 @@ async function today({ window: w = 'today' } = {}) {
     [allMobiles]) : { rows: [] };
   const nameOf = new Map(names.rows.map((r) => [r.mobile, r.name]));
   // Each bucket's people: what they did, the vehicle, the time — up to 50 a bucket.
-  const WHAT = { hi: 'said Hi', basic_shown: 'checked', buy_tapped: 'tapped ₹19', paid: 'paid' };
+  const WHAT = { hi: 'said Hi', basic_shown: 'checked', buy_tapped: 'tapped Full report', paid: 'paid' };
   const addWho = (r, what) => {
     const b = by.get(Number(r.t)); if (!b) return;
     (b.who ||= []);

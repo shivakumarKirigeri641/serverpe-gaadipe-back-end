@@ -193,7 +193,7 @@ async function check() {
     description: `${(todayRate * 100).toFixed(1)}% of today’s visitors paid, against ${(weekRate * 100).toFixed(1)}% over the last 7 days.`, detail: { ...conv } });
   await toggle(stuck.n >= w.stuck, {
     key: 'web_stuck_at_payment', severity: 'info', source: 'website', title: 'Customers waiting at payment',
-    description: `${stuck.n} visitor${stuck.n === 1 ? ' is' : 's are'} on the ₹19 payment step with no action for 5 minutes. Open Live users to see who.`, detail: stuck });
+    description: `${stuck.n} visitor${stuck.n === 1 ? ' is' : 's are'} on the report payment step with no action for 5 minutes. Open Live users to see who.`, detail: stuck });
 
   // News of an earlier hour or day is closed when it is no longer current.
   await db.query(

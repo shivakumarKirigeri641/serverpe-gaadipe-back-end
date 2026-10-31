@@ -479,12 +479,14 @@ async function lifecycle() {
     [String(noticeBefore)]);
 
   for (const t of ending.rows) {
-    const price = Math.round(await settings.num('first_payment_paise', 4900) / 100);
+    // The report plan's own price and days (2026-10-31: ₹29 for 50 days, migration 225), not a typed-in figure.
+    const plan = await require('../pay/billing').reportPlan().catch(() => null);
+    const price = plan ? Math.round(Number(plan.price_paise) / 100) : 29;
     const when = new Date(t.expires_at);
     if (!(await send.optedOut(t.mobile)) && await send.windowOpen(t.mobile)) {
       await send.text(t.mobile,
-        `Your free trial for *${t.reg_no}* ends on *${fmtDate(when)}*.\n\n`
-        + `To keep monitoring this vehicle, it is ₹${price} for 28 days. `
+        `Your free monitoring for *${t.reg_no}* ends on *${fmtDate(when)}*.\n\n`
+        + `To keep monitoring this vehicle, it is ₹${price} for ${plan?.duration_days || 50} days with the full report. `
         + 'Nothing is charged automatically.');
     }
     // Outside the window nothing is sent: there is no approved trial template
@@ -664,12 +666,33 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
     return { dryRun: true, people: would.length, would };
   }
 
+  /*
+   * PACED, PAID FIRST, CAPPED (user, 2026-10-31: "take a gap per message sending but not too long gap"; migration 225).
+   * Paying customers first, then the free 14 days. At most watch_status_wa_per_minute (4) WhatsApp updates a pass -
+   * the job runs every minute, so the evening's updates spread over 7-10 pm instead of one burst - and at most
+   * watch_status_wa_per_day (150) a day, leaving room in the portfolio's 250 for alerts and QuizPe. Past the day's
+   * cap WhatsApp is left out and email still goes. Not applied when sent by hand. 0 = no cap.
+   */
+  const waPerPass = byHand ? 0 : Math.max(0, await settings.num('watch_status_wa_per_minute', 4));
+  const waPerDay = byHand ? 0 : Math.max(0, await settings.num('watch_status_wa_per_day', 150));
+  let waToday = waPerDay ? (await db.one(
+    `SELECT count(*)::int AS n FROM event_log WHERE kind = 'watch_status' AND detail->>'ist_date' = $1
+        AND detail->>'wa' = 'true'`, [today]))?.n || 0 : 0;
+  let waThisPass = 0;
+  const ordered = [...people].sort(([, a], [, b]) =>
+    Number(b.some((w) => w.subscription_id)) - Number(a.some((w) => w.subscription_id)));
+
   let sent = 0;
   let n = 0;
-  for (const [userId, list] of people) {
+  for (const [userId, list] of ordered) {
     // A pause between customers when sent by hand (the launch update: 5 s).
     if (gapMs > 0 && n > 0) await new Promise((r) => setTimeout(r, gapMs));
     n += 1;
+    if (list.some((w) => w.dueWa)) {
+      // This minute's share is used: the rest wait for the next pass (still inside the evening window).
+      if (waPerPass && waThisPass >= waPerPass) break;
+      if (waPerDay && waToday >= waPerDay) for (const w of list) w.dueWa = false;
+    }
     /* NEVER EVEN TRY A TEMPLATE THAT MAY NOT GO (user, 2026-10-15: "make sure the platform never
        tries the template, it's risky"): not agreed, STOP, or templates paused — WhatsApp is left
        out for them before anything is prepared; email and notifications still go. */
@@ -743,8 +766,12 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
           status: summary, settingKey: 'template_daily_status',
         }).catch((e) => ({ ok: false, error: e.message }));
       }
-      if (wa.ok) out = { ok: true, channel: 'whatsapp' };
-      else errors.push(`whatsapp: ${wa.error}`);
+      waThisPass += 1;
+      if (wa.ok) {
+        out = { ok: true, channel: 'whatsapp' };
+        waToday += 1;
+        await db.query(`UPDATE event_log SET detail = detail || '{"wa": true}'::jsonb WHERE id = $1`, [claim.id]).catch(() => {});
+      } else errors.push(`whatsapp: ${wa.error}`);
     }
     if (mailLines.length && first.email && first.email_verified_at && !first.email_unsubscribed_at) {
       const C = require('../mail/customer');

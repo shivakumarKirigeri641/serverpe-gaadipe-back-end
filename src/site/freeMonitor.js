@@ -58,7 +58,8 @@ async function start(user, regNo, ctx = {}) {
   const reg = String(regNo || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   const used = await usedBy(user.mobile, ctx.device_id);
   if (used) {
-    return { ok: false, error: 'used', message: `Your free monitoring has already been used (${used.reg_no}). Monitoring is Rs 19 for 28 days per vehicle.` };
+    const plan = await require('../pay/billing').reportPlan().catch(() => null);
+    return { ok: false, error: 'used', message: `Your free monitoring has already been used (${used.reg_no}). Monitoring is ₹${plan ? Math.round(plan.price_paise / 100) : 29} for ${plan?.duration_days || 50} days per vehicle.` };
   }
   const vehicle = await db.one(`SELECT id, reg_no FROM vehicles WHERE reg_no = $1`, [reg]);
   const checked = vehicle && await db.one(
@@ -98,6 +99,52 @@ async function start(user, regNo, ctx = {}) {
       })]);
   });
   require('../util/activity').log('🆓', `Free monitoring started · ${reg} · ${n} days`, { who: `customer #${user.id}` });
+  return { ok: true, reg_no: reg, ends_at: endsAt.toISOString(), days: n };
+}
+
+/*
+ * EVERY CHECKED VEHICLE, 14 DAYS (user, 2026-10-31: "for free check customers, for checked vehicles send for
+ * alternative days for 14 days starting from now"; migration 225, free_monitor_auto). A vehicle found on a
+ * free check is watched free_monitor_days (14) days from that check - only checks from now on, never a vehicle
+ * already watched, never the same vehicle twice for the same customer, never GaadiPe's own numbers. The updates
+ * are jobs/watch.js dailyStatus (WhatsApp every other day to those who agreed and wrote to the number, email daily);
+ * the "continue" notice below goes before the end. Called by vehicle/store.record; never throws into a check.
+ */
+async function autoStart(userId, vehicle) {
+  if (!userId || !vehicle?.id || !(await settings.bool('free_monitor_auto', false))) return { ok: false };
+  const u = await db.one(`SELECT id, mobile, is_internal FROM users WHERE id = $1`, [userId]);
+  if (!u || u.is_internal) return { ok: false };
+  const busy = await db.one(
+    `SELECT 1 AS x FROM watches WHERE user_id = $1 AND vehicle_id = $2 AND is_active
+        AND (expires_at IS NULL OR expires_at > now())
+     UNION ALL
+     SELECT 1 FROM event_log WHERE user_id = $1 AND vehicle_id = $2 AND kind = 'free_monitor_started'
+     LIMIT 1`, [userId, vehicle.id]);
+  if (busy) return { ok: false };
+  const n = await days();
+  const endsAt = new Date(Date.now() + n * 86400e3);
+  const checkEvery = await settings.num('watch_check_interval_minutes', 24 * 60);
+  const reg = vehicle.reg_no;
+  await db.tx(async (c) => {
+    const w = await c.query(
+      `INSERT INTO watches (user_id, vehicle_id, expires_on, expires_at,
+                            challan_next_check_at, rc_next_check_at, fastag_next_check_at,
+                            challan_interval_hours, rc_interval_hours, fastag_interval_hours)
+            VALUES ($1, $2, $3, $4,
+                    now() + ($5 || ' minutes')::interval, now() + ($5 || ' minutes')::interval,
+                    now() + ($5 || ' minutes')::interval, $6, $6, $6)
+       ON CONFLICT (user_id, vehicle_id) DO UPDATE
+              SET is_active = true, subscription_id = NULL, expires_on = EXCLUDED.expires_on,
+                  expires_at = EXCLUDED.expires_at, period_started_at = now(), modified_at = now()
+       RETURNING id`,
+      [userId, vehicle.id, endsAt.toISOString().slice(0, 10), endsAt.toISOString(),
+       String(checkEvery), Math.max(1, Math.round(checkEvery / 60))]);
+    await c.query(
+      `INSERT INTO event_log (user_id, vehicle_id, kind, detail) VALUES ($1, $2, 'free_monitor_started', $3)`,
+      [userId, vehicle.id, JSON.stringify({ mobile: ten(u.mobile), reg_no: reg, watch_id: String(w.rows[0].id),
+        days: n, ends_at: endsAt.toISOString(), auto: true })]);
+  });
+  require('../util/activity').log('🆓', `Free monitoring started · ${reg} · ${n} days (automatic)`, { who: `customer #${userId}` });
   return { ok: true, reg_no: reg, ends_at: endsAt.toISOString(), days: n };
 }
 
@@ -179,4 +226,4 @@ async function stats({ days: span = 30 } = {}) {
     [Number(span) || 30]);
 }
 
-module.exports = { status, start, noticeDue, usedBy, stats };
+module.exports = { status, start, autoStart, noticeDue, usedBy, stats };

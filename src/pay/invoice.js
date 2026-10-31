@@ -159,13 +159,13 @@ function pdfInput(row, pay, business) {
         pay.plan_monitoring === false ? 'One-time report, no monitoring'
           : pay.starts_on && pay.ends_on
           ? `Alerts from ${fmtDate(pay.starts_on)} to ${fmtDate(pay.ends_on)}`
-          : '28 days of alerts',
+          : 'With monitoring alerts',
         'One-time purchase, no renewal',
       ].filter(Boolean).join('\n') : [
         pay.reg_no ? `GaadiPe Watch — ${pay.reg_no}` : 'GaadiPe Watch',
         pay.starts_on && pay.ends_on
           ? `Monitoring from ${fmtDate(pay.starts_on)} to ${fmtDate(pay.ends_on)}`
-          : '28 days monitoring',
+          : 'Monitoring',
         pay.ends_on ? `Renewal due on ${fmtDate(pay.ends_on)}` : null,
       ].filter(Boolean).join('\n'),
       amount: gross / 100,

@@ -69,6 +69,15 @@ async function check(userId, regNo) {
   const tier = await tierOf(userId);
   if (PACK_TIERS.has(tier) && await packsOn()) return packCheck(userId, regNo, tier);
   const enforced = await settings.bool('checks_enforce', false);
+  /* FIVE NEW VEHICLES A DAY (user, 2026-10-31: "free checks, cap up to 5 vehicles per day"; migration 225): a vehicle
+     they hold a report for, or one already on their list, is shown from the saved record and never counts. */
+  if (PACK_TIERS.has(tier)) {
+    if (await ownsValidReport(userId, regNo)) return { allowed: true, tier, used: 0, limit: null, repeat: false, owned: true, enforced };
+    const seen = await db.one(
+      `SELECT 1 AS yes FROM user_vehicles uv JOIN vehicles v ON v.id = uv.vehicle_id
+        WHERE uv.user_id = $1 AND v.reg_no = $2 AND uv.hidden_at IS NULL LIMIT 1`, [userId, regNo]).catch(() => null);
+    if (seen) return { allowed: true, tier, used: 0, limit: null, repeat: false, owned: true, seen: true, enforced };
+  }
 
   // Unlimited tiers short-circuit: no counting, no queries, no surprises.
   if (UNLIMITED.has(tier)) {

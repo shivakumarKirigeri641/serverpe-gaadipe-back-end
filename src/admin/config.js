@@ -63,7 +63,9 @@ const GROUPS = [
     ['watch_status_daily_days', 'Monitoring update: every day for the first N days', '0: counted per vehicle from the day its monitoring started; 0 = no daily stretch (2026-10-15).'],
     ['watch_status_every_days', 'Monitoring update on WhatsApp: every N days', '3: after any daily days, the WhatsApp update goes every N days (days 1, 4, 7 …). 2 = every other day.'],
     ['watch_status_email_every_days', 'Monitoring update by email and notification: every N days', '2: the same update by email and phone notification every N days (days 1, 3, 5 …) — free, so it can be more often.'],
-    ['watch_status_alternate_until_day', 'Monitoring update: until day N', '28: routine updates stop after this day of monitoring; after it, only when something changes. 0 = while monitoring runs.'],
+    ['watch_status_wa_per_minute', 'Monitoring update on WhatsApp: at most per minute', '4: the evening\'s WhatsApp updates spread over 7–10 pm, paid customers first. 0 = no limit.'],
+    ['watch_status_wa_per_day', 'Monitoring update on WhatsApp: at most per day', '150: leaves room in Meta\'s 250 a day (shared with QuizPe) for alerts. Past it, the rest get email only. 0 = no limit.'],
+    ['watch_status_alternate_until_day','Monitoring update: until day N', '28: routine updates stop after this day of monitoring; after it, only when something changes. 0 = while monitoring runs.'],
     ['sms_tpl_status', 'SMS template id: monitoring update', '3 values: vehicle, short status ("all clear", "PUC expired"), the site (sms_site_value, added by itself). 228567 = gp_vehicle_status_v1. Empty = not sent by SMS.'],
     ['watch_daily_status_every_days', 'Monitoring: "today\'s update" every N days (retired)', 'Replaced on 10 Oct 2026 by the daily / every-other-day settings above.'],
     ['whatsapp_marketing_gap_days', 'WhatsApp: days between marketing to one person', 'No second marketing message to the same customer within this many days (7).'],
@@ -82,7 +84,9 @@ const GROUPS = [
     // Website + SMS (2026-10-10, migration 149).
     ['chat_anon_checks_per_day', 'Free checks before sign-in: per browser a day', '2 (migration 153): a visitor may check this many vehicles a day without signing in.'],
     ['chat_anon_checks_per_day_ip', 'Free checks before sign-in: per network a day', '2: the same limit per internet address, so clearing the browser does not reset it.'],
-    ['free_checks_per_day', 'Checks after sign-in: per customer a day', '10.'],
+    ['free_checks_per_day', 'Free checks: new vehicles per customer a day', '5 (2026-10-31). A vehicle already on their list, or one they bought a report for, never counts. Applies while Check packs are off.'],
+    ['free_checks_per_day_trial', 'Free checks: new vehicles a day while a vehicle is being monitored free', '5 — the same as above, for customers in their free 14 days.'],
+    ['checks_enforce', 'Free checks: enforce the daily limit (true / false)', 'true: past the limit, a check waits till tomorrow. false: counted only, nobody is stopped.'],
     ['free_checks_per_day_subscriber', 'Checks a day: fleet / subscription plans', '20 (migration 211). Only GaadiPe\'s own numbers have no limit.'],
     // Migration 154 (2026-10-10).
     ['free_checks_per_month', 'Checks after sign-in: per customer a month', '30 (0 = no monthly cap). Each report bought adds the bonus below.'],
@@ -90,7 +94,9 @@ const GROUPS = [
     ['report_renewal_window_days', 'Renewal price: days after the last report ended', '30: a vehicle bought before, whose report ended within this many days, renews at the plan\'s renewal price. 0 = any time.'],
     ['free_monitor_enabled', 'Free monitoring: offered (true / false)', 'After sign-in, one vehicle monitored free — once per mobile number and per browser.'],
     ['free_monitor_days', 'Free monitoring: days', '14.'],
-    ['free_monitor_notice_days', 'Free monitoring: tell them this many days before it ends', '2 — "continue for ₹19", by notification, email and SMS.'],
+    ['free_monitor_notice_days', 'Free monitoring: tell them this many days before it ends', '2 — "continue with the full report", by notification, email and SMS.'],
+    // 2026-10-31 (migration 225): every vehicle a customer checks is watched free for free_monitor_days.
+    ['free_monitor_auto', 'Free monitoring: automatic on every checked vehicle (true / false)', 'true: each new vehicle found on a check is watched free for free_monitor_days (14) — WhatsApp update every other day to those who agreed, email daily. false: only the one vehicle a customer starts by hand on the website.'],
     ['site_session_after_monitor_days', 'Sign-in: days it lasts after monitoring ends', '7 — so the renewal reminder still opens their account without a code. Otherwise a sign-in lasts site_session_days (30) from the last visit.'],
     // 2026-10-10.
     ['site_single_session', 'Sign-in: one device at a time (true / false)', 'true: signing in ends the account\'s other sign-ins (they are told "you signed in on another device") and their notification subscriptions. false: several devices stay signed in.'],
@@ -268,7 +274,7 @@ const RULES = [
   ['web_free_checks_failing', 'Free checks failing', 'warning', 'Most free chat checks in 30 minutes found nothing or failed (5+ checks).', [['alert_free_check_fail_pct', 'Failed above (%)']]],
   ['traffic_drop', 'Traffic drop', 'warning', 'Website visitors in an hour below the 7-day hourly average by the threshold (average 10+).', [['alert_traffic_drop_pct', 'Below the average by (%)']]],
   ['conversion_drop', 'Conversion drop', 'warning', 'Today’s visitors who paid, against the last 7 days (50+ visitors today).', [['alert_conversion_drop_pct', 'Below the 7-day rate by (%)']]],
-  ['web_stuck_at_payment', 'Customers waiting at payment', 'info', 'Visitors on the ₹19 payment step with no action for 5 minutes.', [['alert_stuck_payment_count', 'At least this many']]],
+  ['web_stuck_at_payment', 'Customers waiting at payment', 'info', 'Visitors on the report payment step with no action for 5 minutes.', [['alert_stuck_payment_count', 'At least this many']]],
 ];
 
 let muteCache = { at: 0, v: {} };

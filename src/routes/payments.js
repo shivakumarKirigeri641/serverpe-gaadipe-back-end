@@ -304,8 +304,8 @@ async function notifyReportPaid(result, user, veh, { ends, amount }) {
   if (result.oneTime) {
     await send.buttons(user.mobile,
       `📄 Your full report for *${veh ? veh.reg_no : 'this vehicle'}* is in *My reports*.\n\n`
-      + 'This was a one-time report — no alerts for this vehicle. Want new-challan alerts and expiry warnings for '
-      + '28 days? Check the vehicle again and choose *Report + alerts*.'
+      + 'This was a one-time report — no alerts for this vehicle. Want new-challan alerts and expiry warnings? '
+      + 'Check the vehicle again and choose *Report + alerts*.'
       + (delivered.ok && veh ? '\n\n_Selling or buying? *Share report* gives a summary link you can forward._' : ''),
       [delivered.ok && veh ? { id: 'share_report', title: 'Share report' } : { id: 'download_report', title: 'My report' },
        { id: 'invoice',         title: 'My GST invoice' },

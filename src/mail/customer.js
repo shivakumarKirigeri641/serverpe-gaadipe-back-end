@@ -374,7 +374,7 @@ function rewardMail(user, { count = 0, reduced = 0, reducedPrice = null, expires
   // Premium through the link = a free report; the Instant Quiz = a report at Rs.9 + GST.
   const parts = [
     count ? `${count} free full report${count > 1 ? 's' : ''}` : null,
-    reduced ? `${reduced} full report${reduced > 1 ? 's' : ''} at ${price} (₹9 + GST) instead of ₹19` : null,
+    reduced ? `${reduced} full report${reduced > 1 ? 's' : ''} at ${price} (₹9 + GST)` : null,
   ].filter(Boolean);
   const onlyFree = count && !reduced;
   const out = T.layout({

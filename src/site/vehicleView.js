@@ -208,7 +208,7 @@ function publicView(data) {
       'Insurer and policy, chassis and engine (masked)',
       'FASTag status',
       'A clear verdict: what to check before you pay',
-      'PDF report + 28 days of alerts',
+      'PDF report + monitoring alerts',
     ],
     checked_at: data.fetched_at || new Date().toISOString(),
   };

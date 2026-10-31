@@ -115,7 +115,7 @@ async function whyNotPaid({ days = 30 } = {}) {
   const stuck = rows.filter((r) => !r.paid).slice(0, 100).map((r) => ({
     mobile: r.mobile, masked: `…${String(r.mobile).slice(-4)}`, name: r.name, reg_no: r.reg_no, at: r.at, group: group(r),
     expired: r.expired, challans: r.challans,
-    reached: r.link ? 'Got the payment link' : r.tapped ? 'Tapped ₹19' : 'Saw the free check',
+    reached: r.link ? 'Got the payment link' : r.tapped ? 'Tapped Full report' : 'Saw the free check',
   }));
   return { days: n, total: rows.length, paid: rows.filter((r) => r.paid).length, groups, challans: challanGroup, stuck };
 }

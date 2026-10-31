@@ -336,6 +336,11 @@ async function record(userId, data, { link = true, calls = true } = {}) {
     await saveSnapshot(vehicle.id, 'fastag', data.fastag, { ttlMinutes: 60 * 24 * 7 });
   }
   if (userId && link) await linkUserVehicle(userId, vehicle.id);
+  // Every vehicle a customer checks is watched free for 14 days (site/freeMonitor.autoStart, 2026-10-31).
+  if (userId && link && vehicle.reg_no) {
+    await require('../site/freeMonitor').autoStart(userId, vehicle)
+      .catch((e) => console.error('[store] free monitoring:', e.message));
+  }
   // Cost last: it must never be the reason a lookup appears to have failed.
   if (calls) await recordCalls(userId, vehicle.id, data)
     .catch(e => console.error('[store] api_calls:', e.message));

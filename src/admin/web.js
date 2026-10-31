@@ -130,7 +130,7 @@ async function overview({ range } = {}) {
       { key: 'chat', label: 'Opened the chat', n: totals.chat_visitors },
       { key: 'free', label: 'Ran a free check', n: totals.free_checkers },
       { key: 'signed', label: 'Signed in', n: totals.signed_in_customers },
-      { key: 'pay', label: 'Opened the ₹19 payment', n: totals.pay_opened },
+      { key: 'pay', label: 'Opened the report payment', n: totals.pay_opened },
       { key: 'paid', label: 'Paid', n: totals.paid },
     ],
     sources: sources.map((s) => ({ source: s.source, visitors: n(s.visitors), new_visitors: n(s.new_visitors),

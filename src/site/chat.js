@@ -47,7 +47,7 @@ async function anonCheck(req) {
      free checks without signing in come back as before. */
   if (await settings.bool('check_sign_in_required', true)) {
     return { status: 403, body: { error: 'sign_in_needed',
-      message: 'Please sign in with your mobile number to check a vehicle — basic details free (make, model, variant, fuel, vehicle type), full report ₹19. Your checks are kept in your account.' } };
+      message: 'Please sign in with your mobile number to check a vehicle — checks are free (make, model, variant, fuel, vehicle type) with free alerts, and a full report with longer alerts if you want it. Your checks are kept in your account.' } };
   }
 
   /*
@@ -142,7 +142,7 @@ async function anonCheck(req) {
   }
   if (used.hour >= perHour) {
     return refuse('hourly_site_cap', 429, { error: 'sign_in_needed',
-      message: 'Free checks are busy right now. Sign in with your mobile number to check this vehicle — basic details free (make, model, variant, fuel, vehicle type), full report ₹19.' });
+      message: 'Free checks are busy right now. Sign in with your mobile number to check this vehicle — checks are free (make, model, variant, fuel, vehicle type).' });
   }
 
   const scan = await require('../security/guard').noteVehicleCheck(req, parsed.regNo);

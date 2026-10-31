@@ -60,7 +60,7 @@ function stagesOf(tl) {
     ['searched', 'Searched a vehicle', has((e) => e.kind === 'check' || e.kind === 'chat' || (e.kind === 'interaction' && e.ikind === 'search'))],
     ['signed_in', 'Signed in', has((e) => e.kind === 'signin' && e.name === 'signed_in')],
     ['viewed', 'Saw a vehicle', has((e) => (e.kind === 'check' || e.kind === 'chat') && e.ok)],
-    ['pay_opened', 'Opened the ₹19 payment', has((e) => e.name === 'payment_page_viewed' || e.name === 'payment_started')],
+    ['pay_opened', 'Opened the report payment', has((e) => e.name === 'payment_page_viewed' || e.name === 'payment_started')],
     ['paid', 'Paid', has((e) => e.name === 'payment_success')],
     ['report', 'Got the report', has((e) => e.name === 'report_generated' || e.name === 'full_view')],
   ].map(([key, label, done]) => ({ key, label, done }));

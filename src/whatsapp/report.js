@@ -537,7 +537,7 @@ async function publicText(data, { price = '₹19' } = {}) {
 
   lines.push('', `🔒 *In the full report for ${price}:* loan / hypothecation, blacklist and NOC, each challan with `
     + 'offence and place, number of owners, insurer and policy, FASTag, and what to check before you buy — '
-    + 'as a PDF, with 28 days of expiry and challan alerts.');
+    + 'as a PDF, with expiry and challan alerts.');
   lines.push('', `_Checked ${fmtDate(new Date(data.fetched_at || Date.now()))} · vehicle registration records · by GaadiPe_`);
   return lines.join('\n');
 }
