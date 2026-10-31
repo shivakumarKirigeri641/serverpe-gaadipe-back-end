@@ -640,9 +640,9 @@ async function emailCodeSent(mobile, email, out) {
 async function whatYouGet(mobile) {
   const plan = await billing.reportPlan().catch(() => null);
   const once = await billing.oneTimePlan().catch(() => null);
-  const price = plan ? rupeesOf(plan.price_paise) : '₹19';
+  const price = plan ? rupeesOf(plan.price_paise) : '₹29';
   const renew = plan && Number(plan.renewal_paise) > 0 ? rupeesOf(plan.renewal_paise) : null;
-  const days = plan?.duration_days || 28;
+  const days = plan?.duration_days || 50;
   /* The free checks, and how many this person has left (user, 2026-10-25: "in What do I get? as well"). The
      limits from Settings (the same as util/quota.js); nothing while limits are off. Two lines below were
      tightened so the page stays under WhatsApp's 1,024 characters and keeps its buttons. */
@@ -658,8 +658,10 @@ async function whatYouGet(mobile) {
       // No pack on sale (migration 223): the first vehicle free, then the report per vehicle.
       : q.packs ? `🔢 *Checks:* your *1st vehicle is free*; after that, a new vehicle is its full report. Vehicles you checked before stay free.`
         + `${q.today.left > 0 ? ` *${q.today.left}* check${q.today.left === 1 ? '' : 's'} left.` : ''}\n\n`
-      : `🔢 *Free checks:* ${q.today.limit} a day${q.month ? `, ${q.month.base} a month (+${q.month.per_report} with every report you buy)` : ''}. `
-        + `You have *${q.today.left} left today*${q.month ? ` · ${q.month.left} this month` : ''}.\n\n`;
+      /* No daily number (user, 2026-10-31: "do not put 5 vehicles check free daily"): the free alerts instead. */
+      : await settings.bool('free_monitor_auto', false)
+        ? `🔔 *${await settings.num('free_monitor_days', 7)} days of free alerts* on every vehicle you check — new challans and documents about to expire.\n\n`
+        : '';
   await reply(mobile, '💡 *What you get with GaadiPe*\n\n'
     + `✅ *Free check${await quota.packsOn().catch(() => false) ? ' — your 1st vehicle' : ''}* — send a vehicle number: the vehicle, owner (masked), registration date and age, RC status, `
     + 'RTO, every validity date (insurance, PUC, road tax, fitness, permit) and pending challans with the total.\n\n'
@@ -1198,6 +1200,8 @@ async function reportOffer(mobile, regNo, { used = true } = {}) {
 }
 
 async function buyChecks(mobile, code = null) {
+  // A pack button from an older chat after the packs went off sale (migration 225): today's offer, not a payment error.
+  if (!(await require('../pay/packs').packPlan(code).catch(() => null))) { await whatYouGet(mobile); return; }
   const user = await store.upsertUser(mobile);
   await funnel(mobile, 'pack_tapped', { pack: code });
   let row;
@@ -1493,9 +1497,9 @@ async function checksLeftLine(userId, thisCheck = null) {
     const till = q.credits?.last_expiry ? ` (valid till ${new Date(q.credits.last_expiry).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' })})` : '';
     return `🔢 *Checks left:* ${q.today.left}${q.credits?.left ? till : ''}`;
   }
-  const month = q.month ? ` · ${q.month.left} this month` : '';
-  const bonus = q.month?.per_report ? ` _(+${q.month.per_report} with every report you buy)_` : '';
-  return `🔢 *Free checks left:* ${q.today.left} today${month}${bonus}`;
+  /* No count after a check (user, 2026-10-31: "do not put 5 vehicles check free daily"): the daily cap is a silent
+     guard; only the moment it is reached says so (quotaMessage). */
+  return '';
 }
 
 /**
@@ -3187,7 +3191,8 @@ async function handle(session, message, mobile) {
       case BTN.BUY_ONETIME:
       case BTN.BUY_REPORT: {
         // Which report: the ₹11 one-time (REPORT11) or the ₹19 with 28 days of alerts (REPORT19).
-        const oneTime = intent.id === BTN.BUY_ONETIME;
+        // An old "Report ₹11" button after REPORT11 went off sale (migration 225): the one report plan instead.
+        const oneTime = intent.id === BTN.BUY_ONETIME && Boolean(await billing.oneTimePlan().catch(() => null));
         const user = await store.upsertUser(mobile);
         const reg = await pendingReg(mobile);
         const vehicle = reg
@@ -3394,7 +3399,7 @@ async function handle(session, message, mobile) {
         {
           const packs = await packList();
           if (packs.length) await send.buttons(mobile, await packOffer(packs), packButtons(packs));
-          else await reportOffer(mobile, null, { used: false });   // no pack on sale (migration 223)
+          else await whatYouGet(mobile);   // no pack on sale (migration 225): an old Buy checks button gets today's offer
         }
         return;
 
@@ -3533,7 +3538,8 @@ async function handle(session, message, mobile) {
   if (/^(buy( vehicle)? checks?|check packs?|packs?|recharge)\s*\??$/i.test(intent.text || '') && await send.agreedTerms(mobile)) {
     const packs = await packList();
     if (packs.length) { await send.buttons(mobile, await packOffer(packs), packButtons(packs)); return; }
-    await reportOffer(mobile, null, { used: false });   // no pack on sale (migration 223)
+    // No pack on sale (migration 225): checks are free - the offer as it is now (What do I get?).
+    await whatYouGet(mobile);
     return;
   }
   if (/^(checks?|checks? left|my checks|balance|limit)\s*\??$/i.test(intent.text || '') && await send.agreedTerms(mobile)) {
