@@ -408,10 +408,14 @@ async function freeAllowance(who, regNo) {
   return true;
 }
 
+/* NO GUARD WITHIN THE FREE CHECKS (user, 2026-10-31: "5 free checks means no concept of guard, let them check any
+   vehicle, anyway 2.4 goes, consider it investment"; migration 226): with free_check_lookup_guard off, every free check -
+   already limited to free_checks_per_day new vehicles - gets the paid lookup; the daily caps above are skipped. */
 async function freeOpts(extra = {}, regNo = null, { who = null } = {}) {
   if (await hasSavedRc(regNo)) return { ...extra, backup: 0, rc_saved: 1 };
   if (await paidOnly()) return { ...extra, backup: 0 };
-  if (who && !(await freeAllowance(String(who), regNo).catch(() => false))) return { ...extra, backup: 0, rc_saved: 1 };
+  if (who && await settings.bool('free_check_lookup_guard', true)
+    && !(await freeAllowance(String(who), regNo).catch(() => false))) return { ...extra, backup: 0, rc_saved: 1 };
   return extra;
 }
 

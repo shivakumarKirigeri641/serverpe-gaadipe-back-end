@@ -134,7 +134,8 @@ const GROUPS = [
     ['free_checks_lifetime', 'Check packs: free checks per customer (ever)', '1. A repeat of the same vehicle within an hour, and a vehicle they bought a report for, never count.'],
     ['check_credit_days', 'Check packs: checks from a report last (days)', '30. A report adds its plan\'s "checks" (Plans: ₹11 = 0, ₹19 = 5 since 29 Oct); a plan without it adds checks_per_report_bonus (5).'],
     // 2026-10-25 (rcBackup.freeOpts): every free check - WhatsApp, website, before or after sign-in.
-    ['free_check_paid_lookups_per_day', 'Free checks: paid RC lookups a day, everyone together', '15. Past it, free checks use only the free sources (ULIP, eChallan.app) and saved records. Paid reports are never capped.'],
+    ['free_check_lookup_guard', 'Free checks: cap the paid RC lookups (true / false)', 'false (31 Oct): every free check — already limited to the free checks a day — gets the full paid lookup (≈ ₹2.40). true: the two caps below apply.'],
+    ['free_check_paid_lookups_per_day','Free checks: paid RC lookups a day, everyone together', '15. Past it, free checks use only the free sources (ULIP, eChallan.app) and saved records. Paid reports are never capped.'],
     ['free_check_paid_lookups_per_person', 'Free checks: paid RC lookups a day, per person', '1. A person\'s later free checks that day use only the free sources and saved records.'],
     ['free_check_backup_per_day', 'Free check before sign-in: paid RC backup calls a day','When ULIP and eChallan.app cannot answer, a free check may use the paid RC backup (IDSPay) up to this many times a day; after that it stops at eChallan.app. 0 = never. Paid reports are not affected.'],
     // The line before a vehicle check in the chat (user, 2026-10-07).
