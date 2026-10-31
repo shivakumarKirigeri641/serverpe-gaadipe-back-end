@@ -374,7 +374,7 @@ async function freeMonitorStarted() {
       return {
         subject: `👁 Free monitoring started · ${e.reg_no || 'a vehicle'} · ${who}`,
         ...T.layout({
-          badge: { text: 'Free monitoring · 14 days', tone: 'good' },
+          badge: { text: `Free monitoring · ${d.days || 7} days`, tone: 'good' },
           title: `${who} started free monitoring of ${e.reg_no || 'a vehicle'}`,
           lead: `${T.ist(e.created_at)}. When the free days end they are offered the full report with alerts.`,
           sections: [{ heading: 'Who and what', rows: [

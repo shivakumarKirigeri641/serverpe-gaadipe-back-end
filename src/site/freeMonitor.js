@@ -24,7 +24,7 @@ const settings = require('../util/settings');
 
 const ten = (m) => String(m || '').replace(/\D/g, '').slice(-10);
 const enabled = () => settings.bool('free_monitor_enabled', true);
-const days = () => settings.num('free_monitor_days', 14);
+const days = () => settings.num('free_monitor_days', 7);
 
 /** Has this number — or this browser — already had its free period? */
 async function usedBy(mobile, deviceId) {

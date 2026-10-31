@@ -110,7 +110,7 @@ async function anonCheck(req) {
      touch?.source || null, touch?.campaign || null, consent ? JSON.stringify(consent) : null, ipKey || null])
     .then((r) => r.rows[0]?.id).catch((e) => { console.error('[chat] anon_checks:', e.message); return null; });
 
-  const SIGN_IN = 'You have used today’s free checks. Sign in free with your mobile number to check more vehicles, see every validity date and the challans, and get 14 days of free monitoring for one vehicle.';
+  const SIGN_IN = 'You have used today’s free checks. Sign in free with your mobile number to check more vehicles, see every validity date and the challans, and get 7 days of free alerts on every vehicle you check.';
   const refuse = async (refusal, status, body) => { await audit({ outcome: 'refused', refusal }); return { status, body }; };
 
   if (!consent) {

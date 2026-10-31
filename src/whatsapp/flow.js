@@ -2031,9 +2031,11 @@ async function start(mobile) {
     : packsOn ? `${mine}🔢 Every other vehicle: the full report below\n`
     /* FREE CHECKS + ONE PLAN (user, 2026-10-31; migration 225): up to free_checks_per_day new vehicles a day, each
        watched free for free_monitor_days; then the one paid plan, the full report with its days of alerts. */
-    : `✅ Vehicle check — *FREE* _(up to ${await settings.num('free_checks_per_day', 5)} new vehicles a day)_\n`
+    /* No daily number in the texts (user, 2026-10-31: "let them check any vehicle, do not put 5 vehicles check free
+       daily ... 'Start checking your vehicle's details now'"): the free_checks_per_day cap stays as a silent guard. */
+    : '✅ Vehicle check — *FREE* · start checking your vehicle’s details now\n'
       + (await settings.bool('free_monitor_auto', false)
-        ? `🔔 *${await settings.num('free_monitor_days', 14)} days of free alerts* on every vehicle you check\n` : '');
+        ? `🔔 *${await settings.num('free_monitor_days', 7)} days of free alerts* on every vehicle you check\n` : '');
   const price = plan
     // "Full report @ just ₹19" (user, 2026-10-24: "something attractive"); from ₹11 one time (2026-10-25, REPORT11).
     ? (once
