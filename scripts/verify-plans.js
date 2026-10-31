@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * scripts/verify-plans.js — IS THE ONE-PLAN CHANGE LIVE? (user, 2026-10-31: "give some script to recheck").
- * READ-ONLY: only SELECTs, a git look-up, pm2's process list and one GET of the server's own /pricing. Sends nothing.
+ * READ-ONLY: only SELECTs, a git look-up and pm2's process list. Sends nothing.
  *
  *   node scripts/verify-plans.js
  *
@@ -11,7 +11,6 @@
  *   plans         - ₹29 / 50 days on sale; replace ₹23.60; packs and ₹11 off
  *   settings      - packs off, 5 a day enforced, free alerts automatic 7 days, no lookup guard, update cadence
  *   policies      - Terms / Free Monitoring / Refund name ₹29, 50 and 7 days, and no old price
- *   /pricing      - what the website reads, from the running server
  * and, for information, what happened since the change (free monitoring started, updates sent, sales).
  */
 require('dotenv').config({ quiet: true });
@@ -69,18 +68,9 @@ const sh = (cmd) => { try { return execSync(cmd, { encoding: 'utf8', stdio: ['ig
      UNION ALL SELECT 'refund: ' || title FROM refund_policy WHERE is_active AND description ~ '(Rs\\.(11|19)\\M|28 days|packs of)'`);
   ok(!old.length, 'no old price / 28 days / 14 days / packs left in the policies', old.map((r) => r.t).join(', '));
 
-  console.log('\n== /pricing (what the website reads, from the running server)');
-  const port = Number(process.env.PORT) || 5007;
-  const pr = await fetch(`http://127.0.0.1:${port}/site/api/pricing`).then((r) => (r.ok ? r.json() : { status: r.status })).catch((e) => ({ error: e.message }));
-  if (pr.price_paise === undefined) ok(false, `the server answers on port ${port}`, JSON.stringify(pr));
-  else {
-    ok(pr.price_paise === 2900, 'price_paise 2900', String(pr.price_paise));
-    ok(pr.duration_days === 50, 'duration_days 50', String(pr.duration_days));
-    ok(pr.one_time_paise == null, 'no one-time (₹11) report', String(pr.one_time_paise));
-    ok(Array.isArray(pr.check_packs) && pr.check_packs.length === 0, 'no check packs', String(pr.check_packs?.length));
-    ok(pr.free_monitor_days === 7, 'free_monitor_days 7 (served only by the new code - proves the restart)', String(pr.free_monitor_days));
-    ok(pr.replace_paise === 2360, 'replace_paise 2360', String(pr.replace_paise));
-  }
+  /* No HTTP call to /site/api/pricing: the site's guard (security/guard.gate) refuses non-browser clients with 403 and
+     counts repeats as misuse (2026-10-31, first run). /pricing reads exactly the plans and settings checked above, and
+     pm2's restart time proves the running process has this code. */
 
   console.log('\n== since the change (information)');
   const since = await db.one(
@@ -89,7 +79,8 @@ const sh = (cmd) => { try { return execSync(cmd, { encoding: 'utf8', stdio: ['ig
             (SELECT count(*) FROM event_log WHERE kind = 'watch_status' AND created_at > now() - interval '24 hours')::int AS updates_24h,
             (SELECT count(*) FROM event_log WHERE kind = 'watch_status' AND created_at > now() - interval '24 hours' AND detail->>'wa' = 'true')::int AS updates_whatsapp_24h,
             (SELECT count(*) FROM event_log WHERE kind = 'vehicle_check' AND created_at > now() - interval '24 hours')::int AS checks_24h,
-            (SELECT count(*) FROM event_log WHERE kind = 'free_paid_lookup' AND created_at > now() - interval '24 hours')::int AS capped_lookups_24h,
+            -- Counted only while the lookup guard was on (before migration 226); stays 0 from then on.
+            (SELECT count(*) FROM event_log WHERE kind = 'free_paid_lookup' AND created_at > now() - interval '24 hours')::int AS guarded_lookups_24h,
             (SELECT count(*) FROM payments pa JOIN plans pl ON pl.id = pa.plan_id
               WHERE pa.status = 'paid' AND pa.amount_paise = 2900 AND pl.code = 'REPORT19')::int AS sales_29`);
   console.table(since);
