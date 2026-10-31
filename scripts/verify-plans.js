@@ -27,12 +27,13 @@ const sh = (cmd) => { try { return execSync(cmd, { encoding: 'utf8', stdio: ['ig
 (async () => {
   console.log('\n== the code');
   ok(sh('git merge-base --is-ancestor 6381f8b HEAD && echo yes') === 'yes', 'pulled code includes the button fix (6381f8b)', sh('git log --oneline -1'));
-  const pulledAt = Number(sh('git log -1 --format=%ct')) * 1000;
+  // The last commit that changed the server's code - a script-only commit (like this file) needs no restart.
+  const pulledAt = Number(sh('git log -1 --format=%ct -- src migrations')) * 1000;
   const pm2 = (() => { try { return JSON.parse(sh('pm2 jlist') || '[]').find((p) => p.name === 'serverpe-gaadipe'); } catch { return null; } })();
   if (pm2) {
     const up = pm2.pm2_env?.pm_uptime;
     ok(pm2.pm2_env?.status === 'online', 'pm2 serverpe-gaadipe online', pm2.pm2_env?.status);
-    ok(up && up >= pulledAt, 'pm2 restarted after the last commit', up ? `up since ${new Date(up).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}` : 'unknown');
+    ok(up && up >= pulledAt, 'pm2 restarted after the last code change', up ? `up since ${new Date(up).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}` : 'unknown');
   } else ok(false, 'pm2 process serverpe-gaadipe found');
 
   console.log('\n== migrations');
