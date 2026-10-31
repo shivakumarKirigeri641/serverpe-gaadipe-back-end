@@ -250,6 +250,20 @@ async function checkOne(w) {
 /* The time in India, whatever the server's clock is set to. */
 const istNow = () => new Date(Date.now() + 5.5 * 3600 * 1000);
 
+/*
+ * A FEW SECONDS BETWEEN WHATSAPP MESSAGES (user, 2026-10-31: "you maintain few seconds gap?"). The evening alerts and
+ * updates went back-to-back within a pass; now each WhatsApp send waits wa_send_gap_seconds (8) after the previous
+ * one, so Meta sees a steady trickle, not a burst. The pass never overlaps itself (start: running), so a longer pass
+ * is safe. Email, notifications and SMS are not delayed. 0 = no gap.
+ */
+let lastWa = 0;
+async function waGap() {
+  const gap = Math.max(0, await settings.num('wa_send_gap_seconds', 8)) * 1000;
+  const wait = lastWa + gap - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastWa = Date.now();
+}
+
 /**
  * THE EVENING DIGEST (user, 2026-09-18): once a day, from 7 pm IST, one message
  * per mobile covering every vehicle with something new — a new challan, a
@@ -335,6 +349,7 @@ async function eveningDigest() {
     }
     // Not even tried for someone GaadiPe may not start a conversation with (2026-10-15, send.mayStart).
     if (require('../config').config.whatsapp.enabled && (await send.mayStart(person.mobile)).ok) {
+      await waGap();
       const wa = await notify(w, ok, summary, byVehicle);
       if (wa?.ok) r = { ok: true, channel: r.ok ? 'email+whatsapp' : 'whatsapp' };
       else errors.push(`whatsapp: ${wa?.error}`);
@@ -742,6 +757,7 @@ async function dailyStatus({ mobile = null, everyone = false, dryRun = false, ga
     const errors = [];
     let wa = null;
     if (lines.length && require('../config').config.whatsapp.enabled && !(await send.optedOut(first.mobile).catch(() => true))) {
+      if (!byHand) await waGap();
       if (await send.windowOpen(first.mobile).catch(() => false)) {
         const body = '✅ *Today\'s update from GaadiPe*\n\n'
           + lines.map((l) => `🚗 *${l.reg}*\n${l.text.split(' · ').map((t) => `• ${t}`).join('\n')}`).join('\n\n')
