@@ -125,6 +125,8 @@ router.get('/pricing', safe(async (_req, res) => {
     duration_days: plan?.duration_days ?? 28,
     report_valid_days: validDays,
     free_checks_per_day: await settings.num('free_checks_per_day', 6),
+    // Every checked vehicle watched free for these days (site/freeMonitor.autoStart, migration 225); 0 when off.
+    free_monitor_days: await settings.bool('free_monitor_auto', false) ? await settings.num('free_monitor_days', 14) : 0,
     // How a full report is unlocked: pay | both | refer (user, 2026-09-21).
     unlock: await unlockMode(),
     // What a free check shows, so the home page's example matches it exactly.
